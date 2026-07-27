@@ -112,6 +112,26 @@ lavayeh_title_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# کیبورد انتخاب روش ورود شماره پرونده
+lavayeh_tracking_method_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="1️⃣ شماره پرونده و ردیف فرعی")],
+        [KeyboardButton(text="2️⃣ شعبه رسیدگی کننده و شماره بایگانی")],
+        [KeyboardButton(text="🔙 بازگشت")]
+    ],
+    resize_keyboard=True
+)
+
+# کیبورد انتخاب نحوه ورود نام شعبه
+lavayeh_branch_input_method_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 وارد کردن نام شعبه")],
+        [KeyboardButton(text="🔍 انتخاب از لیست شعب")],
+        [KeyboardButton(text="🔙 بازگشت")]
+    ],
+    resize_keyboard=True
+)
+
 PROVINCES = [
     "آذربایجان شرقی", "آذربایجان غربی", "اردبیل", "اصفهان",
     "البرز", "ایلام", "بوشهر", "تهران",

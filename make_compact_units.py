@@ -1,4 +1,4 @@
-﻿import json
+import json
 from pathlib import Path
 
 input_file = Path("all_units.json")

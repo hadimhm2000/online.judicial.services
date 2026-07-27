@@ -18,7 +18,11 @@ class Form(StatesGroup):
     # State های بخش لایحه (ثبت لایحه)
     # =========================================================
     lavayeh_title = State()
+    lavayeh_tracking_method = State()  # انتخاب روش: شماره پرونده یا شماره بایگانی
     lavayeh_tracking_code = State()
+    lavayeh_archive_number = State()  # شماره بایگانی
+    lavayeh_branch_input_method = State()  # انتخاب نحوه ورود نام شعبه
+    lavayeh_branch_name = State()  # نام شعبه
     lavayeh_province = State()
     lavayeh_row_number = State()
     lavayeh_person_type = State()

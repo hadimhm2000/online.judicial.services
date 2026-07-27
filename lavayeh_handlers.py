@@ -21,6 +21,8 @@ from states import Form
 from keyboards import (
     main_menu_kb, restart_kb, back_only_kb,
     lavayeh_title_kb, LAVAYEH_TITLES,
+    lavayeh_tracking_method_kb,
+    lavayeh_branch_input_method_kb,
     create_province_kb, PROVINCES,
     create_person_type_kb, representative_type_kb,
     add_or_finish_kb, lavayeh_confirm_kb, lavayeh_edit_kb,
@@ -42,6 +44,10 @@ lavayeh_router = Router()
 # ── include کردن روتر امضا ──────────────────────────────────────────────────
 from lavayeh_sign_handlers import lavayeh_sign_router
 lavayeh_router.include_router(lavayeh_sign_router)
+
+# ── include کردن روتر شعب ──────────────────────────────────────────────────
+from branches import branches_router
+lavayeh_router.include_router(branches_router)
 
 _FA_AR = str.maketrans(
     "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
@@ -85,6 +91,45 @@ def validate_tracking_code(code: str):
         return False, "⚠️ شماره پرونده نامعتبر است. مجدداً وارد کنید:"
 
 
+def validate_archive_number(archive_num: str):
+    """
+    اعتبارسنجی شماره بایگانی:
+    - اگر دو رقم اول ۰۰ تا ۰۷ باشد → باید ۷ رقمی باشد
+    - اگر دو رقم اول ۹۳ تا ۹۹ باشد → باید ۶ رقمی باشد
+    """
+    if not archive_num.isdigit():
+        return False, "⚠️ شماره بایگانی باید فقط شامل عدد باشد."
+    
+    if len(archive_num) < 2:
+        return False, "⚠️ شماره بایگانی نامعتبر است. حداقل ۲ رقم وارد کنید."
+    
+    first_two = int(archive_num[:2])
+    
+    # بررسی دو رقم اول ۰۰ تا ۰۷
+    if 0 <= first_two <= 7:
+        if len(archive_num) == 7:
+            return True, archive_num
+        return False, (
+            f"⚠️ شماره بایگانی با دو رقم اول **{archive_num[:2]}** باید **۷ رقمی** باشد.\n"
+            f"شماره شما **{len(archive_num)} رقمی** است. مجدداً وارد کنید:"
+        )
+    
+    # بررسی دو رقم اول ۹۳ تا ۹۹
+    elif 93 <= first_two <= 99:
+        if len(archive_num) == 6:
+            return True, archive_num
+        return False, (
+            f"⚠️ شماره بایگانی با دو رقم اول **{archive_num[:2]}** باید **۶ رقمی** باشد.\n"
+            f"شماره شما **{len(archive_num)} رقمی** است. مجدداً وارد کنید:"
+        )
+    
+    else:
+        return False, (
+            f"⚠️ دو رقم اول شماره بایگانی (**{archive_num[:2]}**) نامعتبر است.\n"
+            "باید بین **۰۰ تا ۰۷** (۷ رقمی) یا **۹۳ تا ۹۹** (۶ رقمی) باشد."
+        )
+
+
 def build_preview(data: dict) -> str:
     # بررسی عنوان اعلام وکالت
     if data.get("lavayeh_title") == "اعلام وکالت":
@@ -120,12 +165,28 @@ def build_preview(data: dict) -> str:
     if len(text_preview) > 200:
         text_preview = text_preview[:200] + "..."
 
+    # بررسی اینکه کدام روش برای ثبت استفاده شده
+    tracking_method = data.get("tracking_method", "case_number")
+    
+    if tracking_method == "archive_number":
+        # نمایش اطلاعات برای شماره بایگانی
+        archive_info = (
+            f"🔢 شماره بایگانی: `{data.get('lavayeh_archive_number', '---')}`\n"
+            f"🏛 نام شعبه: **{data.get('lavayeh_branch_name', '---')}**\n"
+            f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n\n"
+        )
+    else:
+        # نمایش اطلاعات برای شماره پرونده
+        archive_info = (
+            f"🔢 شماره پرونده: `{data.get('lavayeh_tracking_code', '---')}`\n"
+            f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n"
+            f"🔢 ردیف فرعی: **{data.get('lavayeh_row_number', '---')}**\n\n"
+        )
+
     return (
         f"📋 **پیش‌نمایش لایحه شما:**\n\n"
         f"📌 عنوان: **{data.get('lavayeh_title', '---')}**\n"
-        f"🔢 شماره پرونده: `{data.get('lavayeh_tracking_code', '---')}`\n"
-        f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n"
-        f"🔢 ردیف فرعی: **{data.get('lavayeh_row_number', '---')}**\n\n"
+        f"{archive_info}"
         f"👥 اشخاص ارائه‌دهنده ({len(persons)} نفر):\n{persons_text}\n"
         f"📄 شرح متن:\n{text_preview}\n\n"
         f"🖼 مدارک ({total_images} تصویر در {len(attachments)} عنوان):\n{attachments_text}\n"
@@ -162,11 +223,27 @@ def _build_ealam_preview(data: dict) -> str:
     if not att_text:
         att_text = "  (بدون مدرک)\n"
 
+    # بررسی اینکه کدام روش برای ثبت استفاده شده
+    tracking_method = data.get("tracking_method", "case_number")
+    
+    if tracking_method == "archive_number":
+        # نمایش اطلاعات برای شماره بایگانی
+        case_info = (
+            f"🔢 شماره بایگانی: `{data.get('lavayeh_archive_number', '---')}`\n"
+            f"🏛 نام شعبه: **{data.get('lavayeh_branch_name', '---')}**\n"
+            f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n\n"
+        )
+    else:
+        # نمایش اطلاعات برای شماره پرونده
+        case_info = (
+            f"🔢 شماره پرونده: `{data.get('lavayeh_tracking_code', '---')}`\n"
+            f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n"
+            f"🔢 ردیف فرعی: **{data.get('lavayeh_row_number', '---')}**\n\n"
+        )
+
     return (
         f"📋 **پیش‌نمایش اعلام وکالت:**\n\n"
-        f"🔢 شماره پرونده: `{data.get('lavayeh_tracking_code', '---')}`\n"
-        f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n"
-        f"🔢 ردیف فرعی: **{data.get('lavayeh_row_number', '---')}**\n\n"
+        f"{case_info}"
         f"👤 وکیل(ها):\n{lawyers_text}\n\n"
         f"📑 شماره(های) قرارداد:\n{contracts_text}\n\n"
         f"💰 تمبر: **{stamp_text}**\n\n"
@@ -232,24 +309,189 @@ async def lavayeh_get_title(message: Message, state: FSMContext):
 
     await message.answer(
         f"✅ عنوان «**{text}**» انتخاب شد.\n\n"
-        "🔢 لطفاً **شماره پرونده** را ارسال فرمایید:\n\n"
-        "_(پرونده‌های ۱۴۰۰ تا ۱۴۰۷: ۱۸ رقمی | پرونده‌های ۱۳۹۹ و قبل‌تر: ۱۶ رقمی)_",
-        reply_markup=back_only_kb,
+        "🔢 لطفاً روش ثبت شماره پرونده را انتخاب فرمایید:",
+        reply_markup=lavayeh_tracking_method_kb,
         parse_mode="Markdown"
     )
-    await state.set_state(Form.lavayeh_tracking_code)
+    await state.set_state(Form.lavayeh_tracking_method)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# مرحله ۲ — شماره پرونده
+# مرحله ۱.۵ — انتخاب روش: شماره پرونده یا شماره بایگانی
+# ══════════════════════════════════════════════════════════════════════════════
+@lavayeh_router.message(Form.lavayeh_tracking_method)
+async def lavayeh_get_tracking_method(message: Message, state: FSMContext):
+    text = message.text or ""
+    
+    if text == "🔙 بازگشت":
+        await message.answer("📝 لطفاً عنوان لایحه را دوباره انتخاب کنید:", reply_markup=lavayeh_title_kb)
+        await state.set_state(Form.lavayeh_title)
+        return
+    
+    if text == "1️⃣ شماره پرونده و ردیف فرعی":
+        # مسیر فعلی - شماره پرونده
+        await state.update_data(tracking_method="case_number")
+        await message.answer(
+            "🔢 لطفاً **شماره پرونده** را ارسال فرمایید:\n\n"
+            "_(پرونده‌های ۱۴۰۰ تا ۱۴۰۷: ۱۸ رقمی | پرونده‌های ۱۳۹۹ و قبل‌تر: ۱۶ رقمی)_",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.lavayeh_tracking_code)
+        return
+    
+    if text == "2️⃣ شعبه رسیدگی کننده و شماره بایگانی":
+        # مسیر جدید - شماره بایگانی
+        await state.update_data(tracking_method="archive_number")
+        await message.answer(
+            "🔢 لطفاً **شماره بایگانی** را ارسال فرمایید:\n\n"
+            "📌 **توجه:**\n"
+            "• اگر دو رقم اول شماره بایگانی **۰۰ تا ۰۷** است، باید **۷ رقمی** باشد\n"
+            "• اگر دو رقم اول شماره بایگانی **۹۳ تا ۹۹** است، باید **۶ رقمی** باشد",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.lavayeh_archive_number)
+        return
+    
+    await message.answer("⚠️ لطفاً یکی از گزینه‌های موجود را انتخاب کنید:", reply_markup=lavayeh_tracking_method_kb)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مرحله ۲.۱ — دریافت شماره بایگانی (مسیر جدید)
+# ══════════════════════════════════════════════════════════════════════════════
+@lavayeh_router.message(Form.lavayeh_archive_number)
+async def lavayeh_get_archive_number(message: Message, state: FSMContext):
+    if not message.text:
+        return
+    
+    if message.text == "🔙 بازگشت":
+        await message.answer("🔢 لطفاً روش ثبت شماره پرونده را دوباره انتخاب کنید:", reply_markup=lavayeh_tracking_method_kb)
+        await state.set_state(Form.lavayeh_tracking_method)
+        return
+    
+    archive_num = _to_en(message.text)
+    valid, result = validate_archive_number(archive_num)
+    
+    if not valid:
+        await message.answer(result, parse_mode="Markdown")
+        return
+    
+    await state.update_data(lavayeh_archive_number=archive_num)
+    
+    # import کیبورد جدید
+    from keyboards import lavayeh_branch_input_method_kb
+    
+    await message.answer(
+        "✅ شماره بایگانی ثبت شد.\n\n"
+        "🏛 لطفاً نحوه ورود **نام شعبه** را انتخاب کنید:",
+        reply_markup=lavayeh_branch_input_method_kb,
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.lavayeh_branch_input_method)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مرحله ۲.۱.۵ — انتخاب نحوه ورود نام شعبه (مسیر جدید)
+# ══════════════════════════════════════════════════════════════════════════════
+@lavayeh_router.message(Form.lavayeh_branch_input_method)
+async def lavayeh_get_branch_input_method(message: Message, state: FSMContext):
+    text = message.text or ""
+    
+    if text == "🔙 بازگشت":
+        await message.answer(
+            "🔢 لطفاً شماره بایگانی را مجدداً ارسال فرمایید:",
+            reply_markup=back_only_kb
+        )
+        await state.set_state(Form.lavayeh_archive_number)
+        return
+    
+    from keyboards import lavayeh_branch_input_method_kb, back_only_kb
+    from branches import UNITS_DATA, create_branches_keyboard, ROOT_NODES
+    
+    if text == "📝 وارد کردن نام شعبه":
+        # ورود دستی نام شعبه
+        await message.answer(
+            "🏛 لطفاً **نام شعبه** خود را وارد کنید:\n\n"
+            "مثال: شعبه ۱۰۱ دادگاه عمومی حقوقی تهران",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.lavayeh_branch_name)
+        return
+    
+    elif text == "🔍 انتخاب از لیست شعب":
+        # انتخاب از لیست
+        if not UNITS_DATA:
+            await message.answer(
+                "⚠️ متأسفانه لیست شعب در دسترس نیست.\n"
+                "لطفاً نام شعبه را به صورت دستی وارد کنید:",
+                reply_markup=back_only_kb
+            )
+            await state.set_state(Form.lavayeh_branch_name)
+            return
+        
+        await message.answer(
+            "🏛 **انتخاب شعبه از لیست**\n\n"
+            "لطفاً از لیست زیر مسیر خود را انتخاب کنید:",
+            reply_markup=create_branches_keyboard(ROOT_NODES, page=0, parent_id=None),
+            parse_mode="Markdown"
+        )
+        # state همچنان lavayeh_branch_name می‌ماند تا callback handler آن را بگیرد
+        await state.set_state(Form.lavayeh_branch_name)
+        return
+    
+    await message.answer(
+        "⚠️ لطفاً یکی از گزینه‌های موجود را انتخاب کنید:",
+        reply_markup=lavayeh_branch_input_method_kb
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مرحله ۲.۲ — دریافت نام شعبه (مسیر جدید)
+# ══════════════════════════════════════════════════════════════════════════════
+@lavayeh_router.message(Form.lavayeh_branch_name)
+async def lavayeh_get_branch_name(message: Message, state: FSMContext):
+    text = message.text or ""
+    
+    if text == "🔙 بازگشت":
+        from keyboards import lavayeh_branch_input_method_kb
+        await message.answer(
+            "🏛 لطفاً نحوه ورود نام شعبه را دوباره انتخاب کنید:",
+            reply_markup=lavayeh_branch_input_method_kb
+        )
+        await state.set_state(Form.lavayeh_branch_input_method)
+        return
+    
+    if not text.strip():
+        await message.answer("⚠️ لطفاً نام شعبه را وارد کنید:")
+        return
+    
+    await state.update_data(lavayeh_branch_name=text)
+    data = await state.get_data()
+    
+    if await _maybe_return_to_preview(data, message, state):
+        return
+    
+    # ادامه به انتخاب استان
+    await message.answer(
+        "🏙 لطفاً **استان** مربوط به پرونده را انتخاب فرمایید:",
+        reply_markup=create_province_kb(),
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.lavayeh_province)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مرحله ۲ — شماره پرونده (مسیر اصلی)
 # ══════════════════════════════════════════════════════════════════════════════
 @lavayeh_router.message(Form.lavayeh_tracking_code)
 async def lavayeh_get_tracking_code(message: Message, state: FSMContext):
     if not message.text:
         return
     if message.text == "🔙 بازگشت":
-        await message.answer("📝 لطفاً عنوان لایحه را دوباره انتخاب کنید:", reply_markup=lavayeh_title_kb)
-        await state.set_state(Form.lavayeh_title)
+        await message.answer("🔢 لطفاً روش ثبت شماره پرونده را دوباره انتخاب کنید:", reply_markup=lavayeh_tracking_method_kb)
+        await state.set_state(Form.lavayeh_tracking_method)
         return
     code = _to_en(message.text)
     valid, result = validate_tracking_code(code)
@@ -274,24 +516,61 @@ async def lavayeh_get_tracking_code(message: Message, state: FSMContext):
 @lavayeh_router.message(Form.lavayeh_province)
 async def lavayeh_get_province(message: Message, state: FSMContext):
     text = message.text or ""
+    data = await state.get_data()
+    tracking_method = data.get("tracking_method", "case_number")
+    
     if text == "🔙 بازگشت":
-        await message.answer("🔢 لطفاً شماره پرونده را مجدداً ارسال فرمایید:", reply_markup=ReplyKeyboardRemove())
-        await state.set_state(Form.lavayeh_tracking_code)
+        # بازگشت به مرحله قبل بستگی به روش انتخاب شده دارد
+        if tracking_method == "archive_number":
+            await message.answer(
+                "🏛 لطفاً نام شعبه خود را مجدداً تعیین کنید:",
+                reply_markup=back_only_kb
+            )
+            await state.set_state(Form.lavayeh_branch_name)
+        else:
+            await message.answer("🔢 لطفاً شماره پرونده را مجدداً ارسال فرمایید:", reply_markup=ReplyKeyboardRemove())
+            await state.set_state(Form.lavayeh_tracking_code)
         return
+    
     if text not in PROVINCES:
         await message.answer("⚠️ لطفاً استان را از لیست انتخاب کنید:", reply_markup=create_province_kb())
         return
+    
     await state.update_data(lavayeh_province=text)
     data = await state.get_data()
+    
     if await _maybe_return_to_preview(data, message, state):
         return
-    await message.answer(
-        f"✅ استان «**{text}**» ثبت شد.\n\n"
-        "🔢 لطفاً **ردیف فرعی پرونده** را وارد فرمایید:\n_(عدد بین ۱ تا ۳۰)_",
-        reply_markup=back_only_kb,
-        parse_mode="Markdown"
-    )
-    await state.set_state(Form.lavayeh_row_number)
+    
+    # اگر از شماره بایگانی استفاده شده، نیازی به ردیف فرعی نیست
+    if tracking_method == "archive_number":
+        # رفتن مستقیم به بخش اشخاص یا مرحله بعد
+        title = data.get("lavayeh_title", "")
+        if title == "اعلام وکالت":
+            await message.answer(
+                f"✅ استان «**{text}**» ثبت شد.\n\n"
+                "👤 لطفاً **کدملی وکیل** را ارسال فرمایید:",
+                reply_markup=back_only_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.ealam_vakalaht_national_id)
+        else:
+            await message.answer(
+                f"✅ استان «**{text}**» ثبت شد.\n\n"
+                "👥 لطفاً نوع شخصیت ارائه‌دهنده لایحه را انتخاب کنید:",
+                reply_markup=create_person_type_kb(),
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.lavayeh_person_type)
+    else:
+        # درخواست ردیف فرعی
+        await message.answer(
+            f"✅ استان «**{text}**» ثبت شد.\n\n"
+            "🔢 لطفاً **ردیف فرعی پرونده** را وارد فرمایید:\n_(عدد بین ۱ تا ۳۰)_",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.lavayeh_row_number)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
