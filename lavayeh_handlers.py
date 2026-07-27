@@ -168,11 +168,13 @@ def build_preview(data: dict) -> str:
     # بررسی اینکه کدام روش برای ثبت استفاده شده
     tracking_method = data.get("tracking_method", "case_number")
     
+    
     if tracking_method == "archive_number":
         # نمایش اطلاعات برای شماره بایگانی
+        branch_code_str = f" (کد: `{data.get('lavayeh_branch_code', '---')}`)" if data.get('lavayeh_branch_code') else ""
         archive_info = (
             f"🔢 شماره بایگانی: `{data.get('lavayeh_archive_number', '---')}`\n"
-            f"🏛 نام شعبه: **{data.get('lavayeh_branch_name', '---')}**\n"
+            f"🏛 نام شعبه: **{data.get('lavayeh_branch_name', '---')}**{branch_code_str}\n"
             f"🏙 استان: **{data.get('lavayeh_province', '---')}**\n\n"
         )
     else:
@@ -463,11 +465,24 @@ async def lavayeh_get_branch_name(message: Message, state: FSMContext):
         await state.set_state(Form.lavayeh_branch_input_method)
         return
     
+    
     if not text.strip():
         await message.answer("⚠️ لطفاً نام شعبه را وارد کنید:")
         return
     
-    await state.update_data(lavayeh_branch_name=text)
+    # جستجوی کد شعبه از لیست واحدها
+    from branches import UNITS_DATA
+    branch_code = ""
+    if UNITS_DATA:
+        for unit in UNITS_DATA:
+            if unit.get("UnitName", "") == text:
+                branch_code = unit.get("Code", "")
+                break
+    
+    await state.update_data(
+        lavayeh_branch_name=text,
+        lavayeh_branch_code=branch_code
+    )
     data = await state.get_data()
     
     if await _maybe_return_to_preview(data, message, state):

@@ -336,7 +336,7 @@ stamp_calc_claim_type_kb = ReplyKeyboardMarkup(
 EZHHAR_PERSON_TYPES = ["شخص حقیقی", "شخص حقوقی", "وکیل"]
 
 def create_ezhhar_declarant_person_type_kb(exclude: list = None):
-    """کیبورد نوع شخص اظهارکننده"""
+    """کیبورد نوع شخص اظهارکننده - همیشه سه گزینه اول را نشان می‌دهد"""
     exclude = exclude or []
     available = [p for p in EZHHAR_PERSON_TYPES if p not in exclude]
     keyboard = []
@@ -345,9 +345,10 @@ def create_ezhhar_declarant_person_type_kb(exclude: list = None):
         if i + 1 < len(available):
             row.append(KeyboardButton(text=available[i + 1]))
         keyboard.append(row)
-    if exclude:
-        keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
+    # همیشه دکمه اتمام را نشان بده (حتی اگر exclude خالی باشد)
+    keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
 
 def create_ezhhar_addressee_person_type_kb(exclude: list = None):
     """کیبورد نوع شخص مخاطب اظهارنامه"""

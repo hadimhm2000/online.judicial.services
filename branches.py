@@ -350,9 +350,13 @@ async def process_branch_callback(callback: CallbackQuery, state: FSMContext):
         # اگر در حالت انتخاب شعبه برای لایحه هستیم
         current_state = await state.get_state()
         if current_state == Form.lavayeh_branch_name:
-            # ذخیره نام شعبه
+            # ذخیره نام شعبه و کد شعبه
             branch_name = node.get("UnitName", "")
-            await state.update_data(lavayeh_branch_name=branch_name)
+            branch_code = node.get("Code", "")
+            await state.update_data(
+                lavayeh_branch_name=branch_name,
+                lavayeh_branch_code=branch_code
+            )
             
             await callback.message.answer(
                 f"✅ شعبه «**{branch_name}**» انتخاب شد.\n\n"

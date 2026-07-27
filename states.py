@@ -99,6 +99,7 @@ class Form(StatesGroup):
     # مرحله ۵: مدارک (پیوست‌ها)
     ezhhar_attachment_title = State()
     ezhhar_images = State()
+    ezhhar_attachment_images = State()
     ezhhar_attachment_more = State()
 
     # مرحله ۶: پیش‌نمایش و تایید

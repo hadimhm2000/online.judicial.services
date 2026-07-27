@@ -433,17 +433,21 @@ async def ezhhar_text_handler(message: Message, state: FSMContext):
     has_legal = any(p.get("person_type") == "شخص حقوقی" for p in declarants)
 
     if has_legal:
-        # مدرک نمایندگی اجباری است
+        # مدرک نمایندگی اجباری است - مستقیم به تصویر می‌رویم
         await message.answer(
             "**مرحله ۵ — مدارک:**\n\n"
             "⚠️ **توجه مهم:** چون اظهارکننده شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
-            "لطفاً ابتدا عنوان مدرک نمایندگی را وارد کنید\n"
+            "📸 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید.\n"
             "_(مثلاً: روزنامه رسمی، آگهی تأسیس، وکالت‌نامه رسمی)_",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="Markdown"
         )
-        await state.update_data(_ezhhar_mandatory_proxy_sent=False)
-        await state.set_state(Form.ezhhar_attachment_title)
+        await state.update_data(
+            _ezhhar_mandatory_proxy_sent=False,
+            ezhhar_images=[],
+            _ezhhar_current_attachment_title="مدرک نمایندگی"
+        )
+        await state.set_state(Form.ezhhar_attachment_images)
     else:
         await _ask_ezhhar_attachment(message, state, is_first=True)
 
@@ -790,3 +794,148 @@ async def ezhhar_edit_choice_handler(message: Message, state: FSMContext):
         return
 
     await message.answer("⚠️ لطفاً یکی از گزینه‌های موجود را انتخاب کنید:", reply_markup=ezhhar_edit_kb)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# دریافت تصاویر مدرک نمایندگی (برای شخص حقوقی)
+# ══════════════════════════════════════════════════════════════════════════════
+@ezhharnameh_router.message(Form.ezhhar_attachment_images, F.photo)
+async def ezhhar_receive_proxy_image(message: Message, state: FSMContext, bot: Bot):
+    """دریافت تصاویر مدرک نمایندگی"""
+    data = await state.get_data()
+    images = data.get("ezhhar_images", [])
+    file_id = message.photo[-1].file_id
+    images.append(file_id)
+    await state.update_data(ezhhar_images=images)
+
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    manage_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+            [KeyboardButton(text="➕ افزودن مدرک دیگر")],
+            [KeyboardButton(text="🗑 حذف تصویر")]
+        ],
+        resize_keyboard=True
+    )
+    await message.reply(
+        f"✅ تصویر شماره **{len(images)}** دریافت شد.\\n"
+        f"مجموع تصاویر مدرک نمایندگی: **{len(images)} تصویر**\\n\\n"
+        "می‌توانید تصاویر بیشتری ارسال کنید یا یکی از گزینه‌های زیر را انتخاب کنید:",
+        reply_markup=manage_kb,
+        parse_mode="Markdown"
+    )
+
+
+@ezhharnameh_router.message(Form.ezhhar_attachment_images, F.text == "✅ اتمام ارسال تصاویر")
+async def ezhhar_finish_proxy_images(message: Message, state: FSMContext):
+    """اتمام ارسال تصاویر مدرک نمایندگی"""
+    data = await state.get_data()
+    images = data.get("ezhhar_images", [])
+    
+    if not images:
+        await message.answer("⚠️ حداقل یک تصویر باید ارسال کنید.", parse_mode="Markdown")
+        return
+
+    title = data.get("_ezhhar_current_attachment_title", "مدرک نمایندگی")
+    attachments = data.get("ezhhar_attachments", [])
+    attachments.append({"title": title, "images": images})
+    
+    await state.update_data(
+        ezhhar_attachments=attachments,
+        _ezhhar_mandatory_proxy_sent=True,
+        ezhhar_images=[]
+    )
+
+    await message.answer(
+        f"✅ مدرک **{title}** با **{len(images)} تصویر** ثبت شد.\\n\\n"
+        "آیا مدرک دیگری نیز می‌خواهید ارسال کنید؟",
+        reply_markup=lavayeh_attachment_more_kb,
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.ezhhar_attachment_more)
+
+
+@ezhharnameh_router.message(Form.ezhhar_attachment_images, F.text == "➕ افزودن مدرک دیگر")
+async def ezhhar_add_more_after_proxy(message: Message, state: FSMContext):
+    """افزودن مدرک دیگر بعد از مدرک نمایندگی"""
+    data = await state.get_data()
+    images = data.get("ezhhar_images", [])
+    
+    if not images:
+        await message.answer("⚠️ حداقل یک تصویر باید برای مدرک نمایندگی ارسال کنید.", parse_mode="Markdown")
+        return
+
+    title = data.get("_ezhhar_current_attachment_title", "مدرک نمایندگی")
+    attachments = data.get("ezhhar_attachments", [])
+    attachments.append({"title": title, "images": images})
+    
+    await state.update_data(
+        ezhhar_attachments=attachments,
+        _ezhhar_mandatory_proxy_sent=True,
+        ezhhar_images=[]
+    )
+
+    await _ask_ezhhar_attachment(message, state, is_first=False)
+
+
+@ezhharnameh_router.message(Form.ezhhar_attachment_images, F.text == "🗑 حذف تصویر")
+async def ezhhar_proxy_delete_image(message: Message, state: FSMContext, bot: Bot):
+    """حذف تصویر از مدرک نمایندگی"""
+    data = await state.get_data()
+    images = data.get("ezhhar_images", [])
+    if not images:
+        await message.answer("⚠️ لیست تصاویر خالی است.")
+        return
+    await message.answer("🗑 **حذف تصویر:**\\n\\nعکس‌های ارسالی:", parse_mode="Markdown")
+    for i, file_id in enumerate(images):
+        await bot.send_photo(message.chat.id, photo=file_id, caption=f"تصویر شماره {i + 1}")
+    await message.answer(
+        "لطفاً **شماره تصویر** برای حذف را ارسال فرمایید:",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="Markdown"
+    )
+    await state.update_data(_ezhhar_deleting_proxy_image=True)
+
+
+@ezhharnameh_router.message(Form.ezhhar_attachment_images)
+async def ezhhar_proxy_images_text(message: Message, state: FSMContext):
+    """پردازش متن در حالت مدرک نمایندگی"""
+    text = message.text or ""
+    data = await state.get_data()
+    images = data.get("ezhhar_images", [])
+    deleting = data.get("_ezhhar_deleting_proxy_image", False)
+
+    if deleting:
+        num_str = _to_en(text)
+        if num_str.isdigit():
+            idx = int(num_str) - 1
+            if 0 <= idx < len(images):
+                images.pop(idx)
+                await state.update_data(ezhhar_images=images, _ezhhar_deleting_proxy_image=False)
+                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+                if images:
+                    manage_kb = ReplyKeyboardMarkup(
+                        keyboard=[
+                            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+                            [KeyboardButton(text="➕ افزودن مدرک دیگر")],
+                            [KeyboardButton(text="🗑 حذف تصویر")]
+                        ],
+                        resize_keyboard=True
+                    )
+                    await message.answer(
+                        f"✅ تصویر شماره **{idx + 1}** حذف شد.\\n"
+                        f"تعداد تصاویر باقی‌مانده: **{len(images)} تصویر**",
+                        reply_markup=manage_kb,
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await message.answer(
+                        "⚠️ همه تصاویر حذف شدند. لطفاً دوباره تصویر ارسال کنید:",
+                        reply_markup=ReplyKeyboardRemove()
+                    )
+            else:
+                await message.answer("⚠️ شماره نامعتبر.")
+        else:
+            await message.answer("⚠️ لطفاً فقط عدد ارسال کنید.")
+    else:
+        await message.answer("⚠️ لطفاً تصویر ارسال کنید یا یکی از گزینه‌های موجود را انتخاب کنید.")

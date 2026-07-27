@@ -53,6 +53,13 @@ async def process_lavayeh_task(data: dict, bot: Bot):
     attachment_groups = data.get("lavayeh_attachments", [])
     has_images    = len(attachment_groups) > 0
     total_image_count = sum(len(g.get("images", [])) for g in attachment_groups)
+    total_image_count = sum(len(g.get("images", [])) for g in attachment_groups)
+    
+    # بررسی روش ثبت: شماره پرونده یا شماره بایگانی
+    tracking_method = data.get("tracking_method", "case_number")
+    archive_number = data.get("lavayeh_archive_number", "")
+    branch_name = data.get("lavayeh_branch_name", "")
+    branch_code = data.get("lavayeh_branch_code", "")
 
     logging.info(
         f"[LAVAYEH] user={user_id} title={title} code={tracking_code} "
@@ -96,36 +103,81 @@ async def process_lavayeh_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "اطلاعات پرونده", bot, user_id)
             await resilient_sleep(sana_page, 3, bot, user_id)
 
-            await _fill_input(sana_page, "#txtCaseNo", tracking_code, bot, user_id)
-            await resilient_sleep(sana_page, 1, bot, user_id)
+            # بررسی روش ثبت: شماره پرونده یا شماره بایگانی
+            if tracking_method == "archive_number":
+                # مسیر شماره بایگانی
+                # کلیک روی رادیو باتن شماره بایگانی
+                await sana_page.evaluate('''() => {
+                    const rdb = document.querySelector('input[type="radio"][name="rdbCaseInfo"][value="2"]#rdbCaseInfo2');
+                    if (rdb) rdb.click();
+                }''')
+                await resilient_sleep(sana_page, 2, bot, user_id)
+                
+                # وارد کردن شماره بایگانی
+                await _fill_input(sana_page, "#txtCaseArchiveNo", archive_number, bot, user_id)
+                await resilient_sleep(sana_page, 1, bot, user_id)
+                
+                # وارد کردن کد شعبه
+                if branch_code:
+                    await _fill_input(sana_page, "#txtCaseHearingUnitCode", branch_code, bot, user_id)
+                    await resilient_sleep(sana_page, 2, bot, user_id)
+                
+                # کلیک روی دکمه صحت‌سنجی
+                await _click_validate_with_retry_archive(sana_page, bot, user_id)
+                await resilient_sleep(sana_page, 10, bot, user_id)
+                
+                # بررسی موفقیت
+                table_ok = await _wait_for_case_table(sana_page, bot, user_id)
+                if not table_ok:
+                    await bot.send_message(
+                        user_id,
+                        "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
+                        "لطفاً موارد زیر را بررسی و اصلاح نمایید:\n"
+                        "🔢 شماره بایگانی\n🏛 کد شعبه\n\n"
+                        "سپس مجدداً «ثبت لایحه» را شروع کنید.",
+                        parse_mode="Markdown"
+                    )
+                    await bot.send_message(ADMIN_ID, f"❌ [LAVAYEH] صحت‌سنجی بایگانی کاربر {user_id} ناموفق.")
+                    runtime_state.active_lavayeh_users.discard(user_id)
+                    await log_event(
+                        "خطای سامانه", "لایحه", str(user_id), user_id,
+                        tracking_code=archive_number, doc_name=title,
+                        note="صحت‌سنجی شماره بایگانی ناموفق"
+                    )
+                    return
+            else:
+                # مسیر شماره پرونده (کد قبلی)
+                await _fill_input(sana_page, "#txtCaseNo", tracking_code, bot, user_id)
+                await resilient_sleep(sana_page, 1, bot, user_id)
 
-            await _fill_input(sana_page, "#txtSubNo", str(row_number), bot, user_id)
-            await resilient_sleep(sana_page, 1, bot, user_id)
+                await _fill_input(sana_page, "#txtSubNo", str(row_number), bot, user_id)
+                await resilient_sleep(sana_page, 1, bot, user_id)
 
-            await _select_province(sana_page, province, bot, user_id)
-            await resilient_sleep(sana_page, 2, bot, user_id)
+                await _select_province(sana_page, province, bot, user_id)
+                await resilient_sleep(sana_page, 2, bot, user_id)
 
-            await _click_validate_with_retry(sana_page, bot, user_id)
-            await resilient_sleep(sana_page, 10, bot, user_id)
+                await _click_validate_with_retry(sana_page, bot, user_id)
+                await resilient_sleep(sana_page, 10, bot, user_id)
 
-            table_ok = await _wait_for_case_table(sana_page, bot, user_id)
-            if not table_ok:
-                await bot.send_message(
-                    user_id,
-                    "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
-                    "لطفاً موارد زیر را بررسی و اصلاح نمایید:\n"
-                    "🔢 شماره پرونده\n🔢 ردیف فرعی\n🏙 استان\n\n"
-                    "سپس مجدداً «ثبت لایحه» را شروع کنید.",
-                    parse_mode="Markdown"
-                )
-                await bot.send_message(ADMIN_ID, f"❌ [LAVAYEH] صحت‌سنجی پرونده کاربر {user_id} ناموفق.")
-                runtime_state.active_lavayeh_users.discard(user_id)
-                await log_event(
-                    "خطای سامانه", "لایحه", str(user_id), user_id,
-                    tracking_code=tracking_code, doc_name=title,
-                    note="صحت‌سنجی پرونده ناموفق"
-                )
-                return
+                table_ok = await _wait_for_case_table(sana_page, bot, user_id)
+                if not table_ok:
+                    await bot.send_message(
+                        user_id,
+                        "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
+                        "لطفاً موارد زیر را بررسی و اصلاح نمایید:\n"
+                        "🔢 شماره پرونده\n🔢 ردیف فرعی\n🏙 استان\n\n"
+                        "سپس مجدداً «ثبت لایحه» را شروع کنید.",
+                        parse_mode="Markdown"
+                    )
+                    await bot.send_message(ADMIN_ID, f"❌ [LAVAYEH] صحت‌سنجی پرونده کاربر {user_id} ناموفق.")
+                    runtime_state.active_lavayeh_users.discard(user_id)
+                    await log_event(
+                        "خطای سامانه", "لایحه", str(user_id), user_id,
+                        tracking_code=tracking_code, doc_name=title,
+                        note="صحت‌سنجی پرونده ناموفق"
+                    )
+                    return
+
 
             await _click_step_label(sana_page, "ارائه كننده لايحه", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
@@ -133,7 +185,25 @@ async def process_lavayeh_task(data: dict, bot: Bot):
             for person in persons:
                 ptype = person.get("person_type", "شخص حقیقی")
 
-                if ptype in ("شخص حقیقی", "وکیل"):
+                if ptype == "وکیل":
+                    # برای وکیل از رادیو باتن value="6" استفاده می‌کنیم
+                    await _click_add_person(sana_page, bot, user_id)
+                    await resilient_sleep(sana_page, 3, bot, user_id)
+
+                    # کلیک روی رادیو باتن وکیل
+                    await sana_page.evaluate('''() => {
+                        const rdb = document.querySelector('input[type="radio"][name="personType"][value="6"]#rdb6');
+                        if (rdb) rdb.click();
+                    }''')
+                    await resilient_sleep(sana_page, 2, bot, user_id)
+
+                    await _fill_input(sana_page, "#txtRealIrNationalityCode1", person["national_id"], bot, user_id)
+                    await resilient_sleep(sana_page, 1, bot, user_id)
+
+                    await _click_sana_query_with_retry(sana_page, "actions.callNationalityCode", bot, user_id)
+                    await resilient_sleep(sana_page, 8, bot, user_id)
+
+                elif ptype == "شخص حقیقی":
                     await _click_add_person(sana_page, bot, user_id)
                     await resilient_sleep(sana_page, 3, bot, user_id)
 
@@ -1078,3 +1148,34 @@ async def _close_success_popup(page) -> bool:
     if closed:
         await asyncio.sleep(1)
     return closed
+
+
+async def _click_validate_with_retry_archive(page, bot: Bot, user_id: int):
+    """
+    کلیک روی دکمه صحت‌سنجی اطلاعات برای شماره بایگانی.
+    این تابع مشابه _click_validate_with_retry است اما از دکمه btnAddHst2 استفاده می‌کند.
+    """
+    for attempt in range(5):
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('#btnAddHst2');
+            if (btn) { btn.click(); return true; }
+            return false;
+        }''')
+        if not clicked:
+            await safe_click_by_text(page, "صحت سنجی اطلاعات", bot, user_id)
+        await asyncio.sleep(12)
+
+        closed = await _close_error_popup(page)
+        if closed:
+            await asyncio.sleep(5)
+            continue
+
+        has_table = await page.evaluate('''() => {
+            const table = document.querySelector('table tbody tr');
+            return table !== null;
+        }''')
+        if has_table:
+            logging.info(f"[LAVAYEH] صحت‌سنجی بایگانی موفق در تلاش {attempt+1}")
+            return
+
+    logging.warning(f"[LAVAYEH] صحت‌سنجی بایگانی ناموفق پس از 5 تلاش")
