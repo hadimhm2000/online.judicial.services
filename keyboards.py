@@ -432,3 +432,35 @@ ezhhar_edit_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+# =========================================================
+# کیبوردهای ثبت دسته‌جمعی (بیش از ۵ مورد)
+# =========================================================
+
+bulk_choice_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)")],
+        [KeyboardButton(text="1️⃣ ثبت تکی یکی‌یکی (روال عادی)")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
+    ],
+    resize_keyboard=True
+)
+
+bulk_input_method_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 دانلود نمونه اکسل و آپلود فایل")],
+        [KeyboardButton(text="✍️ ارسال متنی لیست موارد")],
+        [KeyboardButton(text="📸 ارسال تصویر لیست موارد")],
+        [KeyboardButton(text="🔙 بازگشت")]
+    ],
+    resize_keyboard=True
+)
+
+bulk_confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ تایید و شروع پردازش در پس‌زمینه")],
+        [KeyboardButton(text="🔄 ارسال مجدد فایل / اصلاح")],
+        [KeyboardButton(text="❌ انصراف و بازگشت")]
+    ],
+    resize_keyboard=True
+)

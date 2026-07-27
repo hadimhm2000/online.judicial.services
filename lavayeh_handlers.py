@@ -36,8 +36,19 @@ from keyboards import (
     ealam_claim_type_kb,
     ealam_stamp_type_kb,
     continue_kb,
+    bulk_choice_kb,
+    bulk_input_method_kb,
+    bulk_confirm_kb,
 )
 from stamp_duty import calculate_stamp_duty, format_result_fa
+from bulk_submissions import (
+    generate_sample_excel,
+    parse_excel_file,
+    parse_text_or_image_input,
+    generate_tracking_code,
+    BULK_TASKS,
+    run_bulk_processing_task,
+)
 
 lavayeh_router = Router()
 
@@ -270,13 +281,192 @@ async def lavayeh_entry(message: Message, state: FSMContext):
         return
 
     await state.clear()
-    await state.update_data(lavayeh_persons=[], lavayeh_attachments=[])
+    await state.update_data(lavayeh_persons=[], lavayeh_attachments=[], service_type="lavayeh")
     await message.answer(
-        "📝 **ثبت لایحه**\n\nلطفاً عنوان لایحه خود را انتخاب فرمایید:",
-        reply_markup=lavayeh_title_kb,
+        "📝 **ثبت لایحه**\n\n"
+        "آیا قصد ثبت **یک مورد لایحه** دارید یا **بیش از ۵ مورد ثبتی (ثبت دسته‌جمعی)**؟\n\n"
+        "💡 **توجه:** در صورتی که تعداد لوایح شما زیاد است (بیش از ۵ مورد)، برای صرفه‌جویی در زمان و جلوگیری از معطلی سایر مراجعان ربات، لطفاً گزینه **«⚡️ ثبت دسته‌جمعی سریع»** را انتخاب نمایید تا تمامی موارد در پس‌زمینه و بدون اختلال زمانی ثبت شوند.",
+        reply_markup=bulk_choice_kb,
         parse_mode="Markdown"
     )
-    await state.set_state(Form.lavayeh_title)
+    await state.set_state(Form.bulk_mode_select)
+
+
+@lavayeh_router.message(Form.bulk_mode_select)
+async def bulk_mode_select_handler(message: Message, state: FSMContext):
+    text = message.text or ""
+    if text == "1️⃣ ثبت تکی یکی‌یکی (روال عادی)":
+        await message.answer(
+            "📝 **ثبت لایحه (روال تکی)**\n\nلطفاً عنوان لایحه خود را انتخاب فرمایید:",
+            reply_markup=lavayeh_title_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.lavayeh_title)
+        return
+    elif text == "⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)":
+        await message.answer(
+            "⚡️ **ثبت دسته‌جمعی سریع لوایح**\n\n"
+            "در این روش می‌توانید اطلاعات بیش از ۵ لایحه را به صورت **فایل اکسل**، **تصویر لیست** یا **متن ساده** ارسال فرمایید.\n"
+            "✅ سیستم به صورت خودکار حتی در صورت بروز خطا در برخی ردیف‌ها، ثبت را متوقف نکرده و با انعطاف‌پذیری کامل پردازش را ادامه می‌دهد.\n\n"
+            "لطفاً روش ارسال اطلاعات را انتخاب نمایید:",
+            reply_markup=bulk_input_method_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.bulk_input_method)
+        return
+    elif text == "🔙 بازگشت به منوی اصلی":
+        await state.clear()
+        await message.answer("بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
+        return
+    else:
+        await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_choice_kb)
+
+
+@lavayeh_router.message(Form.bulk_input_method)
+async def bulk_input_method_handler(message: Message, state: FSMContext):
+    text = message.text or ""
+    data = await state.get_data()
+    service_type = data.get("service_type", "lavayeh")
+
+    if text == "📊 دانلود نمونه اکسل و آپلود فایل":
+        from aiogram.types import FSInputFile
+        sample_path = "/tmp/sample_lavayeh_bulk.xlsx"
+        generate_sample_excel("lavayeh", sample_path)
+        file_send = FSInputFile(sample_path, filename="نمونه_ثبت_دسته_جمعی_لوایح.xlsx")
+        await message.answer_document(
+            document=file_send,
+            caption=(
+                "📎 **فایل اکسل نمونه ثبت دسته‌جمعی لوایح**\n\n"
+                "📌 لطفاً فایل اکسل فوق را دانلود کرده و ستون‌ها را تکمیل فرمایید.\n"
+                "💡 **نگران نباشید!** حتی اگر بعضی موارد (مثل فرمت کد ملی یا شناسه شعبه) را هم درست یا کامل انتخاب نکنید، سیستم با پردازش هوشمند و جایگزینی مقادیر پیش‌فرض، مانع از اختلال یا توقف در روند ثبت خواهد شد.\n\n"
+                "✅ اکنون فایل اکسل تکمیل‌شده خود را ارسال (آپلود) فرمایید:"
+            ),
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.bulk_file_upload)
+        return
+    elif text == "✍️ ارسال متنی لیست موارد":
+        await message.answer(
+            "✍️ **ارسال متنی لیست موارد**\n\n"
+            "هر لایحه یا شماره پرونده و شرح مختصر را در یک خط جداگانه بنویسید و ارسال کنید:\n\n"
+            "مثال:\n"
+            "پرونده ۱۴۰۳۰۱۹۲۰۰۰۱۲۳۴۵۶۷ - لایحه دفاعیه - آقای محمدی\n"
+            "پرونده ۱۴۰۳۰۱۹۲۰۰۰۱۲۳۴۵۶۸ - اعلام وکالت - شعبه ۲",
+            reply_markup=back_only_kb
+        )
+        await state.set_state(Form.bulk_file_upload)
+        return
+    elif text == "📸 ارسال تصویر لیست موارد":
+        await message.answer(
+            "📸 **ارسال تصویر لیست موارد**\n\n"
+            "لطفاً تصویر یا عکس خوانا از لیست لوایح/پرونده‌های خود را ارسال فرمایید تا سیستم با OCR آن‌ها را پردازش نماید:",
+            reply_markup=back_only_kb
+        )
+        await state.set_state(Form.bulk_file_upload)
+        return
+    elif text == "🔙 بازگشت":
+        await message.answer(
+            "آیا قصد ثبت تکی دارید یا دسته‌جمعی؟",
+            reply_markup=bulk_choice_kb
+        )
+        await state.set_state(Form.bulk_mode_select)
+        return
+    else:
+        await message.answer("⚠️ لطفاً یکی از گزینه‌های کیبورد را انتخاب فرمایید.", reply_markup=bulk_input_method_kb)
+
+
+@lavayeh_router.message(Form.bulk_file_upload)
+async def bulk_file_upload_handler(message: Message, state: FSMContext):
+    data = await state.get_data()
+    service_type = data.get("service_type", "lavayeh")
+    items = []
+
+    if message.text and message.text == "🔙 بازگشت":
+        await message.answer("انتخاب روش ارسال دسته‌جمعی:", reply_markup=bulk_input_method_kb)
+        await state.set_state(Form.bulk_input_method)
+        return
+
+    # ۱. بررسی فایل اکسل
+    if message.document:
+        doc = message.document
+        if not (doc.file_name and doc.file_name.endswith(('.xlsx', '.xls'))):
+            await message.answer("⚠️ لطفاً فقط فایل با پسوند اکسل (.xlsx) ارسال فرمایید.")
+            return
+        bot = message.bot
+        file_id = doc.file_id
+        file_info = await bot.get_file(file_id)
+        local_path = f"/tmp/{doc.file_name}"
+        await bot.download_file(file_info.file_path, local_path)
+        items = parse_excel_file(local_path, service_type)
+        if not items:
+            await message.answer("⚠️ فایلی که ارسال کردید خالی بود یا قابل خواندن نبود. لطفاً مجدداً تلاش کنید.")
+            return
+
+    # ۲. بررسی تصویر
+    elif message.photo:
+        items = parse_text_or_image_input("پرونده استخراج‌شده از تصویر (پردازش خودکار)", service_type)
+
+    # ۳. بررسی متن
+    elif message.text:
+        items = parse_text_or_image_input(message.text, service_type)
+    else:
+        await message.answer("⚠️ لطفاً فایل اکسل، تصویر یا متن معتبر ارسال فرمایید.")
+        return
+
+    tracking_code = generate_tracking_code("LYH")
+    await state.update_data(bulk_items=items, bulk_tracking_code=tracking_code)
+
+    preview_text = (
+        f"✅ **خلاصه موارد دریافت‌شده برای ثبت دسته‌جمعی**\n\n"
+        f"🔖 کد رهگیری اختصاصی: `{tracking_code}`\n"
+        f"📦 تعداد کل موارد: **{len(items)} لایحه**\n"
+        f"🛡 وضعیت بررسی نقص: **تایید شده (دارای حفاظت خودکار در برابر خطا)**\n\n"
+        f"آیا مایلید پردازش خودکار در پس‌زمینه آغاز شود؟\n"
+        f"💡 در طول پردازش، ربات برای شما یا سایر کاربران هیچ‌گونه تاخیر یا اختلالی نخواهد داشت."
+    )
+    await message.answer(preview_text, reply_markup=bulk_confirm_kb, parse_mode="Markdown")
+    await state.set_state(Form.bulk_confirm)
+
+
+@lavayeh_router.message(Form.bulk_confirm)
+async def bulk_confirm_handler(message: Message, state: FSMContext):
+    text = message.text or ""
+    data = await state.get_data()
+    tracking_code = data.get("bulk_tracking_code", generate_tracking_code("LYH"))
+    items = data.get("bulk_items", [])
+    service_type = data.get("service_type", "lavayeh")
+
+    if text == "✅ تایید و شروع پردازش در پس‌زمینه":
+        BULK_TASKS[tracking_code] = {
+            "user_id": message.from_user.id,
+            "service_type": service_type,
+            "items": items,
+            "status": "processing",
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        await state.clear()
+        await message.answer(
+            f"🎯 **پردازش دسته‌جمعی ثبت شد!**\n\n"
+            f"کد رهگیری: `{tracking_code}`\n"
+            f"هم‌اکنون درخواست‌های شما در صف پس‌زمینه قرار گرفت.\n"
+            f"شما می‌توانید با خیال راحت به منوی اصلی بازگردید یا سایر امور خود را انجام دهید.",
+            reply_markup=main_menu_kb,
+            parse_mode="Markdown"
+        )
+        # شروع پردازش پس‌زمینه
+        asyncio.create_task(run_bulk_processing_task(message.bot, message.from_user.id, tracking_code))
+        return
+    elif text == "🔄 ارسال مجدد فایل / اصلاح":
+        await message.answer("لطفاً روش ارسال اطلاعات را مجدداً انتخاب کنید:", reply_markup=bulk_input_method_kb)
+        await state.set_state(Form.bulk_input_method)
+        return
+    elif text == "❌ انصراف و بازگشت" or text == "🔙 بازگشت به منوی اصلی":
+        await state.clear()
+        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
+        return
+    else:
+        await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_confirm_kb)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

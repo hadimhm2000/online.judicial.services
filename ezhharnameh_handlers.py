@@ -38,6 +38,17 @@ from keyboards import (
     ezhhar_attachment_more_kb,
     create_ezhhar_declarant_person_type_kb,
     create_ezhhar_addressee_person_type_kb,
+    bulk_choice_kb,
+    bulk_input_method_kb,
+    bulk_confirm_kb,
+)
+from bulk_submissions import (
+    generate_sample_excel,
+    parse_excel_file,
+    parse_text_or_image_input,
+    generate_tracking_code,
+    BULK_TASKS,
+    run_bulk_processing_task,
 )
 
 ezhharnameh_router = Router()
@@ -67,14 +78,41 @@ async def ezhharnameh_entry(message: Message, state: FSMContext):
         ezhhar_text="",
         ezhhar_attachments=[],       # پیوست‌ها
         ezhhar_images=[],
+        service_type="ezhharnameh",
     )
     await message.answer(
         "📋 **ثبت اظهارنامه**\n\n"
+        "آیا قصد ثبت **یک مورد اظهارنامه** دارید یا **بیش از ۵ مورد ثبتی (ثبت دسته‌جمعی)**؟\n\n"
+        "💡 **توجه:** در صورتی که تعداد اظهارنامه‌های شما زیاد است (بیش از ۵ مورد)، برای صرفه‌جویی در زمان و جلوگیری از معطلی سایر مراجعان ربات، لطفاً گزینه **«⚡️ ثبت دسته‌جمعی سریع»** را انتخاب نمایید تا تمامی موارد در پس‌زمینه و بدون اختلال زمانی ثبت شوند.",
+        reply_markup=bulk_choice_kb,
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.ezhhar_declarant_person_type)
+
+
+@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)")
+async def ezhhar_bulk_choice_handler(message: Message, state: FSMContext):
+    await message.answer(
+        "⚡️ **ثبت دسته‌جمعی سریع اظهارنامه**\n\n"
+        "در این روش می‌توانید اطلاعات بیش از ۵ اظهارنامه را به صورت **فایل اکسل**، **تصویر لیست** یا **متن ساده** ارسال فرمایید.\n"
+        "✅ سیستم به صورت خودکار حتی در صورت بروز خطا یا نقص در برخی ردیف‌ها، ثبت را متوقف نکرده و با انعطاف‌پذیری کامل پردازش را ادامه می‌دهد.\n\n"
+        "لطفاً روش ارسال اطلاعات را انتخاب نمایید:",
+        reply_markup=bulk_input_method_kb,
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.bulk_input_method)
+
+
+@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "1️⃣ ثبت تکی یکی‌یکی (روال عادی)")
+async def ezhhar_single_choice_handler(message: Message, state: FSMContext):
+    await message.answer(
+        "📋 **ثبت اظهارنامه (روال تکی)**\n\n"
         "**مرحله ۱:** لطفاً **نوع شخصیت اظهارکننده** را انتخاب فرمایید:\n\n"
         "⚠️ توجه: اگر **وکیل** را انتخاب می‌کنید، باید حداقل یک **شخص حقیقی یا حقوقی** نیز اضافه کنید.",
         reply_markup=create_ezhhar_declarant_person_type_kb(),
         parse_mode="Markdown"
     )
+    # باقی ماندن در همین استیت برای دریافت نوع شخص اظهارکننده
     await state.set_state(Form.ezhhar_declarant_person_type)
 
 
