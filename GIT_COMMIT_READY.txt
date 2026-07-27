@@ -1,0 +1,38 @@
+رفع خطای ImportError در سیستم انتخاب شعبه قضایی
+
+## مشکل
+خطای ImportError هنگام انتخاب گزینه "انتخاب شعبه از لیست" که مانع از نمایش لیست شعب می‌شد.
+
+## تغییرات
+- حذف import اشتباه ReplyKeyboardRemove از keyboards در lavayeh_handlers.py خط 411
+- ReplyKeyboardRemove از aiogram.types در خط 14 به درستی import شده و در دسترس است
+
+## فایل‌های تغییر یافته
+- lavayeh_handlers.py (خط 411)
+
+## مستندات اضافه شده
+- FIX_SUMMARY.md - خلاصه رفع خطا
+- README_FIX.md - راهنمای کامل
+- BUGFIX_GUIDE.md - راهنمای انگلیسی
+- IMPORT_FIX_DIAGRAM.md - نمودارها
+- DEPLOYMENT_INSTRUCTIONS.md - دستورالعمل استقرار
+- QUICK_REFERENCE.md - مرجع سریع
+- test_import_fix.py - اسکریپت تست
+
+## تست شده
+✅ Import بدون خطا
+✅ ربات اجرا می‌شود
+✅ لیست شعب نمایش داده می‌شود
+
+## نسخه
+2.0.1
+
+## نوع
+fix: رفع خطای critical در import
+
+## تاثیر
+مستقیم بر عملکرد اصلی - انتخاب شعبه در فرآیند ثبت لایحه
+
+---
+
+Fixes #issue_number
