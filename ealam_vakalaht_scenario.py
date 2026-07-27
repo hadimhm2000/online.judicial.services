@@ -492,10 +492,15 @@ async def _add_lawyer_person(page, national_id: str, bot: Bot, user_id: int):
     if not clicked:
         await safe_click_by_text(page, "افزودن", bot, user_id)
 
-    # وارد کردن کدملی وکیل — این بخش رادیوباتن انتخاب نوع شخص ندارد،
-    # مستقیم بعد از «افزودن» فیلد کدملی باز می‌شود. به‌جای صبر کورکورانه،
-    # منتظر می‌مانیم تا خود فیلد واقعاً روی صفحه ظاهر شود (حداکثر ۱۵ ثانیه).
-    candidate_selectors = ["#txtRealIrNationalityCode1", "#txtRealIrNationalityCode"]
+    await asyncio.sleep(3)
+
+    # وارد کردن کدملی وکیل در فیلد txtNationalityCode
+    # این فیلد برای ارائه‌کننده لایحه (وکیل) استفاده می‌شود
+    candidate_selectors = [
+        "#txtNationalityCode",
+        "#txtRealIrNationalityCode1", 
+        "#txtRealIrNationalityCode"
+    ]
     found_selector = await _wait_for_any_selector(page, candidate_selectors, timeout_sec=15)
 
     if not found_selector:
@@ -517,31 +522,90 @@ async def _add_lawyer_person(page, national_id: str, bot: Bot, user_id: int):
     await _fill_input(page, found_selector, national_id)
     await asyncio.sleep(1)
 
-    # استعلام از سامانه
-    await _click_sana_query(page, "actions.callNationalityCode", bot, user_id)
+    # استعلام از سامانه ثنا - کلیک دکمه استعلام
+    await _click_sana_query(page, "actions.getLawyerDataWithSana", bot, user_id)
 
 
 async def _click_sana_query(page, ng_click: str, bot: Bot, user_id: int, max_retries: int = 5):
+    """کلیک دکمه استعلام و منتظر ماندن برای تکمیل"""
     for attempt in range(max_retries):
+        # کلیک دکمه استعلام (آیکون refresh)
         clicked = await page.evaluate(f'''() => {{
             const btns = Array.from(document.querySelectorAll('button[ng-click*="{ng_click}"]'));
             const btn = btns.find(b => !b.disabled);
             if (btn) {{ btn.click(); return true; }}
             return false;
         }}''')
+        
+        # اگر با ng-click پیدا نشد، سعی می‌کنیم با tooltip یا icon پیدا کنیم
         if not clicked:
-            logging.warning(f"[EALAM] دکمه ng-click*={ng_click} پیدا نشد (تلاش {attempt+1})")
+            clicked = await page.evaluate('''() => {
+                const btns = Array.from(document.querySelectorAll('button[tooltip*="استعلام ثنا"], button .glyphicon-refresh'));
+                for (let btn of btns) {
+                    const actualBtn = btn.tagName === 'BUTTON' ? btn : btn.closest('button');
+                    if (actualBtn && !actualBtn.disabled) {
+                        actualBtn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }''')
+        
+        if not clicked:
+            logging.warning(f"[EALAM] دکمه استعلام پیدا نشد (تلاش {attempt+1})")
 
         await asyncio.sleep(10)
         await _close_error_popup(page)
 
+        # بررسی اینکه آیا داده‌ها از ثنا دریافت شده است
         extracted = await page.evaluate('''() => {
             const disabled = document.querySelector('input[ng-disabled*="ExtractedFromSana"][ng-disabled*="1"], input[disabled]');
             return disabled !== null;
         }''')
         if extracted:
+            logging.info(f"[EALAM] داده‌های وکیل از ثنا دریافت شد")
+            # اگر وکیل از ثنا استخراج شد، دکمه "ثبت موقت" یا "افزودن" را بزن
+            await asyncio.sleep(2)
+            await _click_add_lawyer_save(page, bot, user_id)
             return
         await asyncio.sleep(3)
+    
+    logging.warning(f"[EALAM] استعلام ثنا بعد از {max_retries} تلاش موفق نشد")
+
+
+async def _click_add_lawyer_save(page, bot: Bot, user_id: int):
+    """کلیک دکمه ثبت موقت بعد از افزودن وکیل"""
+    clicked = await page.evaluate('''() => {
+        const btn = document.querySelector('#btnSave, button[ng-click*="setJSSBillData"]');
+        if (btn && !btn.disabled) { 
+            btn.click(); 
+            return true; 
+        }
+        return false;
+    }''')
+    
+    if not clicked:
+        # جستجو با متن دکمه
+        clicked = await page.evaluate('''() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const saveBtn = btns.find(b => 
+                b.innerText && (
+                    b.innerText.includes('ثبت موقت') || 
+                    b.innerText.includes('افزودن')
+                )
+            );
+            if (saveBtn && !saveBtn.disabled) {
+                saveBtn.click();
+                return true;
+            }
+            return false;
+        }''')
+    
+    if clicked:
+        logging.info(f"[EALAM] دکمه ثبت موقت/افزودن کلیک شد")
+        await asyncio.sleep(3)
+    else:
+        logging.warning(f"[EALAM] دکمه ثبت موقت پیدا نشد")
 
 
 async def _fill_text_editor(page, text: str, bot: Bot, user_id: int):

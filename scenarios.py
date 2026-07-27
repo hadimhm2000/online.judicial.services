@@ -155,6 +155,33 @@ async def process_task(data, bot: Bot):
                 if not search_clicked:
                     await safe_click_by_text(sana_page, "جستجوی شماره همراه", bot, user_id)
 
+                # بررسی وجود پیام خطای ثنا (عدم ثبت شماره همراه)
+                await asyncio.sleep(3)
+                alert_message = await sana_page.evaluate('''() => {
+                    const alerts = document.querySelectorAll('div.alert-info, div.alert-dismissable');
+                    for (let alert of alerts) {
+                        const msgDiv = alert.querySelector('div[ng-bind-html]');
+                        if (msgDiv && msgDiv.innerText) {
+                            const text = msgDiv.innerText.trim();
+                            if (text.includes('پایگاه داده ثنا') && text.includes('ثبت نشده است')) {
+                                return text;
+                            }
+                        }
+                    }
+                    return null;
+                }''')
+                
+                if alert_message:
+                    logging.warning(f"[PHONE_SEARCH] پیام خطای ثنا برای شماره {phone_number}: {alert_message}")
+                    await bot.send_message(
+                        user_id,
+                        f"⚠️ **پیام سامانه:**\\n\\n{alert_message}\\n\\n"
+                        "فرآیند متوقف شد.",
+                        parse_mode="Markdown"
+                    )
+                    await bot.send_message(ADMIN_ID, f"⚠️ [PHONE_SEARCH] خطای ثنا برای {phone_number} (کاربر {user_id}): {alert_message}")
+                    return
+
                 table_ready = await _wait_for_mobile_search_table(sana_page, timeout_sec=30)
                 if not table_ready:
                     retry_clicked = await sana_page.evaluate('''() => {

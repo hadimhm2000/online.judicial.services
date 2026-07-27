@@ -1,0 +1,41 @@
+# اطلاعات حساس - هیچ‌وقت نباید توی گیت آپلود بشه
+.env
+google-credentials.json
+
+# فایل‌های پایتون
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# فایل‌های خروجی/موقت ربات
+*.pdf
+lavayeh_*.pdf
+report_phone_*.pdf
+
+# فایل‌های ویندوز/ادیتور
+.vscode/
+.idea/
+Thumbs.db
+
+# Next.js (اگر از Next.js هم استفاده شود)
+.next/
+out/
+node_modules/
+
+# Database
+*.db
+*.sqlite
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
