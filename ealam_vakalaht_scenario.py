@@ -1,0 +1,959 @@
+"""
+سناریوی ثبت اعلام وکالت در سامانه قضایی ثنا.
+
+جریان:
+  ۱. ناوبری به «ارایه و پیگیری لایحه»
+  ۲. جستجوی عنوان «اعلام و» و انتخاب اولین ردیف
+  ۳. کلیک «تقدیم لایحه»
+  ۴. پر کردن اطلاعات پرونده (شماره پرونده، ردیف فرعی، استان)
+  ۵. صحت‌سنجی پرونده
+  ۶. مرحله «ارائه کننده لایحه» — انتخاب وکیل + کدملی
+  ۷. مرحله «متن» — وارد کردن متن لایحه
+  ۸. ثبت موقت
+  ۹. مرحله «منضمات» — انتخاب «تصویر الکترونیک وکالت نامه» + شماره قرارداد + مبلغ تمبر
+  ۱۰. بارگذاری تصاویر مدارک (در صورت وجود)
+  ۱۱. آماده‌سازی و محاسبه هزینه
+  ۱۲. چاپ PDF
+  ۱۳. ارسال نتیجه به کاربر
+"""
+import asyncio
+import logging
+import os
+
+from aiogram import Bot
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+import runtime_state
+from config import ADMIN_ID
+from sheets import log_event
+from browser_helpers import (
+    resilient_sleep, check_and_handle_expiry, soft_click_if_exists,
+    goto_url_with_retry, human_delay, force_click_by_text,
+    safe_click_by_text, safe_type, wait_for_angular_idle,
+)
+
+
+class EalamFatalError(Exception):
+    """خطای قطعی که retry را متوقف می‌کند."""
+    pass
+
+
+async def process_ealam_vakalaht_task(data: dict, bot: Bot):
+    """پردازش تسک اعلام وکالت"""
+    sana_page = runtime_state.sana_page
+    browser_context = runtime_state.browser_context
+    user_id = data["user_id"]
+
+    lawyers = data.get("ealam_lawyers", [])
+    contracts = data.get("ealam_contracts", [])
+    stamp_amount = data.get("ealam_stamp_amount", 0)
+    stamp_type = data.get("ealam_stamp_type", "")
+    lavayeh_text = data.get("ealam_lavayeh_text", "")
+    attachment_groups = data.get("ealam_attachments", [])
+    tracking_code = data.get("lavayeh_tracking_code", "")
+    province = data.get("lavayeh_province", "")
+    row_number = data.get("lavayeh_row_number", 1)
+
+    logging.info(
+        f"[EALAM] user={user_id} lawyers={lawyers} contracts={contracts} "
+        f"stamp={stamp_amount} ({stamp_type}) tracking={tracking_code}"
+    )
+
+    await bot.send_message(
+        user_id,
+        f"⏳ **در حال ثبت اعلام وکالت...**\n"
+        f"وکیل(ها): {', '.join([f'`{l}`' for l in lawyers])}",
+        parse_mode="Markdown"
+    )
+    await bot.send_message(
+        ADMIN_ID,
+        f"🔄 [EALAM] شروع ثبت اعلام وکالت برای کاربر {user_id}\n"
+        f"وکلا: {lawyers} | قراردادها: {contracts}"
+    )
+
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            ok = await goto_url_with_retry(sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id)
+            if not ok:
+                return
+            await human_delay(3.0, 5.0)
+
+            # ── ۱. کلیک «ارایه و پیگیری لایحه» ─────────────────────────
+            clicked = await sana_page.evaluate('''() => {
+                const links = Array.from(document.querySelectorAll('a.list-group-item'));
+                const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری لایحه"));
+                if (t) { t.click(); return true; }
+                return false;
+            }''')
+            if not clicked:
+                await safe_click_by_text(sana_page, "ارایه و پیگیری لایحه", bot, user_id)
+            await resilient_sleep(sana_page, 5, bot, user_id)
+
+            # ── ۲. جستجوی عنوان «اعلام و» در dropdown ────────────────────
+            await _select_ealam_bill_type(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 3, bot, user_id)
+
+            # ── ۳. کلیک «تقدیم لایحه» ───────────────────────────────────
+            await _click_taqdim_lavayeh(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 8, bot, user_id)
+
+            # ── ۴. کلیک مرحله «ثبت و ویرایش لایحه» ─────────────────────
+            await _click_step_box(sana_page, "ثبت و ويرايش لايحه", bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            # ── ۵. اطلاعات پرونده ────────────────────────────────────────
+            await _click_step_label(sana_page, "اطلاعات پرونده", bot, user_id)
+            await resilient_sleep(sana_page, 3, bot, user_id)
+
+            if tracking_code:
+                await _fill_input(sana_page, "#txtCaseNo", tracking_code)
+                await resilient_sleep(sana_page, 1, bot, user_id)
+
+            await _fill_input(sana_page, "#txtSubNo", str(row_number))
+            await resilient_sleep(sana_page, 1, bot, user_id)
+
+            if province:
+                await _select_province(sana_page, province, bot, user_id)
+                await resilient_sleep(sana_page, 2, bot, user_id)
+
+            # صحت‌سنجی
+            await _click_validate(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 10, bot, user_id)
+
+            table_ok = await _wait_for_case_table(sana_page)
+            if not table_ok and tracking_code:
+                await bot.send_message(
+                    user_id,
+                    "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
+                    "لطفاً شماره پرونده، ردیف فرعی و استان را بررسی کنید.\n"
+                    "مجدداً «اعلام وکالت» را شروع کنید.",
+                    parse_mode="Markdown"
+                )
+                return
+
+            # ── ۶. مرحله «ارائه کننده لایحه» ────────────────────────────
+            await _click_step_label(sana_page, "ارائه كننده لايحه", bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            for lawyer_nat_id in lawyers:
+                await _add_lawyer_person(sana_page, lawyer_nat_id, bot, user_id)
+                await resilient_sleep(sana_page, 8, bot, user_id)
+
+            # ── ۷. مرحله «متن» ───────────────────────────────────────────
+            await _click_step_label(sana_page, "متن", bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            await _fill_text_editor(sana_page, lavayeh_text, bot, user_id)
+            await resilient_sleep(sana_page, 2, bot, user_id)
+
+            # ── ۸. ثبت موقت ──────────────────────────────────────────────
+            await _click_save_temp_with_retry(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 8, bot, user_id)
+
+            lavayeh_bill_no = await _extract_bill_no(sana_page)
+            logging.info(f"[EALAM] bill_no: {lavayeh_bill_no}")
+
+            await _click_goto_main(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            # ── ۹. مرحله «منضمات» — ثبت وکالت‌نامه الکترونیک ──────────
+            await _click_step_box(sana_page, "منضمات", bot, user_id)
+            await resilient_sleep(sana_page, 5, bot, user_id)
+
+            # تعیین مبلغ فیلد txtLawyerAmount: stamp_amount * 100 / 3
+            if stamp_amount and stamp_amount > 0:
+                lawyer_amount_value = int(stamp_amount * 100 / 3)
+            else:
+                lawyer_amount_value = 0
+
+            # شماره قرارداد اول
+            first_contract = contracts[0] if contracts else ""
+
+            vakalaht_ok = await _upload_electronic_vakalaht(
+                sana_page, first_contract, lawyer_amount_value, bot, user_id
+            )
+
+            if not vakalaht_ok:
+                # اطلاع به کاربر و پایان
+                bill_no = await _extract_bill_no(sana_page)
+                await bot.send_message(
+                    user_id,
+                    f"⚠️ **خطا در ثبت وکالت‌نامه الکترونیک.**\n\n"
+                    f"کد رهگیری لایحه: `{bill_no}`\n\n"
+                    f"جهت ادامه ثبت با شماره **09306186888** در واتساپ پیام دهید.",
+                    parse_mode="Markdown"
+                )
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"❌ [EALAM] آپلود وکالت‌نامه الکترونیک برای کاربر {user_id} ناموفق. کد: {bill_no}"
+                )
+                return
+
+            # آپلود سایر پیوست‌ها (در صورت وجود)
+            if attachment_groups:
+                # دانلود تصاویر
+                groups_with_paths = []
+                for group in attachment_groups:
+                    group_paths = await _download_images_from_telegram(
+                        bot, group.get("images", []), user_id
+                    )
+                    groups_with_paths.append({"title": group.get("title", "مستندات"), "paths": group_paths})
+
+                for group in groups_with_paths:
+                    await _upload_other_attachment(
+                        sana_page, group["title"], group["paths"], bot, user_id
+                    )
+                    for p in group["paths"]:
+                        try:
+                            if os.path.exists(p):
+                                os.remove(p)
+                        except Exception:
+                            pass
+
+            await _click_goto_main(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            # ── ۱۰. آماده‌سازی ───────────────────────────────────────────
+            await _click_step_box(sana_page, "آماده سازي جهت محاسبه هزينه و ارسال", bot, user_id)
+            await resilient_sleep(sana_page, 5, bot, user_id)
+
+            preparation_ok = await _click_preparation_with_retry(sana_page, bot, user_id)
+            if not preparation_ok:
+                bill_no = await _extract_bill_no(sana_page)
+                await bot.send_message(
+                    user_id,
+                    f"⚠️ مرحله آماده‌سازی با مشکل مواجه شد.\n"
+                    f"کد رهگیری: `{bill_no}`\n"
+                    f"با شماره **09306186888** در واتساپ پیام دهید.",
+                    parse_mode="Markdown"
+                )
+                return
+
+            await _click_goto_main(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            # ── ۱۱. محاسبه هزینه ─────────────────────────────────────────
+            await _click_step_box(sana_page, "محاسبه و دريافت هزينه", bot, user_id)
+            await resilient_sleep(sana_page, 8, bot, user_id)
+
+            court_total = await _calculate_cost_with_retry(sana_page, bot, user_id)
+            logging.info(f"[EALAM] court_total: {court_total}")
+
+            await _click_goto_main(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            # ── ۱۲. چاپ PDF ──────────────────────────────────────────────
+            pdf_path = await _print_lavayeh(sana_page, browser_context, lavayeh_bill_no, bot, user_id)
+
+            # ── ۱۳. ارسال نتیجه ──────────────────────────────────────────
+            from lavayeh_handlers import send_lavayeh_result
+            national_ids = ", ".join(lawyers)
+            combined_tracking = (
+                f"{tracking_code} | کد لایحه: {lavayeh_bill_no}"
+                if lavayeh_bill_no else tracking_code
+            )
+
+            await send_lavayeh_result(
+                bot, user_id, pdf_path, court_total,
+                tracking_code=combined_tracking,
+                national_ids=national_ids,
+                lavayeh_title="اعلام وکالت",
+                lavayeh_province=province,
+                lavayeh_row_number=row_number,
+                lavayeh_persons=[{"person_type": "وکیل", "national_id": l} for l in lawyers],
+            )
+
+            await bot.send_message(
+                ADMIN_ID,
+                f"✅ [EALAM] ثبت اعلام وکالت کاربر {user_id} موفق. هزینه: {court_total:,} تومان"
+            )
+            return
+
+        except EalamFatalError as e:
+            logging.error(f"[EALAM] خطای قطعی user={user_id}: {e}")
+            await bot.send_message(user_id, f"⚠️ **خطای قطعی:** {str(e)[:200]}", parse_mode="Markdown")
+            await log_event(
+                "خطای سامانه", "اعلام وکالت", str(user_id), user_id,
+                tracking_code=tracking_code, doc_name="اعلام وکالت",
+                note=f"خطای قطعی: {str(e)[:200]}"
+            )
+            return
+
+        except Exception as e:
+            logging.error(f"[EALAM] تلاش {attempt+1} ناموفق user={user_id}: {e}")
+            if attempt < max_attempts - 1:
+                await bot.send_message(ADMIN_ID, f"⚠️ [EALAM] تلاش {attempt+1} ناموفق. ریلود...\nخطا: {str(e)[:300]}")
+                try:
+                    await sana_page.reload()
+                    await asyncio.sleep(6)
+                except Exception:
+                    pass
+            else:
+                await bot.send_message(
+                    user_id,
+                    "⚠️ ثبت اعلام وکالت با اختلال مواجه شد. پشتیبانی پیگیری خواهد کرد."
+                )
+                await bot.send_message(ADMIN_ID, f"❌ [EALAM] کاربر {user_id} پس از {max_attempts} تلاش ناموفق.")
+                await log_event(
+                    "خطای سامانه", "اعلام وکالت", str(user_id), user_id,
+                    tracking_code=tracking_code, doc_name="اعلام وکالت",
+                    note=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}"
+                )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# توابع کمکی
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _select_ealam_bill_type(page, bot: Bot, user_id: int):
+    """انتخاب نوع لایحه «اعلام وکالت» از dropdown"""
+    search_input = page.locator('.ui-select-search').first
+    opened = False
+    for _ in range(4):
+        await page.evaluate('''() => {
+            const btn = document.querySelector('.ui-select-toggle');
+            if (btn) btn.click();
+        }''')
+        try:
+            await search_input.wait_for(state="visible", timeout=4000)
+            opened = True
+            break
+        except PlaywrightTimeoutError:
+            await asyncio.sleep(1.5)
+
+    if not opened:
+        raise Exception("ui-select dropdown باز نشد.")
+
+    await search_input.fill("")
+    await search_input.type("اعلام و", delay=150)
+    await asyncio.sleep(2)
+
+    # انتخاب اولین ردیف
+    clicked = await page.evaluate('''() => {
+        const choices = Array.from(document.querySelectorAll(
+            '.ui-select-choices-row, .ui-select-choices div[ng-repeat]'
+        ));
+        const visible = choices.filter(el => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        });
+        if (visible.length > 0) { visible[0].click(); return true; }
+        const lis = Array.from(document.querySelectorAll('.ui-select-choices li'));
+        const vl = lis.filter(el => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        });
+        if (vl.length > 0) { vl[0].click(); return true; }
+        return false;
+    }''')
+    if not clicked:
+        logging.warning("[EALAM] نتوانست عنوان «اعلام وکالت» را انتخاب کند")
+
+
+async def _click_taqdim_lavayeh(page, bot: Bot, user_id: int):
+    for _ in range(5):
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('button[ng-click*="setJSSBillType"]');
+            if (btn) { btn.click(); return true; }
+            return false;
+        }''')
+        if not clicked:
+            await safe_click_by_text(page, "تقدیم لایحه", bot, user_id)
+        await asyncio.sleep(3)
+        await _close_error_popup(page)
+        await asyncio.sleep(4)
+        loaded = await page.evaluate('''() => {
+            const steps = Array.from(document.querySelectorAll('.box h5, .step'));
+            return steps.some(el => el.innerText && el.innerText.includes("ثبت"));
+        }''')
+        if loaded:
+            return
+        await asyncio.sleep(5)
+
+
+async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
+    clicked = await page.evaluate(f'''() => {{
+        const heads = Array.from(document.querySelectorAll('.box h5'));
+        const target = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+        if (target) {{
+            const box = target.closest('.box');
+            if (box) {{ box.click(); return true; }}
+        }}
+        return false;
+    }}''')
+    if not clicked:
+        await safe_click_by_text(page, step_name, bot, user_id)
+
+
+async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
+    clicked = await page.evaluate(f'''() => {{
+        const steps = Array.from(document.querySelectorAll('.step'));
+        const target = steps.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+        if (target) {{ target.click(); return true; }}
+        return false;
+    }}''')
+    if not clicked:
+        await safe_click_by_text(page, step_name, bot, user_id)
+
+
+async def _fill_input(page, selector: str, value: str):
+    try:
+        elem = page.locator(selector).first
+        await elem.click()
+        await elem.fill("")
+        await elem.fill(value)
+        await elem.blur()
+    except Exception as e:
+        logging.warning(f"[EALAM] _fill_input({selector}) failed: {e}")
+
+
+async def _select_province(page, province: str, bot: Bot, user_id: int):
+    await page.evaluate('''() => {
+        const btns = Array.from(document.querySelectorAll('button.ui-select-toggle'));
+        const btn = btns.find(b => {
+            return b.closest('[name="caseServer"]') ||
+                   (b.innerText && b.innerText.includes("دادگستری"));
+        });
+        if (btn) btn.click();
+    }''')
+    await asyncio.sleep(2)
+    await page.evaluate('''(prov) => {
+        const normalize = (s) => (s || '')
+            .replace(/\\u064A/g, '\\u06CC')
+            .replace(/\\u0643/g, '\\u06A9')
+            .replace(/\\u200c/g, ' ')
+            .trim();
+        const normProv = normalize(prov);
+        const items = Array.from(document.querySelectorAll('.ui-select-choices-row-inner, .ui-select-choices div'));
+        const exact = items.find(el => el.innerText && normalize(el.innerText) === normProv);
+        if (exact) { exact.click(); return; }
+        const fallback = items.find(el => el.innerText && normalize(el.innerText).includes(normProv));
+        if (fallback) fallback.click();
+    }''', province)
+
+
+async def _click_validate(page, bot: Bot, user_id: int):
+    for _ in range(5):
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('#btnAddHst1');
+            if (btn) { btn.click(); return true; }
+            return false;
+        }''')
+        if not clicked:
+            await safe_click_by_text(page, "صحت سنجی اطلاعات", bot, user_id)
+        await asyncio.sleep(12)
+        await _close_error_popup(page)
+        has_table = await page.evaluate('''() => {
+            const table = document.querySelector('table tbody tr');
+            return table !== null;
+        }''')
+        if has_table:
+            return
+        await asyncio.sleep(5)
+
+
+async def _wait_for_case_table(page, timeout_sec: int = 30) -> bool:
+    for _ in range(timeout_sec):
+        has_table = await page.evaluate('''() => {
+            const tbody = document.querySelector('table tbody');
+            return tbody && tbody.querySelectorAll('tr').length > 0;
+        }''')
+        if has_table:
+            return True
+        await asyncio.sleep(1)
+    return False
+
+
+async def _wait_for_any_selector(page, selectors: list, timeout_sec: int = 15) -> str:
+    """صبر می‌کند تا یکی از سلکتورهای داده‌شده روی صفحه ظاهر و قابل‌مشاهده شود؛ نام همان سلکتور را برمی‌گرداند یا None."""
+    for _ in range(timeout_sec * 2):
+        found = await page.evaluate('''(sels) => {
+            for (const sel of sels) {
+                const el = document.querySelector(sel);
+                if (el && el.offsetParent !== null) return sel;
+            }
+            return null;
+        }''', selectors)
+        if found:
+            return found
+        await asyncio.sleep(0.5)
+    return None
+
+
+async def _add_lawyer_person(page, national_id: str, bot: Bot, user_id: int):
+    """افزودن وکیل در مرحله ارائه‌کننده لایحه"""
+    # کلیک دکمه افزودن
+    clicked = await page.evaluate('''() => {
+        const btn = document.querySelector('#btnAddSection');
+        if (btn && !btn.disabled) { btn.click(); return true; }
+        return false;
+    }''')
+    if not clicked:
+        await safe_click_by_text(page, "افزودن", bot, user_id)
+
+    # وارد کردن کدملی وکیل — این بخش رادیوباتن انتخاب نوع شخص ندارد،
+    # مستقیم بعد از «افزودن» فیلد کدملی باز می‌شود. به‌جای صبر کورکورانه،
+    # منتظر می‌مانیم تا خود فیلد واقعاً روی صفحه ظاهر شود (حداکثر ۱۵ ثانیه).
+    candidate_selectors = ["#txtRealIrNationalityCode1", "#txtRealIrNationalityCode"]
+    found_selector = await _wait_for_any_selector(page, candidate_selectors, timeout_sec=15)
+
+    if not found_selector:
+        # هیچ‌کدام از سلکتورهای شناخته‌شده پیدا نشد — برای دیباگ، آی‌دی همه‌ی
+        # اینپوت‌های موجود روی صفحه را لاگ می‌کنیم تا سلکتور درست پیدا شود
+        visible_ids = await page.evaluate('''() => {
+            return Array.from(document.querySelectorAll('input'))
+                .filter(i => i.offsetParent !== null)
+                .map(i => i.id || i.name || '(بدون id/name)');
+        }''')
+        logging.warning(f"[EALAM] فیلد کدملی وکیل پیدا نشد. اینپوت‌های قابل‌مشاهده روی صفحه: {visible_ids}")
+        await bot.send_message(
+            ADMIN_ID,
+            f"⚠️ [EALAM] فیلد کدملی وکیل برای کاربر {user_id} پیدا نشد.\n"
+            f"اینپوت‌های موجود: {visible_ids}"
+        )
+        return
+
+    await _fill_input(page, found_selector, national_id)
+    await asyncio.sleep(1)
+
+    # استعلام از سامانه
+    await _click_sana_query(page, "actions.callNationalityCode", bot, user_id)
+
+
+async def _click_sana_query(page, ng_click: str, bot: Bot, user_id: int, max_retries: int = 5):
+    for attempt in range(max_retries):
+        clicked = await page.evaluate(f'''() => {{
+            const btns = Array.from(document.querySelectorAll('button[ng-click*="{ng_click}"]'));
+            const btn = btns.find(b => !b.disabled);
+            if (btn) {{ btn.click(); return true; }}
+            return false;
+        }}''')
+        if not clicked:
+            logging.warning(f"[EALAM] دکمه ng-click*={ng_click} پیدا نشد (تلاش {attempt+1})")
+
+        await asyncio.sleep(10)
+        await _close_error_popup(page)
+
+        extracted = await page.evaluate('''() => {
+            const disabled = document.querySelector('input[ng-disabled*="ExtractedFromSana"][ng-disabled*="1"], input[disabled]');
+            return disabled !== null;
+        }''')
+        if extracted:
+            return
+        await asyncio.sleep(3)
+
+
+async def _fill_text_editor(page, text: str, bot: Bot, user_id: int):
+    safe_text = text.replace("`", "'").replace("\\", "\\\\")
+    await page.evaluate(f'''() => {{
+        const editor = document.querySelector('[contenteditable="true"][ta-bind]');
+        if (editor) {{
+            editor.focus();
+            editor.innerHTML = `<p>{safe_text}</p>`;
+            editor.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            editor.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }}
+    }}''')
+    await asyncio.sleep(1)
+
+    # اعمال H3
+    await page.evaluate('''() => {
+        const editor = document.querySelector('[contenteditable="true"][ta-bind]');
+        if (editor) {
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+        }
+    }''')
+    await asyncio.sleep(0.5)
+    await page.evaluate('''() => {
+        const btn = document.querySelector('button[name="h3"]') ||
+                    Array.from(document.querySelectorAll('button')).find(b => b.title === "Heading 3");
+        if (btn && !btn.disabled) btn.click();
+    }''')
+    await asyncio.sleep(0.5)
+
+
+async def _click_save_temp_with_retry(page, bot: Bot, user_id: int, max_retries: int = 5):
+    for attempt in range(max_retries):
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('#btnSave');
+            if (btn && !btn.disabled) { btn.click(); return true; }
+            return false;
+        }''')
+        if not clicked:
+            await safe_click_by_text(page, "ثبت موقت", bot, user_id)
+        await asyncio.sleep(10)
+
+        success = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const icon = popup.querySelector('.sa-icon.sa-success');
+            return icon && window.getComputedStyle(icon).display !== 'none';
+        }''')
+        if success:
+            await _close_success_popup(page)
+            return
+
+        error_text = await _get_and_close_error_popup_text(page)
+        if error_text:
+            await bot.send_message(
+                bot._token and None or None,  # dummy — handled below
+                f"⚠️ خطا در ثبت موقت: {error_text}"
+            )
+            raise EalamFatalError(error_text)
+        await asyncio.sleep(5)
+
+
+async def _click_goto_main(page, bot: Bot, user_id: int):
+    clicked = await page.evaluate('''() => {
+        const btn = document.querySelector('#gotoMainPage');
+        if (btn && !btn.disabled) { btn.click(); return true; }
+        return false;
+    }''')
+    if not clicked:
+        await soft_click_if_exists(page, "بازگشت به فهرست")
+
+
+async def _upload_electronic_vakalaht(
+    page, contract_number: str, lawyer_amount_value: int, bot: Bot, user_id: int
+) -> bool:
+    """
+    انتخاب «تصویر الکترونیک وکالت نامه» و پر کردن فیلدهای مربوطه
+    """
+    for attempt in range(3):
+        try:
+            # انتخاب نوع پیوست «تصوير الكترونيك وكالت نامه» (value=object:2812)
+            selected = await page.evaluate('''() => {
+                const sel = document.querySelector('#attachmentType');
+                if (!sel) return false;
+                const opts = Array.from(sel.options);
+                const opt = opts.find(o =>
+                    o.text.includes("تصوير الكترونيك وكالت نامه") ||
+                    o.text.includes("تصویر الکترونیک وکالت نامه") ||
+                    o.text.includes("الكترونيك وكالت")
+                );
+                if (opt) {
+                    sel.value = opt.value;
+                    sel.dispatchEvent(new Event("change"));
+                    return true;
+                }
+                return false;
+            }''')
+
+            if not selected:
+                logging.warning(f"[EALAM] گزینه «تصویر الکترونیک وکالت نامه» یافت نشد (تلاش {attempt+1})")
+                await asyncio.sleep(5)
+                continue
+
+            await asyncio.sleep(3)
+
+            # پر کردن شماره وکالت‌نامه (txtNo)
+            if contract_number:
+                await page.evaluate(f'''() => {{
+                    const inp = document.querySelector('#txtNo');
+                    if (inp) {{
+                        inp.value = "{contract_number}";
+                        inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    }}
+                }}''')
+                await asyncio.sleep(1)
+
+            # پر کردن مبلغ تمبر (txtLawyerAmount) — فقط عدد، بدون کاراکتر
+            if lawyer_amount_value > 0:
+                await page.evaluate(f'''() => {{
+                    const inp = document.querySelector('#txtLawyerAmount');
+                    if (inp) {{
+                        // حذف disabled موقت
+                        inp.removeAttribute('disabled');
+                        inp.removeAttribute('ng-disabled');
+                        inp.value = "{lawyer_amount_value}";
+                        inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    }}
+                }}''')
+                await asyncio.sleep(1)
+
+            # کلیک «ثبت و ویرایش پیوست»
+            await page.evaluate('''() => {
+                const btn = document.querySelector('#btnSaveDoc');
+                if (btn && !btn.disabled) btn.click();
+            }''')
+            await asyncio.sleep(8)
+
+            # بررسی نتیجه
+            success = await page.evaluate('''() => {
+                const popup = document.querySelector('.sweet-alert.showSweetAlert');
+                if (!popup) return false;
+                const icon = popup.querySelector('.sa-icon.sa-success');
+                return icon && window.getComputedStyle(icon).display !== 'none';
+            }''')
+
+            if success:
+                await _close_success_popup(page)
+                logging.info("[EALAM] ثبت وکالت‌نامه الکترونیک موفق.")
+                return True
+
+            # خطا — بخوان و retry
+            error_text = await _get_and_close_error_popup_text(page)
+            if error_text:
+                logging.warning(f"[EALAM] خطای ثبت وکالت‌نامه: {error_text} (تلاش {attempt+1})")
+                await asyncio.sleep(5)
+                continue
+
+        except Exception as e:
+            logging.error(f"[EALAM] _upload_electronic_vakalaht تلاش {attempt+1}: {e}")
+            await asyncio.sleep(5)
+
+    return False
+
+
+async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
+    """آپلود پیوست‌های اضافی (سایر ضمائم)"""
+    if not image_paths:
+        return
+
+    try:
+        # انتخاب «ساير ضمائم»
+        await page.evaluate('''() => {
+            const sel = document.querySelector('#attachmentType');
+            if (sel) {
+                const opts = Array.from(sel.options);
+                const opt = opts.find(o => o.text.includes("ساير ضمائم") || o.text.includes("سایر ضمائم"));
+                if (opt) {
+                    sel.value = opt.value;
+                    sel.dispatchEvent(new Event("change"));
+                }
+            }
+        }''')
+        await asyncio.sleep(3)
+
+        escaped_title = title.replace("`", "'").replace("\\", "")
+        await page.evaluate(f'''() => {{
+            const inp = document.querySelector('#txtName');
+            if (inp) {{
+                inp.value = "{escaped_title}";
+                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            }}
+        }}''')
+
+        await page.evaluate(f'''() => {{
+            const inp = document.querySelector('#txt001');
+            if (inp) {{
+                inp.value = "{len(image_paths)}";
+                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            }}
+        }}''')
+
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#incAttach0');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(3)
+
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#btnSaveDoc');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(8)
+        await _close_success_popup(page)
+        await asyncio.sleep(3)
+
+        # ویرایش برای آپلود تصاویر
+        await page.evaluate('''() => {
+            const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
+            if (btns.length > 0) btns[btns.length - 1].click();
+        }''')
+        await asyncio.sleep(4)
+
+        file_input = page.locator('input[type="file"]').first
+        await file_input.set_input_files(image_paths)
+        await asyncio.sleep(3)
+
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#btnUploadAll');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(30)
+
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#btnApplyAll');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(10)
+
+    except Exception as e:
+        logging.error(f"[EALAM] خطا در آپلود پیوست «{title}»: {e}")
+
+
+async def _click_preparation_with_retry(page, bot: Bot, user_id: int, max_retries: int = 3) -> bool:
+    for attempt in range(max_retries):
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#btnPreparation');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(40 if attempt > 0 else 12)
+
+        success = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const icon = popup.querySelector('.sa-icon.sa-success');
+            const h2 = popup.querySelector('h2');
+            return icon && window.getComputedStyle(icon).display !== 'none' &&
+                   h2 && h2.innerText.includes("آماده سازی");
+        }''')
+        if success:
+            await _close_success_popup(page)
+            return True
+
+        await _close_error_popup(page)
+        await asyncio.sleep(30)
+        await _close_success_popup(page)
+    return False
+
+
+async def _calculate_cost_with_retry(page, bot: Bot, user_id: int, max_retries: int = 3) -> int:
+    for attempt in range(max_retries):
+        await _close_error_popup(page)
+        await asyncio.sleep(2)
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#btnCalculateCash');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(40)
+        await _close_error_popup(page)
+
+        raw = await page.evaluate('''() => {
+            const tds = Array.from(document.querySelectorAll('table td'));
+            for (let td of tds) {
+                const text = td.innerText.trim().replace(/,/g, '').replace(/،/g, '');
+                if (/^[0-9]+$/.test(text) && parseInt(text) > 10000 && parseInt(text) < 100000000000) {
+                    return text;
+                }
+            }
+            return null;
+        }''')
+
+        if raw:
+            try:
+                amount = int(raw.replace(",", "").strip())
+                if amount > 100_000_000:
+                    amount = amount // 10
+                return amount
+            except Exception:
+                pass
+        await asyncio.sleep(10)
+    return 0
+
+
+async def _print_lavayeh(page, browser_context, bill_no: str, bot: Bot, user_id: int) -> str:
+    pdf_path = f"ealam_vakalaht_{bill_no}.pdf"
+    try:
+        async def click_print():
+            await page.evaluate('''() => {
+                const heads = Array.from(document.querySelectorAll('.box h5'));
+                const target = heads.find(el => el.innerText && (
+                    el.innerText.includes("چاپ اوليه") || el.innerText.includes("چاپ اولیه")
+                ));
+                if (target) {
+                    const box = target.closest('.box');
+                    if (box) box.click();
+                }
+            }''')
+
+        async with browser_context.expect_page(timeout=20000) as new_page_info:
+            await click_print()
+
+        print_page = await new_page_info.value
+        await print_page.wait_for_load_state("load", timeout=30000)
+        await asyncio.sleep(8)
+        await check_and_handle_expiry(print_page, bot, user_id)
+        await print_page.pdf(path=pdf_path, format="A4")
+        await print_page.close()
+    except Exception as e:
+        logging.error(f"[EALAM] خطا در چاپ: {e}")
+        try:
+            await page.pdf(path=pdf_path, format="A4")
+        except Exception:
+            pass
+    return pdf_path
+
+
+async def _extract_bill_no(page) -> str:
+    try:
+        val = await page.evaluate('''() => {
+            const inp = document.querySelector('#txtBillNo');
+            return inp ? inp.value : "";
+        }''')
+        return val or "نامشخص"
+    except Exception:
+        return "نامشخص"
+
+
+async def _close_error_popup(page) -> bool:
+    closed = await page.evaluate('''() => {
+        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+        if (!popup) return false;
+        const successIcon = popup.querySelector('.sa-icon.sa-success');
+        if (successIcon && window.getComputedStyle(successIcon).display !== 'none') return false;
+        const btn = popup.querySelector('button.confirm');
+        if (btn) { btn.click(); return true; }
+        return false;
+    }''')
+    if closed:
+        await asyncio.sleep(1)
+    return closed
+
+
+async def _close_success_popup(page) -> bool:
+    closed = await page.evaluate('''() => {
+        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+        if (!popup) return false;
+        const btn = popup.querySelector('button.confirm');
+        if (btn) { btn.click(); return true; }
+        return false;
+    }''')
+    if closed:
+        await asyncio.sleep(1)
+    return closed
+
+
+async def _get_and_close_error_popup_text(page):
+    text = await page.evaluate('''() => {
+        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+        if (!popup) return null;
+        const successIcon = popup.querySelector('.sa-icon.sa-success');
+        if (successIcon && window.getComputedStyle(successIcon).display !== 'none') return null;
+        const h2 = popup.querySelector('h2');
+        const p = popup.querySelector('p');
+        const msg = [h2 ? h2.innerText : '', p ? p.innerText : ''].filter(Boolean).join(' - ').trim();
+        const btn = popup.querySelector('button.confirm');
+        if (btn) btn.click();
+        return msg || null;
+    }''')
+    if text:
+        await asyncio.sleep(1)
+    return text
+
+
+async def _download_images_from_telegram(bot: Bot, file_ids: list, user_id: int) -> list:
+    paths = []
+    for i, file_id in enumerate(file_ids):
+        try:
+            file_info = await bot.get_file(file_id)
+            ext = "jpg"
+            if file_info.file_path:
+                ext = file_info.file_path.split(".")[-1].lower()
+                if ext not in ("jpg", "jpeg", "png"):
+                    ext = "jpg"
+            path = f"ealam_img_{user_id}_{i}.{ext}"
+            await bot.download_file(file_info.file_path, path)
+            paths.append(path)
+        except Exception as e:
+            logging.error(f"[EALAM] خطا در دانلود تصویر {i} برای user {user_id}: {e}")
+    return paths
