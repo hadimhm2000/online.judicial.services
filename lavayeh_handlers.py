@@ -408,93 +408,70 @@ async def lavayeh_get_branch_input_method(message: Message, state: FSMContext):
         await state.set_state(Form.lavayeh_archive_number)
         return
     
-    from keyboards import lavayeh_branch_input_method_kb, back_only_kb
+    from keyboards import lavayeh_branch_input_method_kb, back_only_kb, ReplyKeyboardRemove
     from branches import UNITS_DATA, create_branches_keyboard, ROOT_NODES
     
-    if text == "📝 وارد کردن نام شعبه":
-        # ورود دستی نام شعبه
-        await message.answer(
-            "🏛 لطفاً **نام شعبه** خود را وارد کنید:\n\n"
-            "مثال: شعبه ۱۰۱ دادگاه عمومی حقوقی تهران",
-            reply_markup=back_only_kb,
-            parse_mode="Markdown"
-        )
-        await state.set_state(Form.lavayeh_branch_name)
-        return
-    
-    elif text == "🔍 انتخاب از لیست شعب":
-        # انتخاب از لیست
+    if text == "🔍 انتخاب شعبه از لیست" or text == "🔍 انتخاب از لیست شعب":
+        # انتخاب از لیست - بدون گزینه ورود دستی
         if not UNITS_DATA:
             await message.answer(
                 "⚠️ متأسفانه لیست شعب در دسترس نیست.\n"
-                "لطفاً نام شعبه را به صورت دستی وارد کنید:",
+                "لطفاً با پشتیبانی تماس بگیرید.",
                 reply_markup=back_only_kb
             )
-            await state.set_state(Form.lavayeh_branch_name)
+            await state.set_state(Form.lavayeh_archive_number)
             return
         
+        # حذف کیبورد معمولی و نمایش کیبورد inline
         await message.answer(
-            "🏛 **انتخاب شعبه از لیست**\n\n"
-            "لطفاً از لیست زیر مسیر خود را انتخاب کنید:",
+            "🏛 **سامانه انتخاب شعبه قضایی**\n\n"
+            "لطفاً از لیست زیر شروع کنید و تا رسیدن به واحد نهایی (شعبه) ادامه دهید:\n\n"
+            "ℹ️ فقط واحدهای نهایی که دارای کد هستند قابل انتخاب می‌باشند.",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode="Markdown"
+        )
+        
+        await message.answer(
+            "📂 **قوه قضائیه - سطح اول**",
             reply_markup=create_branches_keyboard(ROOT_NODES, page=0, parent_id=None),
             parse_mode="Markdown"
         )
-        # state همچنان lavayeh_branch_name می‌ماند تا callback handler آن را بگیرد
+        # state را به lavayeh_branch_name تغییر می‌دهیم تا callback handler آن را بگیرد
         await state.set_state(Form.lavayeh_branch_name)
         return
     
     await message.answer(
-        "⚠️ لطفاً یکی از گزینه‌های موجود را انتخاب کنید:",
+        "⚠️ لطفاً گزینه «انتخاب شعبه از لیست» را انتخاب کنید:",
         reply_markup=lavayeh_branch_input_method_kb
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# مرحله ۲.۲ — دریافت نام شعبه (مسیر جدید)
+# مرحله ۲.۲ — دریافت نام شعبه (فقط از طریق callback - ورود دستی حذف شده)
 # ══════════════════════════════════════════════════════════════════════════════
 @lavayeh_router.message(Form.lavayeh_branch_name)
 async def lavayeh_get_branch_name(message: Message, state: FSMContext):
+    """
+    این handler فقط برای پیام‌های بازگشت است.
+    انتخاب شعبه از طریق callback در branches.py انجام می‌شود.
+    """
     text = message.text or ""
     
     if text == "🔙 بازگشت":
         from keyboards import lavayeh_branch_input_method_kb
         await message.answer(
-            "🏛 لطفاً نحوه ورود نام شعبه را دوباره انتخاب کنید:",
-            reply_markup=lavayeh_branch_input_method_kb
+            "🔢 لطفاً شماره بایگانی را مجدداً ارسال فرمایید:",
+            reply_markup=back_only_kb
         )
-        await state.set_state(Form.lavayeh_branch_input_method)
+        await state.set_state(Form.lavayeh_archive_number)
         return
     
-    
-    if not text.strip():
-        await message.answer("⚠️ لطفاً نام شعبه را وارد کنید:")
-        return
-    
-    # جستجوی کد شعبه از لیست واحدها
-    from branches import UNITS_DATA
-    branch_code = ""
-    if UNITS_DATA:
-        for unit in UNITS_DATA:
-            if unit.get("UnitName", "") == text:
-                branch_code = unit.get("Code", "")
-                break
-    
-    await state.update_data(
-        lavayeh_branch_name=text,
-        lavayeh_branch_code=branch_code
-    )
-    data = await state.get_data()
-    
-    if await _maybe_return_to_preview(data, message, state):
-        return
-    
-    # ادامه به انتخاب استان
+    # اگر متن دیگری ارسال شد، پیام راهنما نمایش می‌دهیم
     await message.answer(
-        "🏙 لطفاً **استان** مربوط به پرونده را انتخاب فرمایید:",
-        reply_markup=create_province_kb(),
+        "⚠️ لطفاً از دکمه‌های روی صفحه برای انتخاب شعبه استفاده کنید.\n\n"
+        "در صورتی که می‌خواهید انصراف دهید، /start را بزنید.",
         parse_mode="Markdown"
     )
-    await state.set_state(Form.lavayeh_province)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -137,6 +137,7 @@ def create_branches_keyboard(
         unit_no = node.get("UnitNo")
         has_child = node.get("HasChildUnit", False)
         can_select = node.get("HasSelectUnit", False)
+        code = node.get("Code", "")
         
         # اضافه کردن شماره واحد اگر موجود است
         if unit_no:
@@ -144,19 +145,26 @@ def create_branches_keyboard(
         else:
             display_name = node_name
         
-        # اضافه کردن آیکون
+        # اضافه کردن آیکون بر اساس نوع واحد
         if has_child:
             display_name = f"📁 {display_name}"
-        else:
-            display_name = f"📄 {display_name}"
+        elif code:  # واحد نهایی با کد
+            display_name = f"✅ {display_name}"
+        else:  # واحد نهایی بدون کد
+            display_name = f"⚪️ {display_name}"
         
         # استفاده از index به جای Id کامل (برای کوتاه‌تر کردن callback_data)
         idx = ID_TO_INDEX.get(node_id, 0)
         
         if has_child:
+            # واحد دارای زیرمجموعه - قابل باز شدن
             callback = f"br:open:{idx}:{page}"
-        else:
+        elif code:
+            # واحد نهایی با کد - قابل انتخاب
             callback = f"br:sel:{idx}"
+        else:
+            # واحد نهایی بدون کد - غیرقابل انتخاب (نمایش اطلاعات)
+            callback = f"br:info:{idx}"
         
         buttons.append([InlineKeyboardButton(text=display_name, callback_data=callback)])
     
@@ -341,7 +349,18 @@ async def process_branch_callback(callback: CallbackQuery, state: FSMContext):
         )
     
     elif action == "sel":
-        # انتخاب واحد نهایی
+        # انتخاب واحد نهایی (با کد)
+        branch_code = node.get("Code", "")
+        
+        # بررسی وجود کد
+        if not branch_code:
+            await callback.answer(
+                "⚠️ این واحد فاقد کد است و قابل انتخاب نیست.",
+                show_alert=True
+            )
+            return
+        
+        # نمایش اطلاعات واحد
         await callback.message.edit_text(
             format_unit_info(node),
             parse_mode="Markdown"
@@ -352,15 +371,19 @@ async def process_branch_callback(callback: CallbackQuery, state: FSMContext):
         if current_state == Form.lavayeh_branch_name:
             # ذخیره نام شعبه و کد شعبه
             branch_name = node.get("UnitName", "")
-            branch_code = node.get("Code", "")
+            branch_path = node.get("Path", "")
+            
             await state.update_data(
                 lavayeh_branch_name=branch_name,
-                lavayeh_branch_code=branch_code
+                lavayeh_branch_code=branch_code,
+                lavayeh_branch_path=branch_path
             )
             
             await callback.message.answer(
-                f"✅ شعبه «**{branch_name}**» انتخاب شد.\n\n"
-                "🏙 لطفاً **استان** مربوط به پرونده را انتخاب فرمایید:",
+                f"✅ **شعبه انتخاب شد:**\n\n"
+                f"📋 نام: **{branch_name}**\n"
+                f"🔢 کد: `{branch_code}`\n\n"
+                f"🏙 لطفاً **استان** مربوط به پرونده را انتخاب فرمایید:",
                 parse_mode="Markdown"
             )
             
@@ -371,6 +394,13 @@ async def process_branch_callback(callback: CallbackQuery, state: FSMContext):
                 reply_markup=create_province_kb()
             )
             await state.set_state(Form.lavayeh_province)
+    
+    elif action == "info":
+        # نمایش اطلاعات واحد بدون کد (غیرقابل انتخاب)
+        await callback.answer(
+            "⚠️ این واحد فاقد کد است و قابل انتخاب نیست.",
+            show_alert=True
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

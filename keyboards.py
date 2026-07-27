@@ -123,10 +123,10 @@ lavayeh_tracking_method_kb = ReplyKeyboardMarkup(
 )
 
 # کیبورد انتخاب نحوه ورود نام شعبه
+# گزینه ورود دستی حذف شد - فقط انتخاب از لیست
 lavayeh_branch_input_method_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📝 وارد کردن نام شعبه")],
-        [KeyboardButton(text="🔍 انتخاب از لیست شعب")],
+        [KeyboardButton(text="🔍 انتخاب شعبه از لیست")],
         [KeyboardButton(text="🔙 بازگشت")]
     ],
     resize_keyboard=True
