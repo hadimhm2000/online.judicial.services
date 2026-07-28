@@ -969,8 +969,25 @@ async def ealam_in_lavayeh_get_national_id(message: Message, state: FSMContext):
             await message.answer("آیا وکیل دیگری نیز در این پرونده وکالت دارد؟", reply_markup=ealam_more_lawyers_kb)
             await state.set_state(Form.ealam_vakalaht_more_lawyers)
         else:
-            await message.answer("🔢 لطفاً ردیف فرعی را دوباره وارد کنید:", reply_markup=back_only_kb)
-            await state.set_state(Form.lavayeh_row_number)
+            tracking_method = data.get("tracking_method", "case_number")
+            if tracking_method == "archive_number":
+                # این مسیر از طریق انتخاب شعبه از لیست به اینجا رسیده،
+                # نه از ردیف فرعی - پس باید به لیست شعب برگردیم
+                from branches import UNITS_DATA, create_branches_keyboard, ROOT_NODES
+                from keyboards import back_only_kb as _back_kb
+                await message.answer(
+                    "🏛 لطفاً شعبه را دوباره از لیست انتخاب کنید:",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                await message.answer(
+                    "📂 **قوه قضائیه - سطح اول**",
+                    reply_markup=create_branches_keyboard(ROOT_NODES, page=0, parent_id=None),
+                    parse_mode="Markdown"
+                )
+                await state.set_state(Form.lavayeh_branch_name)
+            else:
+                await message.answer("🔢 لطفاً ردیف فرعی را دوباره وارد کنید:", reply_markup=back_only_kb)
+                await state.set_state(Form.lavayeh_row_number)
         return
     nat_id = _to_en(message.text)
     if not re.match(r"^[0-9]{10}$", nat_id):

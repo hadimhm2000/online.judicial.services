@@ -398,18 +398,34 @@ async def process_branch_callback(callback: CallbackQuery, state: FSMContext):
             await callback.message.answer(
                 f"✅ **شعبه انتخاب شد:**\n\n"
                 f"📋 نام: **{branch_name}**\n"
-                f"🔢 کد: `{branch_code}`\n\n"
-                f"🏙 لطفاً **استان** مربوط به پرونده را انتخاب فرمایید:",
+                f"🔢 کد: `{branch_code}`",
                 parse_mode="Markdown"
             )
             
-            # ادامه به state بعدی
-            from keyboards import create_province_kb
-            await callback.message.answer(
-                "لطفاً استان را انتخاب کنید:",
-                reply_markup=create_province_kb()
-            )
-            await state.set_state(Form.lavayeh_province)
+            # نکته مهم: انتخاب شعبه از لیست فقط در مسیر «شماره بایگانی» اتفاق می‌افتد.
+            # در این مسیر، سایت سنا هیچ‌گاه فیلد استان را نمی‌خواهد (فقط شماره
+            # بایگانی + کد شعبه کافی است — نگاه کنید به lavayeh_scenario.py،
+            # بخش archive_number)، پس دیگر لازم نیست از کاربر استان پرسیده شود.
+            data = await state.get_data()
+            title = data.get("lavayeh_title", "")
+            
+            if title == "اعلام وکالت":
+                from keyboards import back_only_kb
+                await callback.message.answer(
+                    "👤 لطفاً **کد ملی وکیل** را ارسال فرمایید:",
+                    reply_markup=back_only_kb,
+                    parse_mode="Markdown"
+                )
+                await state.set_state(Form.ealam_vakalaht_national_id)
+            else:
+                from keyboards import create_person_type_kb
+                await state.update_data(lavayeh_persons=[], _current_person_index=0)
+                await callback.message.answer(
+                    "👥 لطفاً نوع شخصیت ارائه‌دهنده لایحه را انتخاب کنید:",
+                    reply_markup=create_person_type_kb(),
+                    parse_mode="Markdown"
+                )
+                await state.set_state(Form.lavayeh_person_type)
     
     elif action == "info":
         # نمایش اطلاعات واحد بدون کد (غیرقابل انتخاب)
