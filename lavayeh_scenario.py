@@ -190,14 +190,26 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                     await _click_add_person(sana_page, bot, user_id)
                     await resilient_sleep(sana_page, 3, bot, user_id)
 
-                    # کلیک روی رادیو باتن وکیل
+                    # کلیک روی رادیو باتن وکیل — با fallback
                     await sana_page.evaluate('''() => {
                         const rdb = document.querySelector('input[type="radio"][name="personType"][value="6"]#rdb6');
-                        if (rdb) rdb.click();
+                        if (rdb) {
+                            rdb.click();
+                        } else {
+                            const rdb2 = document.querySelector('input[type="radio"][value="6"]');
+                            if (rdb2) rdb2.click();
+                        }
                     }''')
-                    await resilient_sleep(sana_page, 2, bot, user_id)
+                    await resilient_sleep(sana_page, 3, bot, user_id)
+                    await wait_for_angular_idle(sana_page)
 
-                    await _fill_input(sana_page, "#txtRealIrNationalityCode1", person["national_id"], bot, user_id)
+                    # پر کردن کدملی وکیل با روش چندگانه
+                    filled = await _fill_national_id_field(sana_page, person["national_id"], bot, user_id)
+                    if not filled:
+                        logging.error(
+                            f"[LAVAYEH] _fill_national_id_field: "
+                            f"همه روش‌ها برای کدملی '{person['national_id']}' ناموفق بودند."
+                        )
                     await resilient_sleep(sana_page, 1, bot, user_id)
 
                     await _click_sana_query_with_retry(sana_page, "actions.callNationalityCode", bot, user_id)
@@ -538,14 +550,166 @@ async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
 
 
 async def _fill_input(page, selector: str, value: str, bot: Bot, user_id: int):
+    """پر کردن یک فیلد با سلکتور مشخص — سازگار با AngularJS"""
     try:
         elem = page.locator(selector).first
         await elem.click()
         await elem.fill("")
         await elem.fill(value)
+        # اطمینان از اطلاع AngularJS از تغییر مقدار
+        await page.evaluate("""(sel) => {
+            const el = document.querySelector(sel);
+            if (el) {
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+                try {
+                    const scope = angular.element(el).scope();
+                    if (scope) scope.$apply();
+                } catch(e) {}
+            }
+        }""", selector)
         await elem.blur()
     except Exception as e:
         logging.warning(f"[LAVAYEH] _fill_input({selector}) failed: {e}")
+
+
+async def _wait_for_any_selector(page, selectors: list, timeout_sec: int = 15) -> str:
+    """صبر می‌کند تا یکی از سلکتورهای داده‌شده روی صفحه ظاهر و قابل‌مشاهده شود"""
+    for _ in range(timeout_sec * 2):
+        found = await page.evaluate('''(sels) => {
+            for (const sel of sels) {
+                const el = document.querySelector(sel);
+                if (el && el.offsetParent !== null) return sel;
+            }
+            return null;
+        }''', selectors)
+        if found:
+            return found
+        await asyncio.sleep(0.5)
+    return None
+
+
+async def _fill_national_id_field(page, national_id: str, bot: Bot, user_id: int) -> bool:
+    """
+    پر کردن فیلد کدملی وکیل/شخص با چندین سلکتور و روش.
+    وقتی نوع شخص «وکیل» انتخاب می‌شود، فرم AngularJS فیلدهای جدیدی
+    نمایش می‌دهد و ممکن است آی‌دی فیلد کدملی متفاوت باشد.
+    """
+    candidate_selectors = [
+        "#txtNationalityCode",
+        "#txtRealIrNationalityCode1",
+        "#txtRealIrNationalityCode",
+        "input[name='RealIrNationalityCode']",
+        "input[name='NationalityCode']",
+        "input[ng-model*='NationalityCode']",
+    ]
+    found_selector = await _wait_for_any_selector(page, candidate_selectors, timeout_sec=15)
+
+    if not found_selector:
+        # هیچ‌کدام از سلکتورهای شناخته‌شده پیدا نشد — لاگ دیباگ
+        visible_ids = await page.evaluate("""() => {
+            return Array.from(document.querySelectorAll('input'))
+                .filter(i => i.offsetParent !== null)
+                .map(i => ({id: i.id, name: i.name, type: i.type}));
+        }""")
+        logging.warning(
+            f"[LAVAYEH] فیلد کدملی وکیل پیدا نشد. "
+            f"اینپوت‌های قابل‌مشاهده روی صفحه: {visible_ids}"
+        )
+        await bot.send_message(
+            ADMIN_ID,
+            f"⚠️ [LAVAYEH] فیلد کدملی وکیل برای کاربر {user_id} پیدا نشد.\n"
+            f"اینپوت‌های موجود: {str(visible_ids)[:500]}"
+        )
+        return False
+
+    logging.info(f"[LAVAYEH] فیلد کدملی پیدا شد: {found_selector}")
+
+    # ── روش ۱: Playwright fill ─────────────────────────────────────────
+    try:
+        elem = page.locator(found_selector).first
+        await elem.click()
+        await elem.fill("")
+        await elem.fill(national_id)
+        await elem.blur()
+        actual = await elem.input_value()
+        if actual == national_id:
+            logging.info(
+                f"[LAVAYEH] کدملی '{national_id}' با روش Playwright fill "
+                f"در {found_selector} وارد شد"
+            )
+            await _dispatch_angular_events(page, found_selector)
+            return True
+    except Exception as e:
+        logging.warning(f"[LAVAYEH] روش ۱ (Playwright fill) ناموفق: {e}")
+
+    # ── روش ۲: JavaScript مستقیم + Angular ngModel ─────────────────────
+    try:
+        success = await page.evaluate("""(args) => {
+            const { selector, value } = args;
+            const el = document.querySelector(selector);
+            if (!el) return false;
+            el.focus();
+            el.value = '';
+            el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+            try {
+                const ngEl = angular.element(el);
+                const ctrl = ngEl.controller('ngModel');
+                if (ctrl) {
+                    ctrl.$setViewValue(value);
+                    ctrl.$render();
+                }
+                const scope = ngEl.scope();
+                if (scope) scope.$apply();
+            } catch(e) {}
+            return el.value === value;
+        }""", {"selector": found_selector, "value": national_id})
+        if success:
+            logging.info(
+                f"[LAVAYEH] کدملی '{national_id}' با روش JS مستقیم وارد شد"
+            )
+            return True
+    except Exception as e:
+        logging.warning(f"[LAVAYEH] روش ۲ (JS مستقیم) ناموفق: {e}")
+
+    # ── روش ۳: تایپ حرف‌به‌حرف (شبه‌انسانی) ──────────────────────────
+    try:
+        elem = page.locator(found_selector).first
+        await elem.click()
+        await elem.fill("")
+        for char in national_id:
+            await elem.type(char, delay=100)
+        await elem.blur()
+        await _dispatch_angular_events(page, found_selector)
+        actual = await elem.input_value()
+        if actual == national_id:
+            logging.info(
+                f"[LAVAYEH] کدملی '{national_id}' با روش تایپ حرف‌به‌حرف وارد شد"
+            )
+            return True
+    except Exception as e:
+        logging.warning(f"[LAVAYEH] روش ۳ (تایپ حرف‌به‌حرف) ناموفق: {e}")
+
+    return False
+
+
+async def _dispatch_angular_events(page, selector: str):
+    """ارسال رویدادهای لازم برای به‌روزرسانی مدل AngularJS"""
+    await page.evaluate("""(sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+        try {
+            const scope = angular.element(el).scope();
+            if (scope) scope.$apply();
+        } catch(e) {}
+    }""", selector)
 
 
 async def _select_province(page, province: str, bot: Bot, user_id: int):
