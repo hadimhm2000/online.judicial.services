@@ -130,6 +130,12 @@ def create_branches_keyboard(
     
     buttons = []
     
+    # حداکثر طول قابل‌اطمینان برای متن دکمه‌های اینلاین تلگرام.
+    # برخی نام‌های واحدها تا ۱۳۰ کاراکتر می‌رسند و کلاینت تلگرام در این
+    # حالت به‌طور غیرقابل‌پیش‌بینی متن را برش می‌زند (حتی گاهی آیکون ابتدای
+    # متن را هم پنهان می‌کند)، بنابراین خودمان با کنترل کامل کوتاهش می‌کنیم.
+    MAX_LABEL_LEN = 60
+    
     # دکمه‌های شعب/واحدها
     for node in page_nodes:
         node_id = node.get("Id")
@@ -139,26 +145,36 @@ def create_branches_keyboard(
         can_select = node.get("HasSelectUnit", False)
         code = node.get("Code", "")
         
-        # اضافه کردن شماره واحد اگر موجود است
-        if unit_no:
-            display_name = f"{node_name} ({unit_no})"
-        else:
-            display_name = node_name
-        
-        # اضافه کردن آیکون بر اساس نوع واحد
+        # آیکون بر اساس نوع واحد
         if has_child:
-            display_name = f"📁 {display_name}"
+            icon = "📁"
         elif code:  # واحد نهایی با کد
-            display_name = f"✅ {display_name}"
+            icon = "✅"
         else:  # واحد نهایی بدون کد
-            display_name = f"⚪️ {display_name}"
+            icon = "⚪️"
+        
+        # پیشوند: آیکون + شماره واحد (این بخش‌ها مهم‌اند و هرگز نباید بریده شوند)
+        prefix = f"{icon} "
+        if unit_no:
+            prefix += f"({unit_no}) "
+        
+        # فقط قسمت توصیفیِ نام را در صورت طولانی‌بودن کوتاه می‌کنیم
+        budget = MAX_LABEL_LEN - len(prefix)
+        if budget > 1 and len(node_name) > budget:
+            display_name = prefix + node_name[: budget - 1].rstrip() + "…"
+        else:
+            display_name = prefix + node_name
         
         # استفاده از index به جای Id کامل (برای کوتاه‌تر کردن callback_data)
         idx = ID_TO_INDEX.get(node_id, 0)
         
         if has_child:
             # واحد دارای زیرمجموعه - قابل باز شدن
-            callback = f"br:open:{idx}:{page}"
+            # نکته مهم: صفحه‌ی لیست فرزندان همیشه باید از صفر شروع شود،
+            # نه صفحه‌ی فعلیِ لیستی که این دکمه در آن قرار دارد
+            # (باگ قبلی باعث می‌شد لیست فرزندانِ نودهایی که در صفحات
+            # بالاتر بودند، خالی به نظر برسد)
+            callback = f"br:open:{idx}:0"
         elif code:
             # واحد نهایی با کد - قابل انتخاب
             callback = f"br:sel:{idx}"
