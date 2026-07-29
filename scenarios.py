@@ -258,19 +258,53 @@ async def process_task(data, bot: Bot):
                             container.style.padding = '20px';
                             container.style.fontFamily = 'Tahoma, Arial, sans-serif';
                             container.style.backgroundColor = '#ffffff';
-                            const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
-                            const allElements = Array.from(document.querySelectorAll('*'));
-                            const clonedContainers = new Set();
-                            sections.forEach(secName => {
-                                const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
-                                if (titleElem) {
-                                    const box = titleElem.closest('table, fieldset, .box, .panel, .card');
+
+                            // ساختار واقعی صفحه RealPersonPrint.aspx:
+                            //   #tblHeader -> لوگو + عکس پرسنلی + عنوان فرم
+                            //   #tblBody   -> ۴ بخش اطلاعات (مشخصات شناسنامه ای/تماس/اقامتگاه/سایر)
+                            const header = document.getElementById('tblHeader');
+                            const body = document.getElementById('tblBody');
+
+                            if (header) container.appendChild(header.cloneNode(true));
+                            if (body) container.appendChild(body.cloneNode(true));
+
+                            if (!header || !body) {
+                                // fallback: اگر ساختار صفحه تغییر کرده بود، به روش قدیمی (متنی) برگرد
+                                const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
+                                const allElements = Array.from(document.querySelectorAll('*'));
+                                const clonedContainers = new Set();
+
+                                function findImgContainer(img) {
+                                    const preferred = img.closest('table, fieldset, .box, .panel, .card');
+                                    if (preferred) return preferred;
+                                    let el = img.parentElement;
+                                    for (let i = 0; i < 3 && el && el.parentElement; i++) {
+                                        el = el.parentElement;
+                                    }
+                                    return el || img.parentElement;
+                                }
+                                const photoImgs = Array.from(document.querySelectorAll('img'))
+                                    .filter(img => img.naturalWidth > 30 && img.naturalHeight > 30);
+                                photoImgs.forEach(img => {
+                                    const box = findImgContainer(img);
                                     if (box && !clonedContainers.has(box)) {
                                         clonedContainers.add(box);
                                         container.appendChild(box.cloneNode(true));
                                     }
-                                }
-                            });
+                                });
+
+                                sections.forEach(secName => {
+                                    const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
+                                    if (titleElem) {
+                                        const box = titleElem.closest('table, fieldset, .box, .panel, .card');
+                                        if (box && !clonedContainers.has(box)) {
+                                            clonedContainers.add(box);
+                                            container.appendChild(box.cloneNode(true));
+                                        }
+                                    }
+                                });
+                            }
+
                             document.body.innerHTML = container.innerHTML;
                             document.body.style.backgroundColor = '#ffffff';
                             document.body.style.padding = '20px';
@@ -333,19 +367,49 @@ async def process_task(data, bot: Bot):
                     container.style.padding = '20px';
                     container.style.fontFamily = 'Tahoma, Arial, sans-serif';
                     container.style.backgroundColor = '#ffffff';
-                    const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
-                    const allElements = Array.from(document.querySelectorAll('*'));
-                    const clonedContainers = new Set();
-                    sections.forEach(secName => {
-                        const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
-                        if (titleElem) {
-                            const box = titleElem.closest('table, fieldset, .box, .panel, .card');
+
+                    const header = document.getElementById('tblHeader');
+                    const body = document.getElementById('tblBody');
+
+                    if (header) container.appendChild(header.cloneNode(true));
+                    if (body) container.appendChild(body.cloneNode(true));
+
+                    if (!header || !body) {
+                        const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
+                        const allElements = Array.from(document.querySelectorAll('*'));
+                        const clonedContainers = new Set();
+
+                        function findImgContainer(img) {
+                            const preferred = img.closest('table, fieldset, .box, .panel, .card');
+                            if (preferred) return preferred;
+                            let el = img.parentElement;
+                            for (let i = 0; i < 3 && el && el.parentElement; i++) {
+                                el = el.parentElement;
+                            }
+                            return el || img.parentElement;
+                        }
+                        const photoImgs = Array.from(document.querySelectorAll('img'))
+                            .filter(img => img.naturalWidth > 30 && img.naturalHeight > 30);
+                        photoImgs.forEach(img => {
+                            const box = findImgContainer(img);
                             if (box && !clonedContainers.has(box)) {
                                 clonedContainers.add(box);
                                 container.appendChild(box.cloneNode(true));
                             }
-                        }
-                    });
+                        });
+
+                        sections.forEach(secName => {
+                            const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
+                            if (titleElem) {
+                                const box = titleElem.closest('table, fieldset, .box, .panel, .card');
+                                if (box && !clonedContainers.has(box)) {
+                                    clonedContainers.add(box);
+                                    container.appendChild(box.cloneNode(true));
+                                }
+                            }
+                        });
+                    }
+
                     document.body.innerHTML = container.innerHTML;
                     document.body.style.backgroundColor = '#ffffff';
                     document.body.style.padding = '20px';

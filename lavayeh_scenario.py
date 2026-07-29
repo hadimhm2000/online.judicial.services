@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import base64
+import html as html_lib
 
 from aiogram import Bot
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -36,6 +37,32 @@ AGENT_TYPE_VALUES = {
     "مدیرعامل":  "0091000010000008",
     "نماینده":   "0091000010000007",
 }
+
+
+def _text_to_editor_html(text: str) -> str:
+    """
+    متن خام دریافتی از کاربر (تلگرام) را به HTML تبدیل می‌کند طوری که
+    فاصله‌ها و اینتر (خط جدید)های موجود در متن، دقیقاً همانطور که کاربر
+    فرستاده حفظ شوند و در ادیتور سامانه (contenteditable) از بین نروند.
+    """
+    if not text:
+        return "<p><br></p>"
+
+    lines = text.split("\n")
+    parts = []
+    for line in lines:
+        # escape می‌کنیم تا کاراکترهای HTML (< > &) متن کاربر، ساختار صفحه را خراب نکنند
+        escaped = html_lib.escape(line, quote=False)
+
+        # حفظ فاصله‌های ابتدای خط و فاصله‌های متوالی (که مرورگر معمولاً collapse می‌کند)
+        if escaped.startswith(" "):
+            leading = len(escaped) - len(escaped.lstrip(" "))
+            escaped = ("&nbsp;" * leading) + escaped[leading:]
+        escaped = escaped.replace("  ", "&nbsp; ")
+
+        parts.append(f"<p>{escaped}</p>" if escaped else "<p><br></p>")
+
+    return "".join(parts)
 
 
 async def process_lavayeh_task(data: dict, bot: Bot):
@@ -270,15 +297,16 @@ async def process_lavayeh_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "متن", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
-            await sana_page.evaluate(f'''() => {{
+            lavayeh_text_html = _text_to_editor_html(lavayeh_text)
+            await sana_page.evaluate('''(html) => {
                 const editor = document.querySelector('[contenteditable="true"][ta-bind]');
-                if (editor) {{
+                if (editor) {
                     editor.focus();
-                    editor.innerHTML = `<p>{lavayeh_text.replace("`", "'")}</p>`;
-                    editor.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    editor.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
+                    editor.innerHTML = html;
+                    editor.dispatchEvent(new Event("input", { bubbles: true }));
+                    editor.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }''', lavayeh_text_html)
             await resilient_sleep(sana_page, 2, bot, user_id)
 
             await sana_page.evaluate('''() => {

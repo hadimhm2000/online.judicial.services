@@ -18,6 +18,23 @@
 """
 import asyncio
 import logging
+import html as html_lib
+
+
+def _text_to_editor_html(text: str) -> str:
+    """متن کاربر را با حفظ فاصله‌ها/اینترها به HTML امن برای ادیتور تبدیل می‌کند."""
+    if not text:
+        return "<p><br></p>"
+    lines = text.split("\n")
+    parts = []
+    for line in lines:
+        escaped = html_lib.escape(line, quote=False)
+        if escaped.startswith(" "):
+            leading = len(escaped) - len(escaped.lstrip(" "))
+            escaped = ("&nbsp;" * leading) + escaped[leading:]
+        escaped = escaped.replace("  ", "&nbsp; ")
+        parts.append(f"<p>{escaped}</p>" if escaped else "<p><br></p>")
+    return "".join(parts)
 import os
 
 from aiogram import Bot
@@ -609,16 +626,16 @@ async def _click_add_lawyer_save(page, bot: Bot, user_id: int):
 
 
 async def _fill_text_editor(page, text: str, bot: Bot, user_id: int):
-    safe_text = text.replace("`", "'").replace("\\", "\\\\")
-    await page.evaluate(f'''() => {{
+    text_html = _text_to_editor_html(text)
+    await page.evaluate('''(html) => {
         const editor = document.querySelector('[contenteditable="true"][ta-bind]');
-        if (editor) {{
+        if (editor) {
             editor.focus();
-            editor.innerHTML = `<p>{safe_text}</p>`;
-            editor.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            editor.dispatchEvent(new Event("change", {{ bubbles: true }}));
-        }}
-    }}''')
+            editor.innerHTML = html;
+            editor.dispatchEvent(new Event("input", { bubbles: true }));
+            editor.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+    }''', text_html)
     await asyncio.sleep(1)
 
     # اعمال H3

@@ -23,6 +23,7 @@
 import asyncio
 import logging
 import os
+import html as html_lib
 
 from aiogram import Bot
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -47,6 +48,22 @@ AGENT_TYPE_VALUES = {
     "مدیرعامل": "0091000010000008",
     "نماینده":  "0091000010000007",
 }
+
+
+def _text_to_editor_html(text: str) -> str:
+    """متن کاربر را با حفظ فاصله‌ها/اینترها به HTML امن برای ادیتور تبدیل می‌کند."""
+    if not text:
+        return "<p><br></p>"
+    lines = text.split("\n")
+    parts = []
+    for line in lines:
+        escaped = html_lib.escape(line, quote=False)
+        if escaped.startswith(" "):
+            leading = len(escaped) - len(escaped.lstrip(" "))
+            escaped = ("&nbsp;" * leading) + escaped[leading:]
+        escaped = escaped.replace("  ", "&nbsp; ")
+        parts.append(f"<p>{escaped}</p>" if escaped else "<p><br></p>")
+    return "".join(parts)
 
 
 async def process_ezhharnameh_task(data: dict, bot: Bot):
@@ -201,16 +218,16 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "متن", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
-            safe_text = ezhhar_text.replace("`", "'").replace("\\", "\\\\")
-            await sana_page.evaluate(f'''() => {{
+            ezhhar_text_html = _text_to_editor_html(ezhhar_text)
+            await sana_page.evaluate('''(html) => {
                 const editor = document.querySelector('[contenteditable="true"][ta-bind]');
-                if (editor) {{
+                if (editor) {
                     editor.focus();
-                    editor.innerHTML = `<p>{safe_text}</p>`;
-                    editor.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    editor.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
+                    editor.innerHTML = html;
+                    editor.dispatchEvent(new Event("input", { bubbles: true }));
+                    editor.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }''', ezhhar_text_html)
             await resilient_sleep(sana_page, 2, bot, user_id)
 
             # اعمال H3
