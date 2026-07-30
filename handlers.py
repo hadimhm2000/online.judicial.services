@@ -307,7 +307,7 @@ async def rules_accepted(message: types.Message, state: FSMContext):
 @router.message(Form.waiting_for_flow_type)
 async def process_flow_type(message: types.Message, state: FSMContext):
     if not message.text: return
-    if "تک‌درخواست" in message.text:
+    if "تک‌درخواست" in message.text or "تک درخواست" in message.text:
         await state.update_data(flow_type="single", cart=[])
         await message.answer("سپاسگزاریم.\nلطفاً نوع خدمت را انتخاب نمایید:", reply_markup=main_menu_kb)
         await state.set_state(Form.main_menu)

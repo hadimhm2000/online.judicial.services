@@ -7,7 +7,7 @@ accept_rules_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ قوا
 
 flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="1️⃣ ثبت تک‌درخواست (سریع)")],
+        [KeyboardButton(text="1️⃣ استعلام (تک درخواست)")],
         [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)")],
         [KeyboardButton(text="📝 ثبت لایحه")],
         [KeyboardButton(text="📋 ثبت اظهارنامه")],
@@ -440,7 +440,7 @@ ezhhar_edit_kb = ReplyKeyboardMarkup(
 bulk_choice_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)")],
-        [KeyboardButton(text="1️⃣ ثبت تکی یکی‌یکی (روال عادی)")],
+        [KeyboardButton(text="1️⃣ ثبت تکی (روال عادی)")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ],
     resize_keyboard=True
