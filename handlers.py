@@ -26,6 +26,7 @@ from keyboards import (
 from lavayeh_handlers import lavayeh_router
 from stamp_calc_handlers import stamp_calc_router
 from ezhharnameh_handlers import ezhharnameh_router
+from file_tools_handlers import file_tools_router, file_tools_entry
 
 router = Router()
 
@@ -33,6 +34,7 @@ router = Router()
 router.include_router(lavayeh_router)
 router.include_router(stamp_calc_router)
 router.include_router(ezhharnameh_router)
+router.include_router(file_tools_router)
 
 
 # ── نگهبان: مسدودسازی کاربرانی که فاکتور لایحه کنسل‌شده را پرداخت نکرده‌اند ──
@@ -324,6 +326,8 @@ async def process_flow_type(message: types.Message, state: FSMContext):
     elif "محاسبه تمبر" in message.text:
         from stamp_calc_handlers import stamp_calc_entry
         await stamp_calc_entry(message, state)
+    elif "ابزار فایل" in message.text:
+        await file_tools_entry(message, state)
 
 async def _show_cart(message: types.Message, state: FSMContext):
     data = await state.get_data()

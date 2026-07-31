@@ -103,7 +103,7 @@ async def ezhhar_bulk_choice_handler(message: Message, state: FSMContext):
     await state.set_state(Form.bulk_input_method)
 
 
-@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "1️⃣ ثبت تکی یکی‌یکی (روال عادی)")
+@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "1️⃣ ثبت تکی (روال عادی)")
 async def ezhhar_single_choice_handler(message: Message, state: FSMContext):
     await message.answer(
         "📋 **ثبت اظهارنامه (روال تکی)**\n\n"
@@ -263,7 +263,7 @@ async def ezhhar_declarant_national_id_handler(message: Message, state: FSMConte
     await message.answer(
         f"✅ **{person_type}** با کدملی `{nat_id}` ثبت شد.\n\n"
         f"آیا اظهارکننده دیگری نیز وجود دارد؟",
-        reply_markup=create_ezhhar_declarant_person_type_kb(exclude=used_types),
+        reply_markup=create_ezhhar_declarant_person_type_kb(),
         parse_mode="Markdown"
     )
     await state.set_state(Form.ezhhar_declarant_person_type)
@@ -422,7 +422,7 @@ async def ezhhar_addressee_national_id_handler(message: Message, state: FSMConte
         f"✅ **مخاطب ({person_type})** با کدملی `{nat_id}` ثبت شد.\n\n"
         f"آیا مخاطب دیگری نیز وجود دارد؟\n\n"
         f"📌 اگر کدملی مخاطب بعدی را ندارید، می‌توانید «استعلام شماره تماس» را انتخاب کنید.",
-        reply_markup=create_ezhhar_addressee_person_type_kb(exclude=used_types),
+        reply_markup=create_ezhhar_addressee_person_type_kb(show_finish=True),
         parse_mode="Markdown"
     )
     await state.set_state(Form.ezhhar_addressee_person_type)

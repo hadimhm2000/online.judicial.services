@@ -12,7 +12,21 @@ flow_type_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="📝 ثبت لایحه")],
         [KeyboardButton(text="📋 ثبت اظهارنامه")],
         [KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
+        [KeyboardButton(text="🛠 ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)")],
     ], resize_keyboard=True)
+
+# =========================================================
+# کیبوردهای بخش ابزار فایل
+# =========================================================
+file_tools_menu_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🖼 کاهش حجم عکس")],
+        [KeyboardButton(text="📄➡️🖼 تبدیل PDF به عکس")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+    ], resize_keyboard=True)
+
+file_tools_back_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="🔙 بازگشت")]], resize_keyboard=True)
 
 main_menu_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -350,7 +364,7 @@ def create_ezhhar_declarant_person_type_kb(exclude: list = None):
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 
-def create_ezhhar_addressee_person_type_kb(exclude: list = None):
+def create_ezhhar_addressee_person_type_kb(exclude: list = None, show_finish: bool = None):
     """کیبورد نوع شخص مخاطب اظهارنامه"""
     exclude = exclude or []
     available = [p for p in ["شخص حقیقی", "شخص حقوقی"] if p not in exclude]
@@ -362,7 +376,8 @@ def create_ezhhar_addressee_person_type_kb(exclude: list = None):
         keyboard.append(row)
     # گزینه استعلام شماره تماس
     keyboard.append([KeyboardButton(text="📞 استعلام شماره تماس")])
-    if exclude:
+    show_finish = bool(exclude) if show_finish is None else show_finish
+    if show_finish:
         keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 

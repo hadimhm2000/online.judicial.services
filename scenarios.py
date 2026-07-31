@@ -247,7 +247,7 @@ async def process_task(data, bot: Bot):
                             return
                         await check_and_handle_expiry(sana_page, bot, user_id)
                         try:
-                            await sana_page.wait_for_selector('text="مشخصات شناسنامه ای"', timeout=15000)
+                            await sana_page.wait_for_selector('text=شناسنامه', timeout=15000)
                             await asyncio.sleep(2)
                         except Exception:
                             await asyncio.sleep(5)
@@ -293,8 +293,9 @@ async def process_task(data, bot: Bot):
                                     }
                                 });
 
+                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
                                 sections.forEach(secName => {
-                                    const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
+                                    const titleElem = allElements.find(el => el.innerText && norm(el.innerText) === norm(secName));
                                     if (titleElem) {
                                         const box = titleElem.closest('table, fieldset, .box, .panel, .card');
                                         if (box && !clonedContainers.has(box)) {
@@ -356,7 +357,7 @@ async def process_task(data, bot: Bot):
                     return
 
                 try:
-                    await sana_page.wait_for_selector('text="مشخصات شناسنامه ای"', timeout=15000)
+                    await sana_page.wait_for_selector('text=شناسنامه', timeout=15000)
                     await asyncio.sleep(2)
                 except Exception:
                     await asyncio.sleep(5)
@@ -398,8 +399,9 @@ async def process_task(data, bot: Bot):
                             }
                         });
 
+                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
                         sections.forEach(secName => {
-                            const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
+                            const titleElem = allElements.find(el => el.innerText && norm(el.innerText) === norm(secName));
                             if (titleElem) {
                                 const box = titleElem.closest('table, fieldset, .box, .panel, .card');
                                 if (box && !clonedContainers.has(box)) {

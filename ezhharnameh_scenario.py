@@ -171,6 +171,24 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                     await _fill_legal_person(sana_page, person, bot, user_id)
                     await resilient_sleep(sana_page, 10, bot, user_id)
 
+            # ── ۴.۵. مرحله «مخاطب» ────────────────────────────────────
+            await _click_step_label(sana_page, "مخاطب", bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+            for person in addressees:
+                ptype = person.get("person_type", "شخص حقیقی")
+                if ptype == "شخص حقیقی":
+                    await _click_add_btn(sana_page, bot, user_id)
+                    await resilient_sleep(sana_page, 3, bot, user_id)
+                    await _fill_real_person(sana_page, person["national_id"], bot, user_id)
+                    await resilient_sleep(sana_page, 10, bot, user_id)
+
+                elif ptype == "شخص حقوقی":
+                    await _click_add_btn(sana_page, bot, user_id)
+                    await resilient_sleep(sana_page, 3, bot, user_id)
+                    await _fill_legal_person(sana_page, person, bot, user_id)
+                    await resilient_sleep(sana_page, 10, bot, user_id)
+
             # ── ۵. مرحله «وکیل» (اگر وکیل داشتیم) ─────────────────────
             if has_lawyer:
                 await _click_step_label(sana_page, "وكيل", bot, user_id)

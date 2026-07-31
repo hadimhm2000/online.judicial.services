@@ -19,7 +19,7 @@ from sheets import log_event
 from ocr import verify_payment_receipt
 from states import Form
 from keyboards import (
-    main_menu_kb, restart_kb, back_only_kb,
+    flow_type_kb, main_menu_kb, restart_kb, back_only_kb,
     lavayeh_title_kb, LAVAYEH_TITLES,
     lavayeh_tracking_method_kb,
     lavayeh_branch_input_method_kb,
@@ -295,7 +295,7 @@ async def lavayeh_entry(message: Message, state: FSMContext):
 @lavayeh_router.message(Form.bulk_mode_select)
 async def bulk_mode_select_handler(message: Message, state: FSMContext):
     text = message.text or ""
-    if text == "1️⃣ ثبت تکی یکی‌یکی (روال عادی)":
+    if text == "1️⃣ ثبت تکی (روال عادی)":
         await message.answer(
             "📝 **ثبت لایحه (روال تکی)**\n\nلطفاً عنوان لایحه خود را انتخاب فرمایید:",
             reply_markup=lavayeh_title_kb,
@@ -316,7 +316,8 @@ async def bulk_mode_select_handler(message: Message, state: FSMContext):
         return
     elif text == "🔙 بازگشت به منوی اصلی":
         await state.clear()
-        await message.answer("بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
+        await message.answer("بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
+        await state.set_state(Form.waiting_for_flow_type)
         return
     else:
         await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_choice_kb)
@@ -451,9 +452,10 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
             f"کد رهگیری: `{tracking_code}`\n"
             f"هم‌اکنون درخواست‌های شما در صف پس‌زمینه قرار گرفت.\n"
             f"شما می‌توانید با خیال راحت به منوی اصلی بازگردید یا سایر امور خود را انجام دهید.",
-            reply_markup=main_menu_kb,
+            reply_markup=flow_type_kb,
             parse_mode="Markdown"
         )
+        await state.set_state(Form.waiting_for_flow_type)
         # شروع پردازش پس‌زمینه
         asyncio.create_task(run_bulk_processing_task(message.bot, message.from_user.id, tracking_code))
         return
@@ -463,7 +465,8 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
         return
     elif text == "❌ انصراف و بازگشت" or text == "🔙 بازگشت به منوی اصلی":
         await state.clear()
-        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
+        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
+        await state.set_state(Form.waiting_for_flow_type)
         return
     else:
         await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_confirm_kb)
@@ -478,7 +481,8 @@ async def lavayeh_get_title(message: Message, state: FSMContext):
 
     if text == "🔙 بازگشت به منوی اصلی":
         await state.clear()
-        await message.answer("بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
+        await message.answer("بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
+        await state.set_state(Form.waiting_for_flow_type)
         return
 
     if text not in LAVAYEH_TITLES:
