@@ -461,11 +461,10 @@ bulk_choice_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# کیبورد روش ورود برای ثبت دسته‌جمعی - فقط اکسل
 bulk_input_method_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📊 دانلود نمونه اکسل و آپلود فایل")],
-        [KeyboardButton(text="✍️ ارسال متنی لیست موارد")],
-        [KeyboardButton(text="📸 ارسال تصویر لیست موارد")],
         [KeyboardButton(text="🔙 بازگشت")]
     ],
     resize_keyboard=True
