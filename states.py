@@ -112,7 +112,12 @@ class Form(StatesGroup):
     bulk_mode_select = State()      # انتخاب روش ثبت (تکی یا دسته‌جمعی سریع)
     bulk_input_method = State()     # انتخاب نوع فایل (اکسل، تصویر، متن)
     bulk_file_upload = State()      # دریافت فایل اکسل / تصویر / متن
+    bulk_attachment_row = State()   # انتخاب پیوست برای هر ردیف اکسل
+    bulk_attachment_title = State() # انتخاب عنوان پیوست برای ردیف جاری
+    bulk_attachment_images = State() # دریافت تصاویر پیوست
+    bulk_attachment_more = State()  # آیا پیوست بیشتری برای این ردیف هست؟
     bulk_confirm = State()          # تایید نهایی و صدور کد رهگیری دسته‌جمعی
+    bulk_admin_pending = State()    # در انتظار تایید مدیر
 
     # =========================================================
     # State های بخش ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)

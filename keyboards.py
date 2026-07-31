@@ -472,9 +472,39 @@ bulk_input_method_kb = ReplyKeyboardMarkup(
 
 bulk_confirm_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="✅ تایید و شروع پردازش در پس‌زمینه")],
+        [KeyboardButton(text="✅ تایید و ارسال برای مدیر")],
         [KeyboardButton(text="🔄 ارسال مجدد فایل / اصلاح")],
         [KeyboardButton(text="❌ انصراف و بازگشت")]
+    ],
+    resize_keyboard=True
+)
+
+# کیبورد برای انتخاب پیوست هر ردیف در ثبت دسته‌جمعی
+bulk_attachment_row_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📎 افزودن پیوست برای این ردیف")],
+        [KeyboardButton(text="⏭ رد شدن از این ردیف (بدون پیوست)")],
+        [KeyboardButton(text="✅ اتمام پیوست‌گذاری و ادامه")],
+        [KeyboardButton(text="❌ انصراف")]
+    ],
+    resize_keyboard=True
+)
+
+# کیبورد برای ادامه پیوست‌گذاری ردیف
+bulk_attachment_more_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ افزودن پیوست دیگر برای این ردیف")],
+        [KeyboardButton(text="✅ اتمام پیوست این ردیف و رفتن به ردیف بعدی")],
+        [KeyboardButton(text="❌ انصراف")]
+    ],
+    resize_keyboard=True
+)
+
+# کیبورد تایید مدیر برای ثبت دسته‌جمعی
+admin_bulk_confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ تایید و شروع پردازش")],
+        [KeyboardButton(text="❌ رد درخواست")]
     ],
     resize_keyboard=True
 )

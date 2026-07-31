@@ -331,17 +331,32 @@ async def bulk_input_method_handler(message: Message, state: FSMContext):
 
     if text == "📊 دانلود نمونه اکسل و آپلود فایل":
         from aiogram.types import FSInputFile
-        sample_path = "/tmp/sample_lavayeh_bulk.xlsx"
-        generate_sample_excel("lavayeh", sample_path)
-        file_send = FSInputFile(sample_path, filename="نمونه_ثبت_دسته_جمعی_لوایح.xlsx")
-        await message.answer_document(
-            document=file_send,
-            caption=(
+        
+        # انتخاب نام و مسیر فایل بر اساس نوع سرویس
+        if service_type == "ezhharnameh":
+            sample_path = "/tmp/sample_ezhharnameh_bulk.xlsx"
+            generate_sample_excel("ezhharnameh", sample_path)
+            file_send = FSInputFile(sample_path, filename="نمونه_ثبت_دسته_جمعی_اظهارنامه.xlsx")
+            caption_text = (
+                "📎 **فایل اکسل نمونه ثبت دسته‌جمعی اظهارنامه**\n\n"
+                "📌 لطفاً فایل اکسل فوق را دانلود کرده و ستون‌ها را تکمیل فرمایید.\n"
+                "💡 **نگران نباشید!** حتی اگر بعضی موارد (مثل فرمت کد ملی یا شناسه ملی) را هم درست یا کامل انتخاب نکنید، سیستم با پردازش هوشمند و جایگزینی مقادیر پیش‌فرض، مانع از اختلال یا توقف در روند ثبت خواهد شد.\n\n"
+                "✅ اکنون فایل اکسل تکمیل‌شده خود را ارسال (آپلود) فرمایید:"
+            )
+        else:
+            sample_path = "/tmp/sample_lavayeh_bulk.xlsx"
+            generate_sample_excel("lavayeh", sample_path)
+            file_send = FSInputFile(sample_path, filename="نمونه_ثبت_دسته_جمعی_لوایح.xlsx")
+            caption_text = (
                 "📎 **فایل اکسل نمونه ثبت دسته‌جمعی لوایح**\n\n"
                 "📌 لطفاً فایل اکسل فوق را دانلود کرده و ستون‌ها را تکمیل فرمایید.\n"
                 "💡 **نگران نباشید!** حتی اگر بعضی موارد (مثل فرمت کد ملی یا شناسه شعبه) را هم درست یا کامل انتخاب نکنید، سیستم با پردازش هوشمند و جایگزینی مقادیر پیش‌فرض، مانع از اختلال یا توقف در روند ثبت خواهد شد.\n\n"
                 "✅ اکنون فایل اکسل تکمیل‌شده خود را ارسال (آپلود) فرمایید:"
-            ),
+            )
+        
+        await message.answer_document(
+            document=file_send,
+            caption=caption_text,
             reply_markup=back_only_kb,
             parse_mode="Markdown"
         )
@@ -379,6 +394,7 @@ async def bulk_input_method_handler(message: Message, state: FSMContext):
 
 @lavayeh_router.message(Form.bulk_file_upload)
 async def bulk_file_upload_handler(message: Message, state: FSMContext):
+    from keyboards import bulk_attachment_row_kb
     data = await state.get_data()
     service_type = data.get("service_type", "lavayeh")
     items = []
@@ -415,17 +431,314 @@ async def bulk_file_upload_handler(message: Message, state: FSMContext):
         await message.answer("⚠️ لطفاً فایل اکسل، تصویر یا متن معتبر ارسال فرمایید.")
         return
 
-    tracking_code = generate_tracking_code("LYH")
-    await state.update_data(bulk_items=items, bulk_tracking_code=tracking_code)
-
-    preview_text = (
-        f"✅ **خلاصه موارد دریافت‌شده برای ثبت دسته‌جمعی**\n\n"
-        f"🔖 کد رهگیری اختصاصی: `{tracking_code}`\n"
-        f"📦 تعداد کل موارد: **{len(items)} لایحه**\n"
-        f"🛡 وضعیت بررسی نقص: **تایید شده (دارای حفاظت خودکار در برابر خطا)**\n\n"
-        f"آیا مایلید پردازش خودکار در پس‌زمینه آغاز شود؟\n"
-        f"💡 در طول پردازش، ربات برای شما یا سایر کاربران هیچ‌گونه تاخیر یا اختلالی نخواهد داشت."
+    tracking_code = generate_tracking_code("LYH" if service_type == "lavayeh" else "EZH")
+    
+    # ذخیره آیتم‌ها با لیست خالی پیوست برای هر ردیف
+    for item in items:
+        item["attachments"] = []
+    
+    await state.update_data(
+        bulk_items=items, 
+        bulk_tracking_code=tracking_code,
+        bulk_current_row_index=0,  # شروع از ردیف اول برای پیوست‌گذاری
+        bulk_current_row_attachments=[]
     )
+
+    service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+    preview_text = (
+        f"✅ **خلاصه موارد دریافت‌شده برای ثبت دسته‌جمعی {service_fa}**\n\n"
+        f"🔖 کد رهگیری اختصاصی: `{tracking_code}`\n"
+        f"📦 تعداد کل موارد: **{len(items)} {service_fa}**\n"
+        f"🛡 وضعیت بررسی نقص: **تایید شده**\n\n"
+        f"📎 **مرحله پیوست‌گذاری:**\n"
+        f"اکنون می‌توانید برای هر ردیف از فایل اکسل، پیوست‌های مربوطه را ارسال نمایید.\n\n"
+        f"🔢 **ردیف ۱ از {len(items)}:**\n"
+    )
+    
+    # نمایش اطلاعات ردیف اول
+    if items:
+        first_item = items[0]
+        if service_type == "lavayeh":
+            preview_text += f"📋 شماره پرونده: `{first_item.get('tracking_code', '-')}`\n"
+            preview_text += f"📝 عنوان: {first_item.get('title', '-')}\n"
+        else:
+            preview_text += f"👤 اظهارکننده: `{first_item.get('declarant_id', '-')}`\n"
+            preview_text += f"📝 عنوان: {first_item.get('subject', '-')}\n"
+    
+    preview_text += "\nآیا می‌خواهید پیوستی برای این ردیف ارسال کنید؟"
+    
+    await message.answer(preview_text, reply_markup=bulk_attachment_row_kb, parse_mode="Markdown")
+    await state.set_state(Form.bulk_attachment_row)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# هندلرهای پیوست‌گذاری برای ثبت دسته‌جمعی
+# ══════════════════════════════════════════════════════════════════════════════
+
+@lavayeh_router.message(Form.bulk_attachment_row)
+async def bulk_attachment_row_handler(message: Message, state: FSMContext):
+    from keyboards import bulk_attachment_row_kb, bulk_attachment_more_kb
+    text = message.text or ""
+    data = await state.get_data()
+    items = data.get("bulk_items", [])
+    current_index = data.get("bulk_current_row_index", 0)
+    service_type = data.get("service_type", "lavayeh")
+    
+    if text == "📎 افزودن پیوست برای این ردیف":
+        # رفتن به مرحله انتخاب عنوان پیوست
+        await message.answer(
+            f"📄 **عنوان پیوست برای ردیف {current_index + 1}:**\n\n"
+            "لطفاً عنوان پیوست را وارد کنید (مثلاً «کارت ملی»، «وکالتنامه»، «مستندات»):\n\n"
+            "یا بنویسید: **مستندات** (برای عنوان پیش‌فرض)",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.bulk_attachment_title)
+        return
+    
+    elif text == "⏭ رد شدن از این ردیف (بدون پیوست)":
+        # ذخیره پیوست‌های ردیف فعلی (که خالی است) و رفتن به ردیف بعدی
+        current_attachments = data.get("bulk_current_row_attachments", [])
+        if current_index < len(items):
+            items[current_index]["attachments"] = current_attachments
+        
+        next_index = current_index + 1
+        if next_index >= len(items):
+            # همه ردیف‌ها بررسی شدند، رفتن به مرحله تایید
+            await state.update_data(bulk_items=items)
+            await _go_to_bulk_confirm(message, state)
+            return
+        
+        # رفتن به ردیف بعدی
+        await state.update_data(
+            bulk_items=items,
+            bulk_current_row_index=next_index,
+            bulk_current_row_attachments=[]
+        )
+        
+        # نمایش اطلاعات ردیف بعدی
+        next_item = items[next_index]
+        service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+        row_text = f"🔢 **ردیف {next_index + 1} از {len(items)}:**\n"
+        
+        if service_type == "lavayeh":
+            row_text += f"📋 شماره پرونده: `{next_item.get('tracking_code', '-')}`\n"
+            row_text += f"📝 عنوان: {next_item.get('title', '-')}\n"
+        else:
+            row_text += f"👤 اظهارکننده: `{next_item.get('declarant_id', '-')}`\n"
+            row_text += f"📝 عنوان: {next_item.get('subject', '-')}\n"
+        
+        row_text += "\nآیا می‌خواهید پیوستی برای این ردیف ارسال کنید؟"
+        
+        await message.answer(row_text, reply_markup=bulk_attachment_row_kb, parse_mode="Markdown")
+        return
+    
+    elif text == "✅ اتمام پیوست‌گذاری و ادامه":
+        # ذخیره پیوست‌های ردیف فعلی و رفتن به تایید نهایی
+        current_attachments = data.get("bulk_current_row_attachments", [])
+        if current_index < len(items):
+            items[current_index]["attachments"] = current_attachments
+        await state.update_data(bulk_items=items)
+        await _go_to_bulk_confirm(message, state)
+        return
+    
+    elif text == "❌ انصراف":
+        await state.clear()
+        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
+        await state.set_state(Form.waiting_for_flow_type)
+        return
+    
+    else:
+        await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_attachment_row_kb)
+
+
+@lavayeh_router.message(Form.bulk_attachment_title)
+async def bulk_attachment_title_handler(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    
+    if text == "🔙 بازگشت":
+        from keyboards import bulk_attachment_row_kb
+        await message.answer("انتخاب نوع عملیات:", reply_markup=bulk_attachment_row_kb)
+        await state.set_state(Form.bulk_attachment_row)
+        return
+    
+    if not text:
+        await message.answer("⚠️ لطفاً عنوان پیوست را وارد کنید:")
+        return
+    
+    title = "مستندات" if text.lower() in ["مستندات", "مدارک", "پیوست"] else text
+    await state.update_data(
+        bulk_current_attachment_title=title,
+        bulk_current_attachment_images=[]
+    )
+    
+    await message.answer(
+        f"✅ عنوان «**{title}**» ثبت شد.\n\n"
+        "🖼 لطفاً تصاویر مربوط به این پیوست را به صورت **عکس (Photo)** ارسال فرمایید.\n"
+        "⚠️ فقط فرمت **JPG / JPEG** قابل قبول است.\n\n"
+        "پس از ارسال همه تصاویر، دکمه **«✅ اتمام ارسال تصاویر»** را بفشارید.",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.bulk_attachment_images)
+
+
+@lavayeh_router.message(Form.bulk_attachment_images, F.photo)
+async def bulk_attachment_images_handler(message: Message, state: FSMContext):
+    data = await state.get_data()
+    images = data.get("bulk_current_attachment_images", [])
+    file_id = message.photo[-1].file_id
+    images.append(file_id)
+    await state.update_data(bulk_current_attachment_images=images)
+    
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    manage_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+        ],
+        resize_keyboard=True
+    )
+    
+    await message.reply(
+        f"✅ تصویر شماره **{len(images)}** دریافت شد.\n"
+        f"مجموع تصاویر این پیوست: **{len(images)} تصویر**\n\n"
+        "می‌توانید تصاویر بیشتری ارسال کنید یا «اتمام» را بزنید.",
+        reply_markup=manage_kb,
+        parse_mode="Markdown"
+    )
+
+
+@lavayeh_router.message(Form.bulk_attachment_images, F.text == "✅ اتمام ارسال تصاویر")
+async def bulk_attachment_images_done_handler(message: Message, state: FSMContext):
+    from keyboards import bulk_attachment_more_kb
+    data = await state.get_data()
+    images = data.get("bulk_current_attachment_images", [])
+    title = data.get("bulk_current_attachment_title", "مستندات")
+    current_attachments = data.get("bulk_current_row_attachments", [])
+    
+    if not images:
+        await message.answer("⚠️ هیچ تصویری ارسال نشده است. لطفاً حداقل یک تصویر ارسال کنید یا بازگشت بزنید.")
+        return
+    
+    # افزودن این پیوست به لیست پیوست‌های ردیف
+    current_attachments.append({
+        "title": title,
+        "images": images
+    })
+    
+    await state.update_data(
+        bulk_current_row_attachments=current_attachments,
+        bulk_current_attachment_images=[],
+        bulk_current_attachment_title=""
+    )
+    
+    await message.answer(
+        f"✅ پیوست «{title}» با {len(images)} تصویر ثبت شد.\n\n"
+        "آیا پیوست دیگری برای این ردیف دارید؟",
+        reply_markup=bulk_attachment_more_kb,
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.bulk_attachment_more)
+
+
+@lavayeh_router.message(Form.bulk_attachment_images)
+async def bulk_attachment_images_text_handler(message: Message, state: FSMContext):
+    await message.answer(
+        "⚠️ لطفاً تصاویر را به صورت **عکس (Photo)** ارسال کنید.\n"
+        "یا «اتمام ارسال تصاویر» را بزنید.",
+        parse_mode="Markdown"
+    )
+
+
+@lavayeh_router.message(Form.bulk_attachment_more)
+async def bulk_attachment_more_handler(message: Message, state: FSMContext):
+    from keyboards import bulk_attachment_row_kb
+    text = message.text or ""
+    data = await state.get_data()
+    items = data.get("bulk_items", [])
+    current_index = data.get("bulk_current_row_index", 0)
+    service_type = data.get("service_type", "lavayeh")
+    
+    if text == "➕ افزودن پیوست دیگر برای این ردیف":
+        await message.answer(
+            f"📄 **عنوان پیوست جدید برای ردیف {current_index + 1}:**\n\n"
+            "لطفاً عنوان پیوست را وارد کنید:",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.bulk_attachment_title)
+        return
+    
+    elif text == "✅ اتمام پیوست این ردیف و رفتن به ردیف بعدی":
+        # ذخیره پیوست‌های ردیف فعلی
+        current_attachments = data.get("bulk_current_row_attachments", [])
+        if current_index < len(items):
+            items[current_index]["attachments"] = current_attachments
+        
+        next_index = current_index + 1
+        if next_index >= len(items):
+            # همه ردیف‌ها بررسی شدند
+            await state.update_data(bulk_items=items)
+            await _go_to_bulk_confirm(message, state)
+            return
+        
+        # رفتن به ردیف بعدی
+        await state.update_data(
+            bulk_items=items,
+            bulk_current_row_index=next_index,
+            bulk_current_row_attachments=[]
+        )
+        
+        next_item = items[next_index]
+        service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+        row_text = f"🔢 **ردیف {next_index + 1} از {len(items)}:**\n"
+        
+        if service_type == "lavayeh":
+            row_text += f"📋 شماره پرونده: `{next_item.get('tracking_code', '-')}`\n"
+            row_text += f"📝 عنوان: {next_item.get('title', '-')}\n"
+        else:
+            row_text += f"👤 اظهارکننده: `{next_item.get('declarant_id', '-')}`\n"
+            row_text += f"📝 عنوان: {next_item.get('subject', '-')}\n"
+        
+        row_text += "\nآیا می‌خواهید پیوستی برای این ردیف ارسال کنید؟"
+        
+        await message.answer(row_text, reply_markup=bulk_attachment_row_kb, parse_mode="Markdown")
+        await state.set_state(Form.bulk_attachment_row)
+        return
+    
+    elif text == "❌ انصراف":
+        await state.clear()
+        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
+        await state.set_state(Form.waiting_for_flow_type)
+        return
+    
+    else:
+        from keyboards import bulk_attachment_more_kb
+        await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_attachment_more_kb)
+
+
+async def _go_to_bulk_confirm(message: Message, state: FSMContext):
+    """رفتن به مرحله تایید نهایی ثبت دسته‌جمعی"""
+    data = await state.get_data()
+    items = data.get("bulk_items", [])
+    tracking_code = data.get("bulk_tracking_code", "")
+    service_type = data.get("service_type", "lavayeh")
+    service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+    
+    # شمارش پیوست‌ها
+    total_attachments = sum(len(item.get("attachments", [])) for item in items)
+    
+    preview_text = (
+        f"✅ **خلاصه نهایی ثبت دسته‌جمعی {service_fa}**\n\n"
+        f"🔖 کد رهگیری: `{tracking_code}`\n"
+        f"📦 تعداد موارد: **{len(items)} {service_fa}**\n"
+        f"📎 تعداد پیوست‌ها: **{total_attachments} پیوست**\n\n"
+        f"⚠️ **توجه مهم:**\n"
+        f"پس از تایید، فایل اکسل و پیوست‌ها برای **تایید مدیر** ارسال می‌شود.\n"
+        f"پس از تایید مدیر، پردازش خودکار آغاز خواهد شد.\n\n"
+        f"آیا تایید می‌کنید؟"
+    )
+    
     await message.answer(preview_text, reply_markup=bulk_confirm_kb, parse_mode="Markdown")
     await state.set_state(Form.bulk_confirm)
 
@@ -438,26 +751,63 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
     items = data.get("bulk_items", [])
     service_type = data.get("service_type", "lavayeh")
 
-    if text == "✅ تایید و شروع پردازش در پس‌زمینه":
+    if text == "✅ تایید و ارسال برای مدیر":
+        service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+        total_attachments = sum(len(item.get("attachments", [])) for item in items)
+        
+        # ذخیره در BULK_TASKS
         BULK_TASKS[tracking_code] = {
             "user_id": message.from_user.id,
+            "username": message.from_user.username or message.from_user.first_name,
             "service_type": service_type,
             "items": items,
-            "status": "processing",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "status": "pending_admin",  # در انتظار تایید مدیر
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+        
+        # ارسال پیام به مدیر برای تایید
+        admin_message = (
+            f"📋 **درخواست جدید ثبت دسته‌جمعی {service_fa}**\n\n"
+            f"🔖 کد رهگیری: `{tracking_code}`\n"
+            f"👤 کاربر: @{message.from_user.username or message.from_user.first_name} (ID: {message.from_user.id})\n"
+            f"📦 تعداد موارد: **{len(items)} {service_fa}**\n"
+            f"📎 تعداد پیوست‌ها: **{total_attachments} پیوست**\n"
+            f"⏰ زمان درخواست: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"📄 **جزئیات ردیف‌ها:**\n"
+        )
+        
+        # نمایش جزئیات چند ردیف اول
+        for i, item in enumerate(items[:5], 1):
+            if service_type == "lavayeh":
+                admin_message += f"• ردیف {i}: پرونده `{item.get('tracking_code', '-')}` - {item.get('title', '-')}\n"
+            else:
+                admin_message += f"• ردیف {i}: اظهارکننده `{item.get('declarant_id', '-')}` - {item.get('subject', '-')}\n"
+        
+        if len(items) > 5:
+            admin_message += f"... و {len(items) - 5} ردیف دیگر\n"
+        
+        admin_message += (
+            f"\n⚠️ برای تایید یا رد این درخواست، لطفاً دستورات زیر را ارسال کنید:\n"
+            f"✅ تایید: `/approve_bulk {tracking_code}`\n"
+            f"❌ رد: `/reject_bulk {tracking_code}`"
+        )
+        
+        try:
+            await message.bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Error sending bulk request to admin: {e}")
+        
         await state.clear()
         await message.answer(
-            f"🎯 **پردازش دسته‌جمعی ثبت شد!**\n\n"
-            f"کد رهگیری: `{tracking_code}`\n"
-            f"هم‌اکنون درخواست‌های شما در صف پس‌زمینه قرار گرفت.\n"
-            f"شما می‌توانید با خیال راحت به منوی اصلی بازگردید یا سایر امور خود را انجام دهید.",
+            f"✅ **درخواست شما برای تایید مدیر ارسال شد!**\n\n"
+            f"🔖 کد رهگیری: `{tracking_code}`\n"
+            f"📦 تعداد موارد: **{len(items)} {service_fa}**\n\n"
+            f"⏳ پس از تایید مدیر، پردازش خودکار آغاز خواهد شد و نتیجه برای شما ارسال می‌گردد.\n\n"
+            f"شما می‌توانید به منوی اصلی بازگردید و سایر امور خود را انجام دهید.",
             reply_markup=flow_type_kb,
             parse_mode="Markdown"
         )
         await state.set_state(Form.waiting_for_flow_type)
-        # شروع پردازش پس‌زمینه
-        asyncio.create_task(run_bulk_processing_task(message.bot, message.from_user.id, tracking_code))
         return
     elif text == "🔄 ارسال مجدد فایل / اصلاح":
         await message.answer("لطفاً روش ارسال اطلاعات را مجدداً انتخاب کنید:", reply_markup=bulk_input_method_kb)

@@ -285,6 +285,119 @@ async def admin_reject_stamp(callback: CallbackQuery, bot: Bot):
 async def process_payment_receipt_text_only(message: types.Message):
     await message.answer("⚠️ لطفاً تصویر فیش واریزی خود را به صورت **عکس (Photo)** ارسال فرمایید:")
 
+
+# ================= هندلرهای تایید/رد ثبت دسته‌جمعی توسط مدیر =================
+@router.message(F.from_user.id == ADMIN_ID, F.text.startswith("/approve_bulk"))
+async def admin_approve_bulk(message: types.Message, bot: Bot):
+    """تایید درخواست ثبت دسته‌جمعی توسط مدیر"""
+    from bulk_submissions import BULK_TASKS, run_bulk_processing_task
+    import asyncio
+    
+    try:
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.answer("⚠️ فرمت صحیح: `/approve_bulk #CODE-123456`", parse_mode="Markdown")
+            return
+        
+        tracking_code = parts[1]
+        
+        if tracking_code not in BULK_TASKS:
+            await message.answer(f"⚠️ کد رهگیری `{tracking_code}` یافت نشد.", parse_mode="Markdown")
+            return
+        
+        task_data = BULK_TASKS[tracking_code]
+        if task_data.get("status") != "pending_admin":
+            await message.answer(f"⚠️ این درخواست قبلاً پردازش شده است. وضعیت: {task_data.get('status')}")
+            return
+        
+        # تغییر وضعیت به در حال پردازش
+        task_data["status"] = "processing"
+        user_id = task_data.get("user_id")
+        service_type = task_data.get("service_type", "lavayeh")
+        service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+        items = task_data.get("items", [])
+        
+        # ارسال پیام به کاربر
+        try:
+            await bot.send_message(
+                user_id,
+                f"✅ **درخواست ثبت دسته‌جمعی شما تایید شد!**\n\n"
+                f"🔖 کد رهگیری: `{tracking_code}`\n"
+                f"📦 تعداد موارد: **{len(items)} {service_fa}**\n\n"
+                f"⏳ پردازش خودکار در پس‌زمینه آغاز شد. گزارش پیشرفت به صورت خودکار ارسال می‌شود.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Error notifying user about bulk approval: {e}")
+        
+        await message.answer(
+            f"✅ **درخواست `{tracking_code}` تایید شد.**\n"
+            f"پردازش پس‌زمینه آغاز شد.",
+            parse_mode="Markdown"
+        )
+        
+        # شروع پردازش پس‌زمینه
+        asyncio.create_task(run_bulk_processing_task(bot, user_id, tracking_code))
+        
+    except Exception as e:
+        logging.error(f"[ADMIN_APPROVE_BULK] خطا: {e}")
+        await message.answer(f"⚠️ خطا در تایید درخواست: {e}")
+
+
+@router.message(F.from_user.id == ADMIN_ID, F.text.startswith("/reject_bulk"))
+async def admin_reject_bulk(message: types.Message, bot: Bot):
+    """رد درخواست ثبت دسته‌جمعی توسط مدیر"""
+    from bulk_submissions import BULK_TASKS
+    
+    try:
+        parts = message.text.split(maxsplit=2)
+        if len(parts) < 2:
+            await message.answer("⚠️ فرمت صحیح: `/reject_bulk #CODE-123456 [دلیل رد]`", parse_mode="Markdown")
+            return
+        
+        tracking_code = parts[1]
+        reason = parts[2] if len(parts) > 2 else "دلیل مشخص نشده"
+        
+        if tracking_code not in BULK_TASKS:
+            await message.answer(f"⚠️ کد رهگیری `{tracking_code}` یافت نشد.", parse_mode="Markdown")
+            return
+        
+        task_data = BULK_TASKS[tracking_code]
+        if task_data.get("status") != "pending_admin":
+            await message.answer(f"⚠️ این درخواست قبلاً پردازش شده است. وضعیت: {task_data.get('status')}")
+            return
+        
+        # تغییر وضعیت به رد شده
+        task_data["status"] = "rejected"
+        task_data["reject_reason"] = reason
+        user_id = task_data.get("user_id")
+        service_type = task_data.get("service_type", "lavayeh")
+        service_fa = "لایحه" if service_type == "lavayeh" else "اظهارنامه"
+        
+        # ارسال پیام به کاربر
+        try:
+            await bot.send_message(
+                user_id,
+                f"❌ **درخواست ثبت دسته‌جمعی شما رد شد.**\n\n"
+                f"🔖 کد رهگیری: `{tracking_code}`\n"
+                f"📝 دلیل: {reason}\n\n"
+                f"لطفاً اطلاعات را اصلاح کرده و مجدداً ارسال نمایید.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Error notifying user about bulk rejection: {e}")
+        
+        await message.answer(
+            f"❌ **درخواست `{tracking_code}` رد شد.**\n"
+            f"دلیل: {reason}",
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logging.error(f"[ADMIN_REJECT_BULK] خطا: {e}")
+        await message.answer(f"⚠️ خطا در رد درخواست: {e}")
+
+
 # ================= بخش مکالمات تلگرام =================
 @router.message(StateFilter("*"), F.from_user.id == ADMIN_ID, F.text == "✅ ورودم تکمیل شد")
 async def confirm_login_from_admin_global(message: types.Message, state: FSMContext):
