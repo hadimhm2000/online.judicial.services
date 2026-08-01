@@ -140,14 +140,14 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                 }''')
                 await resilient_sleep(sana_page, 2, bot, user_id)
                 
+                # وارد کردن کد ۵ رقمی واحد قضایی (بر اساس شعبه انتخابی)
+                if branch_code:
+                    await _fill_input(sana_page, "#txtCourtCode", branch_code, bot, user_id)
+                    await resilient_sleep(sana_page, 2, bot, user_id)
+                
                 # وارد کردن شماره بایگانی
                 await _fill_input(sana_page, "#txtCaseArchiveNo", archive_number, bot, user_id)
                 await resilient_sleep(sana_page, 1, bot, user_id)
-                
-                # وارد کردن کد شعبه
-                if branch_code:
-                    await _fill_input(sana_page, "#txtCaseHearingUnitCode", branch_code, bot, user_id)
-                    await resilient_sleep(sana_page, 2, bot, user_id)
                 
                 # کلیک روی دکمه صحت‌سنجی
                 await _click_validate_with_retry_archive(sana_page, bot, user_id)

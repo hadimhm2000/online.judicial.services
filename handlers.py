@@ -475,6 +475,11 @@ async def _show_cart(message: types.Message, state: FSMContext):
 async def process_main_menu(message: types.Message, state: FSMContext):
     if not message.text: return
     
+    if "🔙 بازگشت به منوی اصلی" in message.text:
+        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=flow_type_kb, parse_mode="Markdown")
+        await state.set_state(Form.waiting_for_flow_type)
+        return
+
     if "➕ ثبت استعلام جدید" in message.text:
         await message.answer("لطفاً نوع خدمت جدید را انتخاب نمایید:", reply_markup=main_menu_kb)
         return

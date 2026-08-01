@@ -90,13 +90,13 @@ async def ezhharnameh_entry(message: Message, state: FSMContext):
     await state.set_state(Form.ezhhar_declarant_person_type)
 
 
-@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)")
+@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - فایل اکسل)")
 async def ezhhar_bulk_choice_handler(message: Message, state: FSMContext):
     await message.answer(
         "⚡️ **ثبت دسته‌جمعی سریع اظهارنامه**\n\n"
-        "در این روش می‌توانید اطلاعات بیش از ۵ اظهارنامه را به صورت **فایل اکسل**، **تصویر لیست** یا **متن ساده** ارسال فرمایید.\n"
+        "در این روش می‌توانید اطلاعات بیش از ۵ اظهارنامه را با **فایل اکسل** ارسال فرمایید.\n"
         "✅ سیستم به صورت خودکار حتی در صورت بروز خطا یا نقص در برخی ردیف‌ها، ثبت را متوقف نکرده و با انعطاف‌پذیری کامل پردازش را ادامه می‌دهد.\n\n"
-        "لطفاً روش ارسال اطلاعات را انتخاب نمایید:",
+        "لطفاً فایل اکسل نمونه را دریافت و تکمیل نمایید:",
         reply_markup=bulk_input_method_kb,
         parse_mode="Markdown"
     )

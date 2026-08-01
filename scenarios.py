@@ -268,6 +268,55 @@ async def process_task(data, bot: Bot):
                             if (header) container.appendChild(header.cloneNode(true));
                             if (body) container.appendChild(body.cloneNode(true));
 
+                            // حذف لوگو و عنوان از هدر — فقط عکس پرسنلی باقی بماند
+                            (function cleanHeader(root) {
+                                const headerEl = root.querySelector('#tblHeader');
+                                if (!headerEl) return;
+                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
+
+                                // حذف عنوان «فرم اطلاعات ثبت نام الکترونیک»
+                                Array.from(headerEl.querySelectorAll('*')).forEach(el => {
+                                    if (el.childElementCount === 0 && norm(el.textContent).includes("فرم اطلاعات ثبت نام الکترونیک")) {
+                                        const box = el.closest('tr, td, div') || el;
+                                        box.remove();
+                                    }
+                                });
+
+                                // حذف لوگو (نگه داشتن فقط عکس پرسنلی — که همیشه اولین تصویر داخل هدر است)
+                                Array.from(headerEl.querySelectorAll('img')).forEach((img, idx) => {
+                                    if (idx > 0) {
+                                        const cell = img.closest('td, div') || img;
+                                        cell.remove();
+                                    }
+                                });
+                            })(container);
+
+                            // حذف بخش «نکات امنیتی» و هر چیز بعد از آن (فقط کارت مشخصات باید چاپ شود)
+                            (function removeSecurityNotes(root) {
+                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
+                                const all = Array.from(root.querySelectorAll('*'));
+                                const target = all.find(el =>
+                                    el.childElementCount === 0 &&
+                                    (norm(el.textContent).startsWith("نکات امنیتی") || norm(el.textContent).startsWith("نكات امنيتي"))
+                                );
+                                if (!target) return;
+                                let block = target.closest('tr, .panel, .box, .card, fieldset') || target;
+                                let sibling = block;
+                                while (sibling) {
+                                    const next = sibling.nextElementSibling;
+                                    sibling.remove();
+                                    sibling = next;
+                                }
+                                // حذف مستقل خط «چاپ شده توسط...» در صورتی که هم‌سطح بلاک نکات امنیتی نبود
+                                const footerElems = Array.from(root.querySelectorAll('*')).filter(el =>
+                                    el.childElementCount === 0 && norm(el.textContent).includes("چاپ شده توسط")
+                                );
+                                footerElems.forEach(el => {
+                                    const fb = el.closest('tr, .panel, .box, .card, fieldset') || el;
+                                    fb.remove();
+                                });
+                            })(container);
+
                             if (!header || !body) {
                                 // fallback: اگر ساختار صفحه تغییر کرده بود، به روش قدیمی (متنی) برگرد
                                 const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
@@ -311,7 +360,21 @@ async def process_task(data, bot: Bot):
                             document.body.style.padding = '20px';
                         }''')
 
-                        await asyncio.sleep(2)
+                        await sana_page.evaluate('''() => {
+                            return new Promise((resolve) => {
+                                const imgs = Array.from(document.querySelectorAll('img'));
+                                const pending = imgs.filter(img => !img.complete);
+                                if (pending.length === 0) return resolve();
+                                let doneCount = 0;
+                                const checkDone = () => { doneCount++; if (doneCount >= pending.length) resolve(); };
+                                pending.forEach(img => {
+                                    img.addEventListener('load', checkDone);
+                                    img.addEventListener('error', checkDone);
+                                });
+                                setTimeout(resolve, 5000);
+                            });
+                        }''')
+                        await asyncio.sleep(1)
                         pdf_path = f"report_phone_{phone_number}_{idx}.pdf"
                         await sana_page.pdf(path=pdf_path, format="A4")
 
@@ -375,6 +438,55 @@ async def process_task(data, bot: Bot):
                     if (header) container.appendChild(header.cloneNode(true));
                     if (body) container.appendChild(body.cloneNode(true));
 
+                    // حذف لوگو و عنوان از هدر — فقط عکس پرسنلی باقی بماند
+                    (function cleanHeader(root) {
+                        const headerEl = root.querySelector('#tblHeader');
+                        if (!headerEl) return;
+                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
+
+                        // حذف عنوان «فرم اطلاعات ثبت نام الکترونیک»
+                        Array.from(headerEl.querySelectorAll('*')).forEach(el => {
+                            if (el.childElementCount === 0 && norm(el.textContent).includes("فرم اطلاعات ثبت نام الکترونیک")) {
+                                const box = el.closest('tr, td, div') || el;
+                                box.remove();
+                            }
+                        });
+
+                        // حذف لوگو (نگه داشتن فقط عکس پرسنلی — که همیشه اولین تصویر داخل هدر است)
+                        Array.from(headerEl.querySelectorAll('img')).forEach((img, idx) => {
+                            if (idx > 0) {
+                                const cell = img.closest('td, div') || img;
+                                cell.remove();
+                            }
+                        });
+                    })(container);
+
+                    // حذف بخش «نکات امنیتی» و هر چیز بعد از آن (فقط کارت مشخصات باید چاپ شود)
+                    (function removeSecurityNotes(root) {
+                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
+                        const all = Array.from(root.querySelectorAll('*'));
+                        const target = all.find(el =>
+                            el.childElementCount === 0 &&
+                            (norm(el.textContent).startsWith("نکات امنیتی") || norm(el.textContent).startsWith("نكات امنيتي"))
+                        );
+                        if (!target) return;
+                        let block = target.closest('tr, .panel, .box, .card, fieldset') || target;
+                        let sibling = block;
+                        while (sibling) {
+                            const next = sibling.nextElementSibling;
+                            sibling.remove();
+                            sibling = next;
+                        }
+                        // حذف مستقل خط «چاپ شده توسط...» در صورتی که هم‌سطح بلاک نکات امنیتی نبود
+                        const footerElems = Array.from(root.querySelectorAll('*')).filter(el =>
+                            el.childElementCount === 0 && norm(el.textContent).includes("چاپ شده توسط")
+                        );
+                        footerElems.forEach(el => {
+                            const fb = el.closest('tr, .panel, .box, .card, fieldset') || el;
+                            fb.remove();
+                        });
+                    })(container);
+
                     if (!header || !body) {
                         const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
                         const allElements = Array.from(document.querySelectorAll('*'));
@@ -417,7 +529,21 @@ async def process_task(data, bot: Bot):
                     document.body.style.padding = '20px';
                 }''')
 
-                await asyncio.sleep(2)
+                await sana_page.evaluate('''() => {
+                    return new Promise((resolve) => {
+                        const imgs = Array.from(document.querySelectorAll('img'));
+                        const pending = imgs.filter(img => !img.complete);
+                        if (pending.length === 0) return resolve();
+                        let doneCount = 0;
+                        const checkDone = () => { doneCount++; if (doneCount >= pending.length) resolve(); };
+                        pending.forEach(img => {
+                            img.addEventListener('load', checkDone);
+                            img.addEventListener('error', checkDone);
+                        });
+                        setTimeout(resolve, 5000);
+                    });
+                }''')
+                await asyncio.sleep(1)
                 pdf_path = f"report_national_{national_id}.pdf"
                 await sana_page.pdf(path=pdf_path, format="A4")
 

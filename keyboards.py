@@ -32,7 +32,8 @@ main_menu_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1️⃣ استعلام لوایح، اظهارنامه، دادخواست و ...")],
         [KeyboardButton(text="2️⃣ استعلام براساس شماره تماس")],
-        [KeyboardButton(text="3️⃣ استعلام براساس کدملی")]
+        [KeyboardButton(text="3️⃣ استعلام براساس کدملی")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ], resize_keyboard=True)
 
 doc_category_kb = ReplyKeyboardMarkup(
@@ -454,7 +455,7 @@ ezhhar_edit_kb = ReplyKeyboardMarkup(
 
 bulk_choice_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)")],
+        [KeyboardButton(text="⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - فایل اکسل)")],
         [KeyboardButton(text="1️⃣ ثبت تکی (روال عادی)")],
         [KeyboardButton(text="🔙 بازگشت به منوی اصلی")]
     ],

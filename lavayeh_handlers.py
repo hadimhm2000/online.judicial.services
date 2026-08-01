@@ -303,12 +303,12 @@ async def bulk_mode_select_handler(message: Message, state: FSMContext):
         )
         await state.set_state(Form.lavayeh_title)
         return
-    elif text == "⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - اکسل/متن/عکس)":
+    elif text == "⚡️ ثبت دسته‌جمعی سریع (بدون معطلی - فایل اکسل)":
         await message.answer(
             "⚡️ **ثبت دسته‌جمعی سریع لوایح**\n\n"
-            "در این روش می‌توانید اطلاعات بیش از ۵ لایحه را به صورت **فایل اکسل**، **تصویر لیست** یا **متن ساده** ارسال فرمایید.\n"
+            "در این روش می‌توانید اطلاعات بیش از ۵ لایحه را با **فایل اکسل** ارسال فرمایید.\n"
             "✅ سیستم به صورت خودکار حتی در صورت بروز خطا در برخی ردیف‌ها، ثبت را متوقف نکرده و با انعطاف‌پذیری کامل پردازش را ادامه می‌دهد.\n\n"
-            "لطفاً روش ارسال اطلاعات را انتخاب نمایید:",
+            "لطفاً فایل اکسل نمونه را دریافت و تکمیل نمایید:",
             reply_markup=bulk_input_method_kb,
             parse_mode="Markdown"
         )
@@ -362,25 +362,6 @@ async def bulk_input_method_handler(message: Message, state: FSMContext):
         )
         await state.set_state(Form.bulk_file_upload)
         return
-    elif text == "✍️ ارسال متنی لیست موارد":
-        await message.answer(
-            "✍️ **ارسال متنی لیست موارد**\n\n"
-            "هر لایحه یا شماره پرونده و شرح مختصر را در یک خط جداگانه بنویسید و ارسال کنید:\n\n"
-            "مثال:\n"
-            "پرونده ۱۴۰۳۰۱۹۲۰۰۰۱۲۳۴۵۶۷ - لایحه دفاعیه - آقای محمدی\n"
-            "پرونده ۱۴۰۳۰۱۹۲۰۰۰۱۲۳۴۵۶۸ - اعلام وکالت - شعبه ۲",
-            reply_markup=back_only_kb
-        )
-        await state.set_state(Form.bulk_file_upload)
-        return
-    elif text == "📸 ارسال تصویر لیست موارد":
-        await message.answer(
-            "📸 **ارسال تصویر لیست موارد**\n\n"
-            "لطفاً تصویر یا عکس خوانا از لیست لوایح/پرونده‌های خود را ارسال فرمایید تا سیستم با OCR آن‌ها را پردازش نماید:",
-            reply_markup=back_only_kb
-        )
-        await state.set_state(Form.bulk_file_upload)
-        return
     elif text == "🔙 بازگشت":
         await message.answer(
             "آیا قصد ثبت تکی دارید یا دسته‌جمعی؟",
@@ -420,15 +401,8 @@ async def bulk_file_upload_handler(message: Message, state: FSMContext):
             await message.answer("⚠️ فایلی که ارسال کردید خالی بود یا قابل خواندن نبود. لطفاً مجدداً تلاش کنید.")
             return
 
-    # ۲. بررسی تصویر
-    elif message.photo:
-        items = parse_text_or_image_input("پرونده استخراج‌شده از تصویر (پردازش خودکار)", service_type)
-
-    # ۳. بررسی متن
-    elif message.text:
-        items = parse_text_or_image_input(message.text, service_type)
     else:
-        await message.answer("⚠️ لطفاً فایل اکسل، تصویر یا متن معتبر ارسال فرمایید.")
+        await message.answer("⚠️ لطفاً فقط فایل اکسل (.xlsx) معتبر ارسال فرمایید.")
         return
 
     tracking_code = generate_tracking_code("LYH" if service_type == "lavayeh" else "EZH")

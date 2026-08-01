@@ -202,38 +202,94 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                     await _fill_lawyer_person(sana_page, person["national_id"], bot, user_id)
                     await resilient_sleep(sana_page, 10, bot, user_id)
 
-            # ── ۶. مرحله «موضوع اظهارنامه» (اگر حقوقی داشتیم) ─────────
-            # در این مرحله نماینده شرکت حقوقی ثبت می‌شود
-            if has_legal_declarant:
-                await _click_step_label(sana_page, "موضوع اظهارنامه", bot, user_id)
-                await resilient_sleep(sana_page, 4, bot, user_id)
+            # ── ۶. مرحله «موضوع اظهارنامه» ──────────────────────────────
+            # این مرحله همیشه باید طی شود (چه اظهارکننده حقیقی باشد چه حقوقی)
+            await _click_step_label(sana_page, "موضوع اظهارنامه", bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
 
-                legal_persons = [p for p in declarants if p.get("person_type") == "شخص حقوقی"]
-                for person in legal_persons:
-                    await _click_add_btn(sana_page, bot, user_id)
-                    await resilient_sleep(sana_page, 3, bot, user_id)
+            # کلیک «افزودن»
+            await _click_add_btn(sana_page, bot, user_id)
+            await resilient_sleep(sana_page, 3, bot, user_id)
 
-                    # انتخاب «سایر» از dropdown موضوع
-                    await sana_page.evaluate('''() => {
-                        const btn = document.querySelector('.ui-select-toggle');
-                        if (btn) btn.click();
-                    }''')
-                    await asyncio.sleep(10)
-                    # انتخاب اولین گزینه
-                    await sana_page.evaluate('''() => {
-                        const items = Array.from(document.querySelectorAll(
-                            '.ui-select-choices-row-inner, .ui-select-choices div, .ui-select-choices li'
-                        ));
-                        const visible = items.filter(el => {
-                            const r = el.getBoundingClientRect();
-                            return r.width > 0 && r.height > 0;
-                        });
-                        if (visible.length > 0) visible[0].click();
-                    }''')
-                    await asyncio.sleep(3)
+            # باز کردن dropdown «موضوع» و جستجوی «سایر»
+            search_input = sana_page.locator('.ui-select-search').first
+            opened = False
+            for open_attempt in range(4):
+                await sana_page.evaluate('''() => {
+                    const btn = document.querySelector('.ui-select-toggle');
+                    if (btn) btn.click();
+                }''')
+                try:
+                    await search_input.wait_for(state="visible", timeout=4000)
+                    opened = True
+                    break
+                except PlaywrightTimeoutError:
+                    logging.warning(f"[EZHHAR] dropdown موضوع باز نشد (تلاش {open_attempt + 1})")
+                    await asyncio.sleep(1.5)
 
-            # ── ۷. مرحله «متن» ───────────────────────────────────────────
-            await _click_step_label(sana_page, "متن", bot, user_id)
+            if opened:
+                await search_input.fill("")
+                await search_input.type("سایر", delay=150)
+                await asyncio.sleep(3)
+
+                subject_clicked = await sana_page.evaluate('''() => {
+                    // اولویت با آیتم دقیق typeahead که شامل «سایر موضوعات اظهارنامه» است
+                    const highlighted = Array.from(document.querySelectorAll('[ng-bind-html*="typeaheadHighlight"]'));
+                    const visibleHighlighted = highlighted.filter(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    });
+                    if (visibleHighlighted.length > 0) {
+                        let target = visibleHighlighted[0];
+                        // کلیک روی والد قابل‌کلیک (ردیف) در صورت وجود، وگرنه خود المان
+                        const row = target.closest('a, .ui-select-choices-row, li') || target;
+                        row.click();
+                        target.click();
+                        return true;
+                    }
+                    const choices = Array.from(document.querySelectorAll('.ui-select-choices-row, .ui-select-choices div[ng-repeat]'));
+                    const visible = choices.filter(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    });
+                    if (visible.length > 0) { visible[0].click(); return true; }
+                    const lis = Array.from(document.querySelectorAll('.ui-select-choices li'));
+                    const visLis = lis.filter(el => {
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    });
+                    if (visLis.length > 0) { visLis[0].click(); return true; }
+                    return false;
+                }''')
+                await asyncio.sleep(3)
+
+                if not subject_clicked:
+                    logging.warning("[EZHHAR] گزینه اول dropdown موضوع پیدا/کلیک نشد — تلاش مجدد")
+                    # تلاش دوم: کلیک با locator روی آیتم typeahead
+                    try:
+                        option_locator = sana_page.locator('[ng-bind-html*="typeaheadHighlight"]').first
+                        await option_locator.wait_for(state="visible", timeout=3000)
+                        await option_locator.click()
+                        await asyncio.sleep(3)
+                    except PlaywrightTimeoutError:
+                        logging.warning("[EZHHAR] تلاش دوم انتخاب موضوع نیز ناموفق بود")
+            else:
+                logging.warning("[EZHHAR] dropdown موضوع باز نشد — ادامه بدون انتخاب موضوع")
+
+            # اگر کاربر عنوانی متفاوت از پیش‌فرض انتخاب کرده باشد، در فیلد توضیحات درج می‌شود
+            if subject and subject != "سایر":
+                await sana_page.evaluate('''(desc) => {
+                    const inp = document.querySelector('input[name="txtDescription"]');
+                    if (inp) {
+                        inp.value = desc;
+                        inp.dispatchEvent(new Event("input", { bubbles: true }));
+                        inp.dispatchEvent(new Event("change", { bubbles: true }));
+                    }
+                }''', subject)
+                await asyncio.sleep(1)
+
+            # ── ۷. مرحله «شرح» ───────────────────────────────────────────
+            await _click_step_label(sana_page, "شرح", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
             ezhhar_text_html = _text_to_editor_html(ezhhar_text)
@@ -774,6 +830,16 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
                 }}
             }}''')
             await asyncio.sleep(1)
+        else:
+            await page.evaluate('''() => {
+                const inp = document.querySelector('#txtNo');
+                if (inp) {
+                    inp.value = "0";
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                    inp.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }''')
+            await asyncio.sleep(1)
 
         if lawyer_amount_value > 0:
             await page.evaluate(f'''() => {{
@@ -816,6 +882,17 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             }
         }''')
         await asyncio.sleep(3)
+
+        # پر کردن txtNo با صفر (فیلد الزامی برای ادامه روند)
+        await page.evaluate('''() => {
+            const inp = document.querySelector('#txtNo');
+            if (inp) {
+                inp.value = "0";
+                inp.dispatchEvent(new Event("input", { bubbles: true }));
+                inp.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        }''')
+        await asyncio.sleep(1)
 
         escaped = title.replace("`", "'").replace("\\", "")
         await page.evaluate(f'''() => {{
