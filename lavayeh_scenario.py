@@ -373,7 +373,20 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                         note=f"آپلود پیوست‌ها ناموفق (کد لایحه: {lavayeh_bill_no})"
                     )
 
-                await _click_goto_main(sana_page, bot, user_id)
+                # ── اطمینان از بسته بودن popup و آماده بودن صفحه ──
+                await _close_success_popup(sana_page)
+                await _close_error_popup(sana_page)
+                await asyncio.sleep(1)
+                await wait_for_angular_idle(sana_page)
+                await asyncio.sleep(1)
+
+                logging.info(f"[LAVAYEH] پیوست‌ها تمام شد، بازگشت به فهرست... (user={user_id})")
+                goto_ok = await _click_goto_main(sana_page, bot, user_id)
+                if not goto_ok:
+                    logging.warning(f"[LAVAYEH] بازگشت به فهرست بعد از منضمات ناموفق (user={user_id})")
+                    # تلاش آخر: ریلود صفحه و رفتن به صفحه اصلی
+                    await sana_page.reload()
+                    await asyncio.sleep(5)
                 await resilient_sleep(sana_page, 4, bot, user_id)
 
             await _click_step_box(sana_page, "آماده سازي جهت محاسبه هزينه و ارسال", bot, user_id)
@@ -931,14 +944,86 @@ async def _click_save_temp_with_retry(page, bot: Bot, user_id: int, max_retries:
         await asyncio.sleep(5)
 
 
-async def _click_goto_main(page, bot: Bot, user_id: int):
-    clicked = await page.evaluate('''() => {
-        const btn = document.querySelector('#gotoMainPage');
-        if (btn && !btn.disabled) { btn.click(); return true; }
-        return false;
-    }''')
-    if not clicked:
-        await soft_click_if_exists(page, "بازگشت به فهرست")
+async def _click_goto_main(page, bot: Bot, user_id: int, max_retries: int = 5):
+    """
+    کلیک روی دکمه «بازگشت به فهرست» (#gotoMainPage) با مکانیزم retry.
+    قبل از هر تلاش popup‌ها بسته شده و منتظر Angular idle می‌ماند.
+    """
+    for attempt in range(max_retries):
+        # ── بستن هر popup باز (success یا error) ──
+        await _close_success_popup(page)
+        await _close_error_popup(page)
+        await asyncio.sleep(0.5)
+
+        # ── صبر برای Angular idle ──
+        await wait_for_angular_idle(page)
+        await asyncio.sleep(1)
+
+        # ── روش ۱: کلیک مستقیم روی #gotoMainPage ──
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('#gotoMainPage');
+            if (btn && !btn.disabled) {
+                btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                btn.click();
+                return true;
+            }
+            return false;
+        }''')
+        if clicked:
+            logging.info(f"[LAVAYEH] _click_goto_main: کلیک روی #gotoMainPage (تلاش {attempt+1})")
+            await asyncio.sleep(2)
+            return True
+
+        # ── روش ۲: اجرای actions.gotoMainStep() از AngularJS scope ──
+        clicked_via_scope = await page.evaluate('''() => {
+            const btn = document.querySelector('#gotoMainPage') ||
+                        document.querySelector('[ng-click*="gotoMainStep"]');
+            if (btn) {
+                try {
+                    const scope = angular.element(btn).scope();
+                    if (scope && scope.actions && scope.actions.gotoMainStep) {
+                        scope.actions.gotoMainStep();
+                        scope.$apply();
+                        return true;
+                    }
+                } catch(e) {}
+                btn.click();
+                return true;
+            }
+            return false;
+        }''')
+        if clicked_via_scope:
+            logging.info(f"[LAVAYEH] _click_goto_main: کلیک از طریق scope (تلاش {attempt+1})")
+            await asyncio.sleep(2)
+            return True
+
+        # ── روش ۳: جستجوی متنی ──
+        clicked_text = await page.evaluate('''() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const target = buttons.find(b =>
+                b.innerText && b.innerText.includes("بازگشت به فهرست")
+            );
+            if (target && !target.disabled) {
+                target.scrollIntoView({behavior: 'smooth', block: 'center'});
+                target.click();
+                return true;
+            }
+            return false;
+        }''')
+        if clicked_text:
+            logging.info(f"[LAVAYEH] _click_goto_main: کلیک متنی (تلاش {attempt+1})")
+            await asyncio.sleep(2)
+            return True
+
+        logging.warning(
+            f"[LAVAYEH] _click_goto_main: تلاش {attempt+1}/{max_retries} ناموفق (user={user_id})"
+        )
+        await asyncio.sleep(2)
+
+    # ── آخرین تلاش با soft_click ──
+    await soft_click_if_exists(page, "بازگشت به فهرست")
+    logging.warning(f"[LAVAYEH] _click_goto_main: همه تلاش‌ها ناموفق (user={user_id})")
+    return False
 
 
 MAX_IMAGE_BYTES = 450 * 1024
@@ -1100,6 +1185,14 @@ async def _upload_single_attachment_group(page, doc_title: str, image_paths: lis
 
             all_confirmed = await _click_apply_all_with_retry(page, image_count, bot, user_id)
             if all_confirmed:
+                # ── بستن popup موفقیت باقی‌مانده و صبر برای Angular idle ──
+                await _close_success_popup(page)
+                await asyncio.sleep(1)
+                await _close_error_popup(page)
+                await asyncio.sleep(0.5)
+                await wait_for_angular_idle(page)
+                await asyncio.sleep(2)
+                logging.info(f"[LAVAYEH] آپلود '{doc_title}' موفق — آماده بازگشت به فهرست")
                 return True
 
         except Exception as e:
