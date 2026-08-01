@@ -1543,8 +1543,9 @@ async def _ask_lavayeh_text_ealam(message: Message, state: FSMContext):
 async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext):
     text = message.text or ""
     if text == "✅ ادامه مراحل":
-        await state.update_data(lavayeh_attachments=[])
-        await _ask_attachment_title(message, state, is_first=True)
+        # کاربر دکمه «ادامه مراحل» را زده (از مرحله تمبر غیرمالی آمده)
+        # باید ابتدا متن لایحه را بپرسیم
+        await _ask_lavayeh_text_ealam(message, state)
         return
     if not text:
         await message.answer("⚠️ لطفاً متن را به صورت متن ارسال فرمایید.")
@@ -1794,6 +1795,11 @@ async def lavayeh_confirm_handler(message: Message, state: FSMContext):
                 "lavayeh_tracking_code": data.get("lavayeh_tracking_code", ""),
                 "lavayeh_province": data.get("lavayeh_province", ""),
                 "lavayeh_row_number": data.get("lavayeh_row_number", 1),
+                # اطلاعات شماره بایگانی (در صورت انتخاب این روش)
+                "tracking_method": data.get("tracking_method", "case_number"),
+                "lavayeh_archive_number": data.get("lavayeh_archive_number", ""),
+                "lavayeh_branch_name": data.get("lavayeh_branch_name", ""),
+                "lavayeh_branch_code": data.get("lavayeh_branch_code", ""),
             })
         else:
             # ارسال تسک لایحه عادی
@@ -1809,6 +1815,11 @@ async def lavayeh_confirm_handler(message: Message, state: FSMContext):
                 "lavayeh_persons": data.get("lavayeh_persons", []),
                 "lavayeh_text": data.get("lavayeh_text"),
                 "lavayeh_attachments": data.get("lavayeh_attachments", []),
+                # اطلاعات شماره بایگانی (در صورت انتخاب این روش)
+                "tracking_method": data.get("tracking_method", "case_number"),
+                "lavayeh_archive_number": data.get("lavayeh_archive_number", ""),
+                "lavayeh_branch_name": data.get("lavayeh_branch_name", ""),
+                "lavayeh_branch_code": data.get("lavayeh_branch_code", ""),
             })
 
         await state.clear()

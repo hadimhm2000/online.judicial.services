@@ -1,12 +1,5 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  serverExternalPackages: ["sharp"],
-  experimental: {
-    serverActions: {
-      bodySizeLimit: "50mb",
-    },
-  },
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

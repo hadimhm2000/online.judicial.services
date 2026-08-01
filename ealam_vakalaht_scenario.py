@@ -71,9 +71,15 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
     province = data.get("lavayeh_province", "")
     row_number = data.get("lavayeh_row_number", 1)
 
+    # بررسی روش ثبت: شماره پرونده یا شماره بایگانی
+    tracking_method = data.get("tracking_method", "case_number")
+    archive_number = data.get("lavayeh_archive_number", "")
+    branch_code = data.get("lavayeh_branch_code", "")
+
     logging.info(
         f"[EALAM] user={user_id} lawyers={lawyers} contracts={contracts} "
-        f"stamp={stamp_amount} ({stamp_type}) tracking={tracking_code}"
+        f"stamp={stamp_amount} ({stamp_type}) tracking={tracking_code} "
+        f"method={tracking_method} archive={archive_number} branch_code={branch_code}"
     )
 
     await bot.send_message(
@@ -123,31 +129,78 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "اطلاعات پرونده", bot, user_id)
             await resilient_sleep(sana_page, 3, bot, user_id)
 
-            if tracking_code:
-                await _fill_input(sana_page, "#txtCaseNo", tracking_code)
-                await resilient_sleep(sana_page, 1, bot, user_id)
-
-            await _fill_input(sana_page, "#txtSubNo", str(row_number))
-            await resilient_sleep(sana_page, 1, bot, user_id)
-
-            if province:
-                await _select_province(sana_page, province, bot, user_id)
+            if tracking_method == "archive_number":
+                # ── مسیر شماره بایگانی ──────────────────────────────────
+                # کلیک روی رادیو باتن شماره بایگانی (value=2)
+                await sana_page.evaluate('''() => {
+                    const rdb = document.querySelector('input[type="radio"][name="rdbCaseInfo"][value="2"]#rdbCaseInfo2');
+                    if (rdb) rdb.click();
+                }''')
                 await resilient_sleep(sana_page, 2, bot, user_id)
 
-            # صحت‌سنجی
-            await _click_validate(sana_page, bot, user_id)
-            await resilient_sleep(sana_page, 10, bot, user_id)
+                # وارد کردن کد ۵ رقمی واحد قضایی (بر اساس شعبه انتخابی)
+                if branch_code:
+                    await _fill_input(sana_page, "#txtCourtCode", branch_code)
+                    await resilient_sleep(sana_page, 3, bot, user_id)
 
-            table_ok = await _wait_for_case_table(sana_page)
-            if not table_ok and tracking_code:
-                await bot.send_message(
-                    user_id,
-                    "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
-                    "لطفاً شماره پرونده، ردیف فرعی و استان را بررسی کنید.\n"
-                    "مجدداً «اعلام وکالت» را شروع کنید.",
-                    parse_mode="Markdown"
-                )
-                return
+                    # صبر برای لود اطلاعات واحد قضایی بعد از وارد کردن کد
+                    await sana_page.evaluate('''() => {
+                        const inp = document.querySelector('#txtCourtCode');
+                        if (inp) {
+                            inp.dispatchEvent(new Event("input", { bubbles: true }));
+                            inp.dispatchEvent(new Event("change", { bubbles: true }));
+                        }
+                    }''')
+                    await resilient_sleep(sana_page, 2, bot, user_id)
+
+                # وارد کردن شماره بایگانی
+                if archive_number:
+                    await _fill_input(sana_page, "#txtCaseArchiveNo", archive_number)
+                    await resilient_sleep(sana_page, 1, bot, user_id)
+
+                # کلیک روی دکمه صحت‌سنجی (btnAddHst2)
+                await _click_validate_archive(sana_page, bot, user_id)
+                await resilient_sleep(sana_page, 10, bot, user_id)
+
+                # بررسی موفقیت
+                table_ok = await _wait_for_case_table(sana_page)
+                if not table_ok:
+                    await bot.send_message(
+                        user_id,
+                        "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
+                        "لطفاً موارد زیر را بررسی و اصلاح نمایید:\n"
+                        "🔢 شماره بایگانی\n🏛 کد شعبه\n\n"
+                        "سپس مجدداً «اعلام وکالت» را شروع کنید.",
+                        parse_mode="Markdown"
+                    )
+                    return
+            else:
+                # ── مسیر شماره پرونده (کد قبلی) ─────────────────────────
+                if tracking_code:
+                    await _fill_input(sana_page, "#txtCaseNo", tracking_code)
+                    await resilient_sleep(sana_page, 1, bot, user_id)
+
+                await _fill_input(sana_page, "#txtSubNo", str(row_number))
+                await resilient_sleep(sana_page, 1, bot, user_id)
+
+                if province:
+                    await _select_province(sana_page, province, bot, user_id)
+                    await resilient_sleep(sana_page, 2, bot, user_id)
+
+                # صحت‌سنجی
+                await _click_validate(sana_page, bot, user_id)
+                await resilient_sleep(sana_page, 10, bot, user_id)
+
+                table_ok = await _wait_for_case_table(sana_page)
+                if not table_ok and tracking_code:
+                    await bot.send_message(
+                        user_id,
+                        "⚠️ **استعلام پرونده با خطا مواجه شد.**\n\n"
+                        "لطفاً شماره پرونده، ردیف فرعی و استان را بررسی کنید.\n"
+                        "مجدداً «اعلام وکالت» را شروع کنید.",
+                        parse_mode="Markdown"
+                    )
+                    return
 
             # ── ۶. مرحله «ارائه کننده لایحه» ────────────────────────────
             await _click_step_label(sana_page, "ارائه كننده لايحه", bot, user_id)
@@ -457,6 +510,36 @@ async def _click_validate(page, bot: Bot, user_id: int):
             if (btn) { btn.click(); return true; }
             return false;
         }''')
+        if not clicked:
+            await safe_click_by_text(page, "صحت سنجی اطلاعات", bot, user_id)
+        await asyncio.sleep(12)
+        await _close_error_popup(page)
+        has_table = await page.evaluate('''() => {
+            const table = document.querySelector('table tbody tr');
+            return table !== null;
+        }''')
+        if has_table:
+            return
+        await asyncio.sleep(5)
+
+
+async def _click_validate_archive(page, bot: Bot, user_id: int):
+    """کلیک دکمه صحت‌سنجی برای مسیر شماره بایگانی (btnAddHst2)"""
+    for _ in range(5):
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('#btnAddHst2');
+            if (btn && !btn.disabled) { btn.click(); return true; }
+            return false;
+        }''')
+        if not clicked:
+            # تلاش با متن دکمه
+            clicked = await page.evaluate('''() => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                const btn = btns.find(b => b.id === 'btnAddHst2' || 
+                    (b.innerText && b.innerText.includes("صحت سنجی")));
+                if (btn && !btn.disabled) { btn.click(); return true; }
+                return false;
+            }''')
         if not clicked:
             await safe_click_by_text(page, "صحت سنجی اطلاعات", bot, user_id)
         await asyncio.sleep(12)
@@ -814,6 +897,18 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
         }''')
         await asyncio.sleep(3)
 
+        # پر کردن فیلد txtNo با مقدار "0" (این فیلد required است)
+        await page.evaluate('''() => {
+            const inp = document.querySelector('#txtNo');
+            if (inp) {
+                inp.value = "0";
+                inp.dispatchEvent(new Event("input", { bubbles: true }));
+                inp.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+        }''')
+        await asyncio.sleep(1)
+
+        # پر کردن عنوان پیوست
         escaped_title = title.replace("`", "'").replace("\\", "")
         await page.evaluate(f'''() => {{
             const inp = document.querySelector('#txtName');
@@ -822,7 +917,9 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
                 inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
             }}
         }}''')
+        await asyncio.sleep(1)
 
+        # پر کردن تعداد صفحات
         await page.evaluate(f'''() => {{
             const inp = document.querySelector('#txt001');
             if (inp) {{
@@ -830,19 +927,40 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
                 inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
             }}
         }}''')
+        await asyncio.sleep(1)
 
+        # کلیک دکمه افزایش تعداد پیوست
         await page.evaluate('''() => {
             const btn = document.querySelector('#incAttach0');
             if (btn && !btn.disabled) btn.click();
         }''')
         await asyncio.sleep(3)
 
+        # کلیک دکمه ثبت پیوست
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
         await asyncio.sleep(8)
-        await _close_success_popup(page)
+        
+        # بررسی موفقیت ثبت
+        success = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const icon = popup.querySelector('.sa-icon.sa-success');
+            return icon && window.getComputedStyle(icon).display !== 'none';
+        }''')
+        
+        if success:
+            await _close_success_popup(page)
+            logging.info(f"[EALAM] پیوست «{title}» با موفقیت ثبت شد")
+        else:
+            # بررسی خطا
+            error_text = await _get_and_close_error_popup_text(page)
+            if error_text:
+                logging.warning(f"[EALAM] خطا در ثبت پیوست «{title}»: {error_text}")
+                return
+        
         await asyncio.sleep(3)
 
         # ویرایش برای آپلود تصاویر
@@ -852,21 +970,26 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
         }''')
         await asyncio.sleep(4)
 
+        # آپلود فایل‌ها
         file_input = page.locator('input[type="file"]').first
         await file_input.set_input_files(image_paths)
         await asyncio.sleep(3)
 
+        # کلیک آپلود همه
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnUploadAll');
             if (btn && !btn.disabled) btn.click();
         }''')
         await asyncio.sleep(30)
 
+        # کلیک اعمال همه
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
             if (btn && !btn.disabled) btn.click();
         }''')
         await asyncio.sleep(10)
+        
+        logging.info(f"[EALAM] آپلود تصاویر پیوست «{title}» با موفقیت انجام شد")
 
     except Exception as e:
         logging.error(f"[EALAM] خطا در آپلود پیوست «{title}»: {e}")
