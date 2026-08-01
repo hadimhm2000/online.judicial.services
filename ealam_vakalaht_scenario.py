@@ -232,10 +232,13 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
             await resilient_sleep(sana_page, 5, bot, user_id)
 
             # تعیین مبلغ فیلد txtLawyerAmount: stamp_amount * 100 / 3
-            if stamp_amount and stamp_amount > 0:
+            # اگر تمبر نیازی نیست (stamp_type == "بدون تمبر")، مقدار 1 قرار می‌دهیم
+            if stamp_type == "بدون تمبر" or stamp_amount == 0:
+                lawyer_amount_value = 1
+            elif stamp_amount and stamp_amount > 0:
                 lawyer_amount_value = int(stamp_amount * 100 / 3)
             else:
-                lawyer_amount_value = 0
+                lawyer_amount_value = 1
 
             # شماره قرارداد اول
             first_contract = contracts[0] if contracts else ""
@@ -996,13 +999,40 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
 
 
 async def _click_preparation_with_retry(page, bot: Bot, user_id: int, max_retries: int = 3) -> bool:
+    """
+    جریان آماده‌سازی:
+    1. کلیک دکمه «آماده سازی» (btnPreparation)
+    2. ظاهر شدن پاپ‌آپ تایید و کلیک روی «تایید و آماده سازی»
+    3. ظاهر شدن پاپ‌آپ موفقیت و کلیک روی «بستن»
+    """
     for attempt in range(max_retries):
+        # ۱. کلیک دکمه آماده‌سازی
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnPreparation');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(40 if attempt > 0 else 12)
+        await asyncio.sleep(5)
 
+        # ۲. منتظر پاپ‌آپ تایید (با دکمه «تایید و آماده سازی»)
+        confirmation_popup = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const btn = popup.querySelector('button.confirm');
+            return btn && btn.innerText && btn.innerText.includes("تایید");
+        }''')
+        
+        if confirmation_popup:
+            # کلیک روی دکمه «تایید و آماده سازی»
+            await page.evaluate('''() => {
+                const popup = document.querySelector('.sweet-alert.showSweetAlert');
+                if (popup) {
+                    const btn = popup.querySelector('button.confirm');
+                    if (btn) btn.click();
+                }
+            }''')
+            await asyncio.sleep(40 if attempt > 0 else 12)
+
+        # ۳. بررسی پاپ‌آپ موفقیت (با آیکون success و متن «آماده سازی»)
         success = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
             if (!popup) return false;
@@ -1011,10 +1041,20 @@ async def _click_preparation_with_retry(page, bot: Bot, user_id: int, max_retrie
             return icon && window.getComputedStyle(icon).display !== 'none' &&
                    h2 && h2.innerText.includes("آماده سازی");
         }''')
+        
         if success:
-            await _close_success_popup(page)
+            # کلیک روی دکمه «بستن» در پاپ‌آپ موفقیت
+            await page.evaluate('''() => {
+                const popup = document.querySelector('.sweet-alert.showSweetAlert');
+                if (popup) {
+                    const btn = popup.querySelector('button.confirm');
+                    if (btn) btn.click();
+                }
+            }''')
+            await asyncio.sleep(2)
             return True
 
+        # اگر خطا بود، ببندیم و retry کنیم
         await _close_error_popup(page)
         await asyncio.sleep(30)
         await _close_success_popup(page)
