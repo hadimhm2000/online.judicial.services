@@ -13,6 +13,18 @@ import runtime_state
 from config import ADMIN_ID
 from keyboards import admin_login_kb
 
+
+class NavigationResetError(Exception):
+    """
+    خطایی که وقتی رخ می‌ده که یک انحراف/گم‌شدگی در صفحه (مثل باگ GetLegalPersonType
+    یا پیدا نشدن یک عنصر حتی بعد از صبر کافی) تشخیص داده شده و صفحه از قبل به یک
+    نقطه‌ی امن (Offices/Index) navigate شده. گرفتن این خطا نباید دوباره go_back یا
+    هر ناوبری دیگه‌ای انجام بده — فقط باید مستقیم به بالا raise بشه تا حلقه‌ی
+    بیرونی سناریو، کل تسک رو از نو (از همون نقطه‌ی امن) شروع کنه.
+    """
+    pass
+
+
 # ================= توابع شبه‌انسانی =================
 async def human_delay(min_sec=1.5, max_sec=3.0):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
@@ -137,7 +149,7 @@ async def check_and_handle_expiry(page, bot: Bot, user_id: int):
             await asyncio.sleep(4)
         except:
             pass
-        raise Exception("GetLegalPersonType redirect occurred. Navigated back and restarting task...")
+        raise NavigationResetError("GetLegalPersonType redirect occurred. Navigated to Offices/Index and restarting task...")
 
     is_expired = await page.evaluate('''() => {
         const text = document.body ? document.body.innerText : "";
@@ -233,21 +245,38 @@ async def safe_click_by_text(page, text, bot: Bot, user_id: int, retry_count=3):
             await wait_for_angular_idle(page)
             await check_and_handle_expiry(page, bot, user_id)
 
-            btn_exists = await page.evaluate(''' (txt) => {
-                const tags = ['button', 'a', 'label', 'span', 'li', 'h5', 'div'];
-                for (let tag of tags) {
-                    const elements = Array.from(document.querySelectorAll(tag));
-                    const target = elements.find(el => el.innerText && el.innerText.trim().includes(txt));
-                    if (target) return true;
-                }
-                return false;
-            } ''', text)
-            
+            btn_exists = False
+            for _grace in range(6):
+                btn_exists = await page.evaluate(''' (txt) => {
+                    const tags = ['button', 'a', 'label', 'span', 'li', 'h5', 'div'];
+                    for (let tag of tags) {
+                        const elements = Array.from(document.querySelectorAll(tag));
+                        const target = elements.find(el => el.innerText && el.innerText.trim().includes(txt));
+                        if (target) return true;
+                    }
+                    return false;
+                } ''', text)
+                if btn_exists:
+                    break
+                # ممکنه آنگولار هنوز رندر نکرده باشه؛ قبل از اینکه "پیدا نشد" رو
+                # قطعی بدونیم و go_back بزنیم (که خودش ریسک پرت‌شدن به یک صفحه‌ی
+                # نامرتبط توی تاریخچه رو داره)، یکم بیشتر صبر می‌کنیم.
+                await asyncio.sleep(1)
+
             if not btn_exists:
-                logging.warning(f"Option '{text}' not found. Going back one step...")
-                await page.go_back()
-                await asyncio.sleep(5)
-                continue
+                logging.warning(
+                    f"Option '{text}' not found even after grace period. "
+                    f"go_back() is unreliable on this site (lands on stale/unrelated "
+                    f"history entries like GetLegalPersonType) — resetting to Offices/Index instead."
+                )
+                try:
+                    await page.goto("https://sakha2.adliran.ir/Offices/Index")
+                    await asyncio.sleep(4)
+                except Exception:
+                    pass
+                raise NavigationResetError(
+                    f"'{text}' not found on page. Navigated to Offices/Index and restarting task..."
+                )
 
             await force_click_by_text(page, text)
             await asyncio.sleep(2.5)
@@ -281,7 +310,11 @@ async def safe_click_by_text(page, text, bot: Bot, user_id: int, retry_count=3):
             return True
             
         except Exception as e:
-            if "Session expired" in str(e):
+            if isinstance(e, NavigationResetError) or "Session expired" in str(e):
+                # این خطاها خودشون قبلاً ناوبری ریکاوری (goto) رو انجام داده‌ن؛
+                # یک go_back اضافه دقیقاً همزمان با اون goto رقابت می‌کنه و باعث قطع
+                # ارتباط درایور با کروم می‌شه. باید فوراً raise بشه تا حلقه‌ی
+                # بیرونی (در lavayeh_scenario) کل تسک رو از Offices/Index ریستارت کنه.
                 raise e
             logging.error(f"Error in safe_click_by_text '{text}' (Attempt {attempt+1}/{retry_count}): {e}")
             try:
@@ -315,12 +348,26 @@ async def safe_type(page, selector, text, bot: Bot, user_id: int, retry_count=3)
             await wait_for_angular_idle(page)
             await check_and_handle_expiry(page, bot, user_id)
 
-            elem_exists = await page.locator(selector).count() > 0
+            elem_exists = False
+            for _grace in range(6):
+                elem_exists = await page.locator(selector).count() > 0
+                if elem_exists:
+                    break
+                await asyncio.sleep(1)
+
             if not elem_exists:
-                logging.warning(f"Selector '{selector}' not found. Going back one step...")
-                await page.go_back()
-                await asyncio.sleep(5)
-                continue
+                logging.warning(
+                    f"Selector '{selector}' not found even after grace period. "
+                    f"go_back() is unreliable on this site — resetting to Offices/Index instead."
+                )
+                try:
+                    await page.goto("https://sakha2.adliran.ir/Offices/Index")
+                    await asyncio.sleep(4)
+                except Exception:
+                    pass
+                raise NavigationResetError(
+                    f"Selector '{selector}' not found. Navigated to Offices/Index and restarting task..."
+                )
 
             success = await human_type(page, selector, text)
             if success:
@@ -351,7 +398,7 @@ async def safe_type(page, selector, text, bot: Bot, user_id: int, retry_count=3)
                 return True
             await asyncio.sleep(2)
         except Exception as e:
-            if "Session expired" in str(e):
+            if isinstance(e, NavigationResetError) or "Session expired" in str(e):
                 raise e
             logging.error(f"Error safe_typing in '{selector}' (Attempt {attempt+1}/{retry_count}): {e}")
             try:
