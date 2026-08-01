@@ -19,6 +19,7 @@ from browser_helpers import (
     check_and_handle_load_error, resilient_sleep, goto_url_with_retry,
     safe_click_by_text, safe_type,
 )
+from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
 
 async def _wait_for_mobile_search_table(page, timeout_sec: int = 30) -> bool:
     for _ in range(timeout_sec):
@@ -252,136 +253,32 @@ async def process_task(data, bot: Bot):
                         except Exception:
                             await asyncio.sleep(5)
 
-                        await sana_page.evaluate('''() => {
-                            const container = document.createElement('div');
-                            container.style.direction = 'rtl';
-                            container.style.padding = '20px';
-                            container.style.fontFamily = 'Tahoma, Arial, sans-serif';
-                            container.style.backgroundColor = '#ffffff';
+                        # ── استخراج تمیز داده (عکس + اطلاعات) از صفحه‌ی چاپ ──
+                        # توجه: صفحه‌ی اصلی sana_page اصلاً دست‌کاری نمی‌شود؛
+                        # فقط داده خوانده می‌شود و در یک صفحه‌ی جدید و تمیز رندر
+                        # و پرینت می‌گردد (مستقل از لوگو/نکات امنیتی/فوتر و ...).
+                        profile_data = await extract_sana_profile(sana_page)
 
-                            // ساختار واقعی صفحه RealPersonPrint.aspx:
-                            //   #tblHeader -> لوگو + عکس پرسنلی + عنوان فرم
-                            //   #tblBody   -> ۴ بخش اطلاعات (مشخصات شناسنامه ای/تماس/اقامتگاه/سایر)
-                            const header = document.getElementById('tblHeader');
-                            const body = document.getElementById('tblBody');
-
-                            if (header) container.appendChild(header.cloneNode(true));
-                            if (body) container.appendChild(body.cloneNode(true));
-
-                            // حذف لوگو و عنوان از هدر — فقط عکس پرسنلی باقی بماند
-                            (function cleanHeader(root) {
-                                const headerEl = root.querySelector('#tblHeader');
-                                if (!headerEl) return;
-                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
-
-                                // حذف عنوان «فرم اطلاعات ثبت نام الکترونیک»
-                                Array.from(headerEl.querySelectorAll('*')).forEach(el => {
-                                    if (el.childElementCount === 0 && norm(el.textContent).includes("فرم اطلاعات ثبت نام الکترونیک")) {
-                                        const box = el.closest('tr, td, div') || el;
-                                        box.remove();
-                                    }
-                                });
-
-                                // حذف لوگو (نگه داشتن فقط عکس پرسنلی — که همیشه اولین تصویر داخل هدر است)
-                                Array.from(headerEl.querySelectorAll('img')).forEach((img, idx) => {
-                                    if (idx > 0) {
-                                        const cell = img.closest('td, div') || img;
-                                        cell.remove();
-                                    }
-                                });
-                            })(container);
-
-                            // حذف بخش «نکات امنیتی» و هر چیز بعد از آن (فقط کارت مشخصات باید چاپ شود)
-                            (function removeSecurityNotes(root) {
-                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
-                                const all = Array.from(root.querySelectorAll('*'));
-                                const target = all.find(el =>
-                                    el.childElementCount === 0 &&
-                                    (norm(el.textContent).startsWith("نکات امنیتی") || norm(el.textContent).startsWith("نكات امنيتي"))
-                                );
-                                if (!target) return;
-                                let block = target.closest('tr, .panel, .box, .card, fieldset') || target;
-                                let sibling = block;
-                                while (sibling) {
-                                    const next = sibling.nextElementSibling;
-                                    sibling.remove();
-                                    sibling = next;
-                                }
-                                // حذف مستقل خط «چاپ شده توسط...» در صورتی که هم‌سطح بلاک نکات امنیتی نبود
-                                const footerElems = Array.from(root.querySelectorAll('*')).filter(el =>
-                                    el.childElementCount === 0 && norm(el.textContent).includes("چاپ شده توسط")
-                                );
-                                footerElems.forEach(el => {
-                                    const fb = el.closest('tr, .panel, .box, .card, fieldset') || el;
-                                    fb.remove();
-                                });
-                            })(container);
-
-                            if (!header || !body) {
-                                // fallback: اگر ساختار صفحه تغییر کرده بود، به روش قدیمی (متنی) برگرد
-                                const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
-                                const allElements = Array.from(document.querySelectorAll('*'));
-                                const clonedContainers = new Set();
-
-                                function findImgContainer(img) {
-                                    const preferred = img.closest('table, fieldset, .box, .panel, .card');
-                                    if (preferred) return preferred;
-                                    let el = img.parentElement;
-                                    for (let i = 0; i < 3 && el && el.parentElement; i++) {
-                                        el = el.parentElement;
-                                    }
-                                    return el || img.parentElement;
-                                }
-                                const photoImgs = Array.from(document.querySelectorAll('img'))
-                                    .filter(img => img.naturalWidth > 30 && img.naturalHeight > 30);
-                                photoImgs.forEach(img => {
-                                    const box = findImgContainer(img);
-                                    if (box && !clonedContainers.has(box)) {
-                                        clonedContainers.add(box);
-                                        container.appendChild(box.cloneNode(true));
-                                    }
-                                });
-
-                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
-                                sections.forEach(secName => {
-                                    const titleElem = allElements.find(el => el.innerText && norm(el.innerText) === norm(secName));
-                                    if (titleElem) {
-                                        const box = titleElem.closest('table, fieldset, .box, .panel, .card');
-                                        if (box && !clonedContainers.has(box)) {
-                                            clonedContainers.add(box);
-                                            container.appendChild(box.cloneNode(true));
-                                        }
-                                    }
-                                });
-                            }
-
-                            document.body.innerHTML = container.innerHTML;
-                            document.body.style.backgroundColor = '#ffffff';
-                            document.body.style.padding = '20px';
-                        }''')
-
-                        await sana_page.evaluate('''() => {
-                            return new Promise((resolve) => {
-                                const imgs = Array.from(document.querySelectorAll('img'));
-                                const pending = imgs.filter(img => !img.complete);
-                                if (pending.length === 0) return resolve();
-                                let doneCount = 0;
-                                const checkDone = () => { doneCount++; if (doneCount >= pending.length) resolve(); };
-                                pending.forEach(img => {
-                                    img.addEventListener('load', checkDone);
-                                    img.addEventListener('error', checkDone);
-                                });
-                                setTimeout(resolve, 5000);
-                            });
-                        }''')
-                        await asyncio.sleep(1)
-                        pdf_path = f"report_phone_{phone_number}_{idx}.pdf"
-                        await sana_page.pdf(path=pdf_path, format="A4")
-
-                        if os.path.exists(pdf_path):
-                            doc = FSInputFile(pdf_path)
-                            await bot.send_document(user_id, document=doc, caption=f"📄 مشخصات ثنا (پروفایل {idx+1})")
-                            os.remove(pdf_path)
+                        if not profile_data:
+                            await bot.send_message(
+                                ADMIN_ID,
+                                f"⚠️ استخراج اطلاعات پروفایل {nat_id} ناموفق بود (ساختار صفحه یافت نشد)."
+                            )
+                        else:
+                            pdf_path = f"report_phone_{phone_number}_{idx}.pdf"
+                            built = await build_sana_profile_pdf(
+                                browser_context, profile_data, pdf_path, national_id=nat_id
+                            )
+                            if built and os.path.exists(pdf_path):
+                                doc = FSInputFile(pdf_path)
+                                await bot.send_document(
+                                    user_id, document=doc, caption=f"📄 مشخصات ثنا (پروفایل {idx+1})"
+                                )
+                                os.remove(pdf_path)
+                            else:
+                                await bot.send_message(
+                                    ADMIN_ID, f"⚠️ ساخت PDF برای پروفایل {nat_id} ناموفق بود."
+                                )
 
                         await sana_page.go_back()
                         await asyncio.sleep(3)
@@ -425,132 +322,32 @@ async def process_task(data, bot: Bot):
                 except Exception:
                     await asyncio.sleep(5)
 
-                await sana_page.evaluate('''() => {
-                    const container = document.createElement('div');
-                    container.style.direction = 'rtl';
-                    container.style.padding = '20px';
-                    container.style.fontFamily = 'Tahoma, Arial, sans-serif';
-                    container.style.backgroundColor = '#ffffff';
+                # ── استخراج تمیز داده (عکس + اطلاعات) از صفحه‌ی چاپ ──
+                # صفحه‌ی اصلی sana_page اصلاً دست‌کاری نمی‌شود؛ فقط داده خوانده
+                # می‌شود و در یک صفحه‌ی جدید و کاملاً تمیز رندر و پرینت می‌گردد
+                # (مستقل از لوگو/نکات امنیتی/فوتر/افزونه‌های مرورگر و غیره).
+                profile_data = await extract_sana_profile(sana_page)
 
-                    const header = document.getElementById('tblHeader');
-                    const body = document.getElementById('tblBody');
+                if not profile_data:
+                    await bot.send_message(
+                        user_id, f"❌ استخراج اطلاعات ثنا برای کدملی `{national_id}` ناموفق بود."
+                    )
+                    await sana_page.goto("https://sakha2.adliran.ir/Offices/Index")
+                    return
 
-                    if (header) container.appendChild(header.cloneNode(true));
-                    if (body) container.appendChild(body.cloneNode(true));
-
-                    // حذف لوگو و عنوان از هدر — فقط عکس پرسنلی باقی بماند
-                    (function cleanHeader(root) {
-                        const headerEl = root.querySelector('#tblHeader');
-                        if (!headerEl) return;
-                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
-
-                        // حذف عنوان «فرم اطلاعات ثبت نام الکترونیک»
-                        Array.from(headerEl.querySelectorAll('*')).forEach(el => {
-                            if (el.childElementCount === 0 && norm(el.textContent).includes("فرم اطلاعات ثبت نام الکترونیک")) {
-                                const box = el.closest('tr, td, div') || el;
-                                box.remove();
-                            }
-                        });
-
-                        // حذف لوگو (نگه داشتن فقط عکس پرسنلی — که همیشه اولین تصویر داخل هدر است)
-                        Array.from(headerEl.querySelectorAll('img')).forEach((img, idx) => {
-                            if (idx > 0) {
-                                const cell = img.closest('td, div') || img;
-                                cell.remove();
-                            }
-                        });
-                    })(container);
-
-                    // حذف بخش «نکات امنیتی» و هر چیز بعد از آن (فقط کارت مشخصات باید چاپ شود)
-                    (function removeSecurityNotes(root) {
-                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
-                        const all = Array.from(root.querySelectorAll('*'));
-                        const target = all.find(el =>
-                            el.childElementCount === 0 &&
-                            (norm(el.textContent).startsWith("نکات امنیتی") || norm(el.textContent).startsWith("نكات امنيتي"))
-                        );
-                        if (!target) return;
-                        let block = target.closest('tr, .panel, .box, .card, fieldset') || target;
-                        let sibling = block;
-                        while (sibling) {
-                            const next = sibling.nextElementSibling;
-                            sibling.remove();
-                            sibling = next;
-                        }
-                        // حذف مستقل خط «چاپ شده توسط...» در صورتی که هم‌سطح بلاک نکات امنیتی نبود
-                        const footerElems = Array.from(root.querySelectorAll('*')).filter(el =>
-                            el.childElementCount === 0 && norm(el.textContent).includes("چاپ شده توسط")
-                        );
-                        footerElems.forEach(el => {
-                            const fb = el.closest('tr, .panel, .box, .card, fieldset') || el;
-                            fb.remove();
-                        });
-                    })(container);
-
-                    if (!header || !body) {
-                        const sections = ["مشخصات شناسنامه ای", "اطلاعات تماس", "اقامتگاه", "سایر"];
-                        const allElements = Array.from(document.querySelectorAll('*'));
-                        const clonedContainers = new Set();
-
-                        function findImgContainer(img) {
-                            const preferred = img.closest('table, fieldset, .box, .panel, .card');
-                            if (preferred) return preferred;
-                            let el = img.parentElement;
-                            for (let i = 0; i < 3 && el && el.parentElement; i++) {
-                                el = el.parentElement;
-                            }
-                            return el || img.parentElement;
-                        }
-                        const photoImgs = Array.from(document.querySelectorAll('img'))
-                            .filter(img => img.naturalWidth > 30 && img.naturalHeight > 30);
-                        photoImgs.forEach(img => {
-                            const box = findImgContainer(img);
-                            if (box && !clonedContainers.has(box)) {
-                                clonedContainers.add(box);
-                                container.appendChild(box.cloneNode(true));
-                            }
-                        });
-
-                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
-                        sections.forEach(secName => {
-                            const titleElem = allElements.find(el => el.innerText && norm(el.innerText) === norm(secName));
-                            if (titleElem) {
-                                const box = titleElem.closest('table, fieldset, .box, .panel, .card');
-                                if (box && !clonedContainers.has(box)) {
-                                    clonedContainers.add(box);
-                                    container.appendChild(box.cloneNode(true));
-                                }
-                            }
-                        });
-                    }
-
-                    document.body.innerHTML = container.innerHTML;
-                    document.body.style.backgroundColor = '#ffffff';
-                    document.body.style.padding = '20px';
-                }''')
-
-                await sana_page.evaluate('''() => {
-                    return new Promise((resolve) => {
-                        const imgs = Array.from(document.querySelectorAll('img'));
-                        const pending = imgs.filter(img => !img.complete);
-                        if (pending.length === 0) return resolve();
-                        let doneCount = 0;
-                        const checkDone = () => { doneCount++; if (doneCount >= pending.length) resolve(); };
-                        pending.forEach(img => {
-                            img.addEventListener('load', checkDone);
-                            img.addEventListener('error', checkDone);
-                        });
-                        setTimeout(resolve, 5000);
-                    });
-                }''')
-                await asyncio.sleep(1)
                 pdf_path = f"report_national_{national_id}.pdf"
-                await sana_page.pdf(path=pdf_path, format="A4")
+                built = await build_sana_profile_pdf(
+                    browser_context, profile_data, pdf_path, national_id=national_id
+                )
 
-                if os.path.exists(pdf_path):
+                if built and os.path.exists(pdf_path):
                     doc = FSInputFile(pdf_path)
                     await bot.send_document(user_id, document=doc, caption=f"📄 مشخصات ثنا برای کدملی: `{national_id}`")
                     os.remove(pdf_path)
+                else:
+                    await bot.send_message(
+                        user_id, f"❌ ساخت PDF برای کدملی `{national_id}` ناموفق بود."
+                    )
 
                 await sana_page.goto("https://sakha2.adliran.ir/Offices/Index")
                 await bot.send_message(ADMIN_ID, f"✅ پردازش کد ملی {national_id} تمام شد.")
