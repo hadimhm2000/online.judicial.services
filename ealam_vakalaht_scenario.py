@@ -457,6 +457,23 @@ async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
     }}''')
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
+        return
+
+    # مسیر کلیک مستقیم از safe_click_by_text عبور نمی‌کند؛ اینجا هم صریحاً
+    # چک انقضا انجام می‌شود (نقطه‌ای که کلیک روی «منضمات» قبلاً بدون این چک بود).
+    await asyncio.sleep(1.5)
+    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+    if had_expiry:
+        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
+        await page.evaluate(f'''() => {{
+            const heads = Array.from(document.querySelectorAll('.box h5'));
+            const target = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+            if (target) {{
+                const box = target.closest('.box');
+                if (box) box.click();
+            }}
+        }}''')
+        await asyncio.sleep(1.5)
 
 
 async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
@@ -794,6 +811,11 @@ async def _upload_electronic_vakalaht(
     """
     for attempt in range(3):
         try:
+            # بررسی انقضای نشست قبل از شروع این پیوست (بخش منضمات قبلاً این چک را نداشت)
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info("[EALAM][منضمات] نشست در ابتدای ثبت وکالت‌نامه الکترونیک تمدید شد؛ ادامه از همین‌جا...")
+
             # انتخاب نوع پیوست «تصوير الكترونيك وكالت نامه» (value=object:2812)
             selected = await page.evaluate('''() => {
                 const sel = document.querySelector('#attachmentType');
@@ -851,7 +873,10 @@ async def _upload_electronic_vakalaht(
                 const btn = document.querySelector('#btnSaveDoc');
                 if (btn && !btn.disabled) btn.click();
             }''')
-            await asyncio.sleep(8)
+            had_expiry = await resilient_sleep(page, 8, bot, user_id)
+            if had_expiry:
+                logging.info("[EALAM][منضمات] نشست حین انتظار برای ذخیره‌ی وکالت‌نامه تمدید شد؛ تلاش دوباره...")
+                continue
 
             # بررسی نتیجه
             success = await page.evaluate('''() => {
@@ -886,6 +911,11 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
         return
 
     try:
+        # بررسی انقضای نشست قبل از شروع این پیوست (بخش منضمات قبلاً این چک را نداشت)
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EALAM][منضمات] نشست در ابتدای آپلود «{title}» تمدید شد؛ ادامه از همین‌جا...")
+
         # انتخاب «ساير ضمائم»
         await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
@@ -944,8 +974,10 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
-        
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EALAM][منضمات] نشست حین ذخیره‌ی «{title}» تمدید شد؛ صفحه دوباره بررسی می‌شود...")
+
         # بررسی موفقیت ثبت
         success = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
@@ -983,14 +1015,18 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             const btn = document.querySelector('#btnUploadAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(30)
+        had_expiry = await resilient_sleep(page, 30, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EALAM][منضمات] نشست حین آپلود فایل‌های «{title}» تمدید شد.")
 
         # کلیک اعمال همه
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(10)
+        had_expiry = await resilient_sleep(page, 10, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EALAM][منضمات] نشست حین «اعمال همه» برای «{title}» تمدید شد.")
         
         logging.info(f"[EALAM] آپلود تصاویر پیوست «{title}» با موفقیت انجام شد")
 

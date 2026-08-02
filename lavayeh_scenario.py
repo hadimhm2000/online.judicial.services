@@ -577,6 +577,24 @@ async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
     }}''')
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
+        return
+
+    # مسیر کلیک مستقیم از safe_click_by_text عبور نمی‌کند، پس اینجا هم
+    # صریحاً چک انقضا انجام می‌شود (این همان نقطه‌ای بود که کلیک روی
+    # «منضمات» بدون بررسی انقضا انجام می‌شد).
+    await asyncio.sleep(1.5)
+    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+    if had_expiry:
+        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
+        await page.evaluate(f'''() => {{
+            const heads = Array.from(document.querySelectorAll('.box h5'));
+            const target = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+            if (target) {{
+                const box = target.closest('.box');
+                if (box) box.click();
+            }}
+        }}''')
+        await asyncio.sleep(1.5)
 
 
 async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
@@ -1102,6 +1120,12 @@ async def _upload_single_attachment_group(page, doc_title: str, image_paths: lis
     image_count = len(image_paths)
     for upload_attempt in range(2):
         try:
+            # ── بررسی انقضای نشست قبل از شروع این پیوست ──
+            # (بخش منضمات قبلاً اصلاً این بررسی را نداشت؛ همین‌جا اضافه شد)
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info(f"[LAVAYEH][منضمات] نشست در ابتدای آپلود «{doc_title}» تمدید شد؛ ادامه از همین‌جا...")
+
             await page.evaluate('''() => {
                 const sel = document.querySelector('#attachmentType');
                 if (sel) {
@@ -1168,18 +1192,24 @@ async def _upload_single_attachment_group(page, doc_title: str, image_paths: lis
                 if (btn && !btn.disabled) btn.click();
             }''')
 
-            all_uploaded = await _wait_for_upload_alerts(page, image_count)
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info(f"[LAVAYEH][منضمات] نشست درست بعد از کلیک «آپلود همه» برای «{doc_title}» تمدید شد؛ تلاش دوباره...")
+                await asyncio.sleep(3)
+                continue
+
+            all_uploaded = await _wait_for_upload_alerts(page, image_count, bot, user_id)
 
             if not all_uploaded:
-                await asyncio.sleep(30)
+                await resilient_sleep(page, 30, bot, user_id)
                 await _click_step_box(page, "منضمات", bot, user_id)
-                await asyncio.sleep(5)
+                await resilient_sleep(page, 5, bot, user_id)
                 await page.evaluate('''() => {
                     const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
                     if (btns.length > 0) btns[btns.length - 1].click();
                 }''')
                 await asyncio.sleep(4)
-                await _delete_uploaded_files(page)
+                await _delete_uploaded_files(page, bot, user_id)
                 await asyncio.sleep(3)
                 continue
 
@@ -1211,7 +1241,11 @@ async def _click_save_doc_with_retry(page, bot: Bot, user_id: int, max_retries: 
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info("[LAVAYEH][منضمات] نشست حین انتظار برای ذخیره‌ی سند تمدید شد؛ تلاش دوباره...")
+            continue
 
         success = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
@@ -1226,8 +1260,16 @@ async def _click_save_doc_with_retry(page, bot: Bot, user_id: int, max_retries: 
         await asyncio.sleep(4)
 
 
-async def _wait_for_upload_alerts(page, expected_count: int, timeout_sec: int = 120) -> bool:
-    for _ in range(timeout_sec * 2):
+async def _wait_for_upload_alerts(page, expected_count: int, bot: Bot, user_id: int, timeout_sec: int = 120) -> bool:
+    # هر ۴ تکرار (≈ ۲ ثانیه) یک بار هم علاوه بر شمارش alertها، انقضای نشست را چک می‌کنیم
+    for i in range(timeout_sec * 2):
+        if i % 4 == 0:
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info("[LAVAYEH][منضمات] نشست حین انتظار برای تایید آپلود تمدید شد؛ ادامه‌ی همین انتظار...")
+                # بعد از تمدید، صفحه ممکنه رفرش/تغییر کرده باشه؛ کمی مکث و ادامه‌ی شمارش
+                await asyncio.sleep(1)
+
         count = await page.evaluate('''() => {
             const alerts = Array.from(document.querySelectorAll('.alert-success [ng-bind-html]'));
             return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت ثبت گردید")).length;
@@ -1238,8 +1280,12 @@ async def _wait_for_upload_alerts(page, expected_count: int, timeout_sec: int = 
     return False
 
 
-async def _delete_uploaded_files(page):
+async def _delete_uploaded_files(page, bot: Bot, user_id: int):
     while True:
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info("[LAVAYEH][منضمات] نشست حین حذف فایل‌های آپلودشده تمدید شد؛ ادامه...")
+
         deleted = await page.evaluate('''() => {
             const btn = document.querySelector('button[ng-click*="removeAttachment"]');
             if (btn && !btn.disabled) { btn.click(); return true; }
@@ -1256,7 +1302,11 @@ async def _click_apply_all_with_retry(page, expected_count: int, bot: Bot, user_
             const btn = document.querySelector('#btnApplyAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(10)
+
+        had_expiry = await resilient_sleep(page, 10, bot, user_id)
+        if had_expiry:
+            logging.info("[LAVAYEH][منضمات] نشست حین انتظار برای «اعمال همه» تمدید شد؛ تلاش دوباره...")
+            continue
 
         confirmed = await page.evaluate(f'''() => {{
             const alerts = Array.from(document.querySelectorAll('[ng-bind-html]'));
@@ -1264,7 +1314,7 @@ async def _click_apply_all_with_retry(page, expected_count: int, bot: Bot, user_
         }}''')
         if confirmed:
             return True
-        await asyncio.sleep(30)
+        await resilient_sleep(page, 30, bot, user_id)
 
     return False
 

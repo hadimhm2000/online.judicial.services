@@ -482,6 +482,23 @@ async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
     }}''')
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
+        return
+
+    # مسیر کلیک مستقیم از safe_click_by_text عبور نمی‌کند؛ اینجا هم صریحاً
+    # چک انقضا انجام می‌شود (نقطه‌ای که کلیک روی «منضمات» قبلاً بدون این چک بود).
+    await asyncio.sleep(1.5)
+    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+    if had_expiry:
+        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
+        await page.evaluate(f'''() => {{
+            const heads = Array.from(document.querySelectorAll('.box h5'));
+            const t = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+            if (t) {{
+                const box = t.closest('.box');
+                if (box) box.click();
+            }}
+        }}''')
+        await asyncio.sleep(1.5)
 
 
 async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
@@ -695,6 +712,11 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
     این مدرک برای اظهارکننده حقوقی اجباری است.
     """
     try:
+        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست در ابتدای آپلود مدرک نمایندگی تمدید شد؛ ادامه از همین‌جا...")
+
         # انتخاب «تصوير مدرک نمايندگي»
         selected = await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
@@ -763,7 +785,9 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی مدرک نمایندگی تمدید شد؛ ادامه...")
         await _close_success_popup(page)
         await asyncio.sleep(3)
 
@@ -783,13 +807,17 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 const btn = document.querySelector('#btnUploadAll');
                 if (btn && !btn.disabled) btn.click();
             }''')
-            await asyncio.sleep(30)
+            had_expiry = await resilient_sleep(page, 30, bot, user_id)
+            if had_expiry:
+                logging.info("[EZHHAR][منضمات] نشست حین آپلود فایل‌های مدرک نمایندگی تمدید شد.")
 
             await page.evaluate('''() => {
                 const btn = document.querySelector('#btnApplyAll');
                 if (btn && !btn.disabled) btn.click();
             }''')
-            await asyncio.sleep(10)
+            had_expiry = await resilient_sleep(page, 10, bot, user_id)
+            if had_expiry:
+                logging.info("[EZHHAR][منضمات] نشست حین «اعمال همه» برای مدرک نمایندگی تمدید شد.")
 
         logging.info("[EZHHAR] مدرک نمایندگی با موفقیت آپلود شد")
 
@@ -800,6 +828,11 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
 async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_value: int, bot: Bot, user_id: int):
     """آپلود وکالت‌نامه الکترونیک (مانند اعلام وکالت)"""
     try:
+        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست در ابتدای ثبت وکالت‌نامه الکترونیک تمدید شد؛ ادامه از همین‌جا...")
+
         selected = await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
             if (!sel) return false;
@@ -857,7 +890,9 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی وکالت‌نامه الکترونیک تمدید شد؛ ادامه...")
         await _close_success_popup(page)
 
     except Exception as e:
@@ -869,6 +904,11 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
     if not image_paths:
         return
     try:
+        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست در ابتدای آپلود «{title}» تمدید شد؛ ادامه از همین‌جا...")
+
         # انتخاب «ساير ضمائم»
         await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
@@ -921,7 +961,9 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست حین ذخیره‌ی «{title}» تمدید شد؛ ادامه...")
         await _close_success_popup(page)
         await asyncio.sleep(3)
 
@@ -940,13 +982,17 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             const btn = document.querySelector('#btnUploadAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(30)
+        had_expiry = await resilient_sleep(page, 30, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست حین آپلود فایل‌های «{title}» تمدید شد.")
 
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(10)
+        had_expiry = await resilient_sleep(page, 10, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست حین «اعمال همه» برای «{title}» تمدید شد.")
 
     except Exception as e:
         logging.error(f"[EZHHAR] خطا در آپلود پیوست «{title}»: {e}")
