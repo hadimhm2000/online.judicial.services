@@ -171,8 +171,9 @@ def create_province_kb():
 PERSON_TYPES = ["شخص حقیقی", "شخص حقوقی", "وکیل"]
 
 def create_person_type_kb(exclude: list = None):
+    # باگ رفع شد: دیگر گزینه‌ها حذف نمی‌شوند — همه گزینه‌ها همیشه نمایش داده می‌شوند
     exclude = exclude or []
-    available = [p for p in PERSON_TYPES if p not in exclude]
+    available = PERSON_TYPES  # تمام گزینه‌ها بدون حذف
     keyboard = []
     for i in range(0, len(available), 2):
         row = [KeyboardButton(text=available[i])]

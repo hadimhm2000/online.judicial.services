@@ -1,3 +1,5 @@
+
+```python
 """
 سناریوی ثبت اظهارنامه در سامانه قضایی ثنا.
 
@@ -46,7 +48,7 @@ class EzhharFatalError(Exception):
 # مقدار value برای نوع نماینده در سامانه
 AGENT_TYPE_VALUES = {
     "مدیرعامل": "0091000010000008",
-    "نماینده":  "0091000010000007",
+    "ناینده":  "0091000010000007",
 }
 
 
@@ -132,17 +134,14 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             await resilient_sleep(sana_page, 3, bot, user_id)
 
             if only_real_declarant:
-                # فقط حقیقی — مستقیم وارد بخش اظهارکننده می‌شویم
                 logging.info("[EZHHAR] only real declarant — skipping start step selection")
             elif has_lawyer:
-                # دارد وکیل + (احتمالاً حقیقی/حقوقی)
                 await sana_page.evaluate('''() => {
                     const rdb = document.querySelector('#rdbLawyerOffer');
                     if (rdb) rdb.click();
                 }''')
                 await asyncio.sleep(2)
             else:
-                # حقوقی بدون وکیل
                 await sana_page.evaluate('''() => {
                     const rdb = document.querySelector('#rdbAgentOffer');
                     if (rdb) rdb.click();
@@ -156,10 +155,8 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             for person in declarants:
                 ptype = person.get("person_type", "شخص حقیقی")
                 if ptype in ("شخص حقیقی", "وکیل"):
-                    # وکیل در بخش اظهارکننده با کدملی حقیقی اضافه می‌شود
-                    # (وکیل بعداً در step وکیل اضافه می‌شود)
                     if ptype == "وکیل":
-                        continue  # وکیل را در step وکیل اضافه می‌کنیم
+                        continue
                     await _click_add_btn(sana_page, bot, user_id)
                     await resilient_sleep(sana_page, 3, bot, user_id)
                     await _fill_real_person(sana_page, person["national_id"], bot, user_id)
@@ -203,15 +200,12 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                     await resilient_sleep(sana_page, 10, bot, user_id)
 
             # ── ۶. مرحله «موضوع اظهارنامه» ──────────────────────────────
-            # این مرحله همیشه باید طی شود (چه اظهارکننده حقیقی باشد چه حقوقی)
             await _click_step_label(sana_page, "موضوع اظهارنامه", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
-            # کلیک «افزودن»
             await _click_add_btn(sana_page, bot, user_id)
             await resilient_sleep(sana_page, 3, bot, user_id)
 
-            # باز کردن dropdown «موضوع» و جستجوی «سایر»
             search_input = sana_page.locator('.ui-select-search').first
             opened = False
             for open_attempt in range(4):
@@ -233,7 +227,6 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                 await asyncio.sleep(3)
 
                 subject_clicked = await sana_page.evaluate('''() => {
-                    // اولویت با آیتم دقیق typeahead که شامل «سایر موضوعات اظهارنامه» است
                     const highlighted = Array.from(document.querySelectorAll('[ng-bind-html*="typeaheadHighlight"]'));
                     const visibleHighlighted = highlighted.filter(el => {
                         const r = el.getBoundingClientRect();
@@ -241,7 +234,6 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                     });
                     if (visibleHighlighted.length > 0) {
                         let target = visibleHighlighted[0];
-                        // کلیک روی والد قابل‌کلیک (ردیف) در صورت وجود، وگرنه خود المان
                         const row = target.closest('a, .ui-select-choices-row, li') || target;
                         row.click();
                         target.click();
@@ -265,7 +257,6 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
 
                 if not subject_clicked:
                     logging.warning("[EZHHAR] گزینه اول dropdown موضوع پیدا/کلیک نشد — تلاش مجدد")
-                    # تلاش دوم: کلیک با locator روی آیتم typeahead
                     try:
                         option_locator = sana_page.locator('[ng-bind-html*="typeaheadHighlight"]').first
                         await option_locator.wait_for(state="visible", timeout=3000)
@@ -276,7 +267,6 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             else:
                 logging.warning("[EZHHAR] dropdown موضوع باز نشد — ادامه بدون انتخاب موضوع")
 
-            # اگر کاربر عنوانی متفاوت از پیش‌فرض انتخاب کرده باشد، در فیلد توضیحات درج می‌شود
             if subject and subject != "سایر":
                 await sana_page.evaluate('''(desc) => {
                     const inp = document.querySelector('input[name="txtDescription"]');
@@ -304,7 +294,6 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             }''', ezhhar_text_html)
             await resilient_sleep(sana_page, 2, bot, user_id)
 
-            # اعمال H3
             await sana_page.evaluate('''() => {
                 const editor = document.querySelector('[contenteditable="true"][ta-bind]');
                 if (editor) {
@@ -336,7 +325,6 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             await resilient_sleep(sana_page, 4, bot, user_id)
 
             # ── ۹. مرحله «منضمات» ────────────────────────────────────────
-            # دانلود تصاویر از تلگرام
             groups_with_paths = []
             for group in attachment_groups:
                 paths = await _download_images(bot, group.get("images", []), user_id)
@@ -346,29 +334,23 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                 await _click_step_box(sana_page, "منضمات", bot, user_id)
                 await resilient_sleep(sana_page, 5, bot, user_id)
 
-                # اگر حقوقی داشتیم، مدرک نمایندگی اجباری است
                 if has_legal_declarant:
-                    # اولین گروه پیوست‌ها را به عنوان مدرک نمایندگی ثبت می‌کنیم
                     proxy_group = groups_with_paths[0] if groups_with_paths else {"title": "مدرک نمایندگی", "paths": []}
                     await _upload_proxy_document(sana_page, proxy_group["paths"], bot, user_id)
                     remaining_groups = groups_with_paths[1:]
                 else:
                     remaining_groups = groups_with_paths
 
-                # اگر وکیل داشتیم، وکالت‌نامه الکترونیک
                 if has_lawyer:
-                    # یافتن اولین وکیل برای شماره قرارداد
                     first_lawyer = next((p for p in declarants if p.get("person_type") == "وکیل"), {})
                     contract_no = first_lawyer.get("contract_number", "")
                     stamp_val = first_lawyer.get("stamp_amount_value", 0)
                     await _upload_electronic_vakalaht(sana_page, contract_no, stamp_val, bot, user_id)
 
-                # سایر پیوست‌ها
                 for group in remaining_groups:
                     if group["paths"]:
                         await _upload_other_attachment(sana_page, group["title"], group["paths"], bot, user_id)
 
-                # پاکسازی فایل‌های موقت
                 for group in groups_with_paths:
                     for p in group["paths"]:
                         try:
@@ -471,26 +453,41 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
-    clicked = await page.evaluate(f'''() => {{
+    clicked = await page.evaluate('''(name) => {
         const heads = Array.from(document.querySelectorAll('.box h5'));
-        const t = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
-        if (t) {{
+        const t = heads.find(el => el.innerText && el.innerText.trim().includes(name));
+        if (t) {
             const box = t.closest('.box');
-            if (box) {{ box.click(); return true; }}
-        }}
+            if (box) { box.click(); return true; }
+        }
         return false;
-    }}''')
+    }''', step_name)
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
+        return
+
+    await asyncio.sleep(1.5)
+    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+    if had_expiry:
+        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
+        await page.evaluate('''(name) => {
+            const heads = Array.from(document.querySelectorAll('.box h5'));
+            const t = heads.find(el => el.innerText && el.innerText.trim().includes(name));
+            if (t) {
+                const box = t.closest('.box');
+                if (box) box.click();
+            }
+        }''', step_name)
+        await asyncio.sleep(1.5)
 
 
 async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
-    clicked = await page.evaluate(f'''() => {{
+    clicked = await page.evaluate('''(name) => {
         const steps = Array.from(document.querySelectorAll('.step'));
-        const t = steps.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
-        if (t) {{ t.click(); return true; }}
+        const t = steps.find(el => el.innerText && el.innerText.trim().includes(name));
+        if (t) { t.click(); return true; }
         return false;
-    }}''')
+    }''', step_name)
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
 
@@ -508,22 +505,20 @@ async def _click_add_btn(page, bot: Bot, user_id: int):
 
 async def _fill_real_person(page, national_id: str, bot: Bot, user_id: int):
     """پر کردن کدملی شخص حقیقی و استعلام"""
-    # پر کردن فیلد کدملی
     for sel in ["#txtRealIrNationalityCode1", "#txtRealIrNationalityCode"]:
         elem_count = await page.locator(sel).count()
         if elem_count > 0:
-            await page.evaluate(f'''() => {{
-                const inp = document.querySelector('{sel}');
-                if (inp && inp.offsetParent !== null) {{
-                    inp.value = "{national_id}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
+            await page.evaluate('''(args) => {
+                const inp = document.querySelector(args.sel);
+                if (inp && inp.offsetParent !== null) {
+                    inp.value = args.value;
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                    inp.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }''', {"sel": sel, "value": national_id})
             await asyncio.sleep(1)
             break
 
-    # استعلام ثنا
     await _query_sana(page, "actions.callNationalityCode", bot, user_id)
 
 
@@ -531,65 +526,57 @@ async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int):
     """پر کردن اطلاعات شخص حقوقی و استعلام"""
     company_id = person.get("company_id", "")
     national_id = person.get("national_id", "")
-    rep_type = person.get("representative_type", "نماینده")
 
-    # انتخاب رادیوباتن «شخص حقوقی» (value=3)
     await page.evaluate('''() => {
         const rdb = document.querySelector('#rdb3, input[value="3"][name="personType"]');
         if (rdb) rdb.click();
     }''')
     await asyncio.sleep(2)
 
-    # انتخاب «غیردولتی / خصوصی» (value=4)
     await page.evaluate('''() => {
         const rdb = document.querySelector('#rdbPrivate, input[value="4"][name="LegalPersonType"]');
         if (rdb) rdb.click();
     }''')
     await asyncio.sleep(2)
 
-    # وارد کردن شناسه ملی شرکت
-    await page.evaluate(f'''() => {{
+    await page.evaluate('''(val) => {
         const inp = document.querySelector('#txtLegalIrNationalityCode');
-        if (inp) {{
-            inp.value = "{company_id}";
-            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-        }}
-    }}''')
+        if (inp) {
+            inp.value = val;
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+    }''', company_id)
     await asyncio.sleep(1)
 
-    # استعلام شرکت
     await _query_sana(page, "actions.callLegalNationalityCode", bot, user_id, is_legal=True)
     await asyncio.sleep(5)
 
-    # وارد کردن کدملی نماینده
-    await page.evaluate(f'''() => {{
+    await page.evaluate('''(val) => {
         const inp = document.querySelector('#txtRealIrNationalityCode, #txtRealIrNationalityCode1');
-        if (inp && inp.offsetParent !== null) {{
-            inp.value = "{national_id}";
-            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-        }}
-    }}''')
+        if (inp && inp.offsetParent !== null) {
+            inp.value = val;
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+    }''', national_id)
     await asyncio.sleep(1)
 
-    # استعلام نماینده
     await _query_sana(page, "actions.callNationalityCode", bot, user_id)
 
 
 async def _fill_lawyer_person(page, national_id: str, bot: Bot, user_id: int):
     """پر کردن کدملی وکیل در step وکیل"""
-    await page.evaluate(f'''() => {{
+    await page.evaluate('''(val) => {
         const inp = document.querySelector('#txtNationalityCode');
-        if (inp) {{
-            inp.value = "{national_id}";
-            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-        }}
-    }}''')
+        if (inp) {
+            inp.value = val;
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+    }''', national_id)
     await asyncio.sleep(1)
 
-    # استعلام وکیل از ثنا
     await _query_sana(page, "actions.getLawyerDataWithSana", bot, user_id)
 
 
@@ -599,30 +586,27 @@ async def _query_sana(page, ng_click: str, bot: Bot, user_id: int, is_legal: boo
     وقتی استعلام موفق باشد، فیلدهای صفحه پر و غیرقابل ویرایش می‌شوند.
     """
     for attempt in range(max_retries):
-        clicked = await page.evaluate(f'''() => {{
-            const btns = Array.from(document.querySelectorAll('button[ng-click*="{ng_click}"]'));
+        clicked = await page.evaluate('''(click_str) => {
+            const btns = Array.from(document.querySelectorAll('button[ng-click*="' + click_str + '"]'));
             const btn = btns.find(b => !b.disabled);
-            if (btn) {{ btn.click(); return true; }}
-            // fallback: دکمه warning با tooltip استعلام
+            if (btn) { btn.click(); return true; }
             const warns = Array.from(document.querySelectorAll('button.btn-warning'));
             const w = warns.find(b => !b.disabled && (
                 (b.getAttribute("tooltip") || "").includes("استعلام") ||
                 (b.getAttribute("title") || "").includes("استعلام")
             ));
-            if (w) {{ w.click(); return true; }}
+            if (w) { w.click(); return true; }
             return false;
-        }}''')
+        }''', ng_click)
 
         if not clicked:
             logging.warning(f"[EZHHAR] دکمه استعلام ({ng_click}) پیدا نشد — تلاش {attempt+1}")
 
         await asyncio.sleep(12)
 
-        # بستن هر پاپ‌آپ خطا
         await _close_popup(page)
         await asyncio.sleep(2)
 
-        # بررسی موفقیت استعلام: فیلد ExtractedFromSana=1 یا disabled
         success = await page.evaluate('''() => {
             const disabled = document.querySelector(
                 'input[ng-disabled*="ExtractedFromSana"][ng-disabled*="1"]'
@@ -633,7 +617,6 @@ async def _query_sana(page, ng_click: str, bot: Bot, user_id: int, is_legal: boo
             logging.info(f"[EZHHAR] استعلام موفق ({ng_click})")
             return
 
-        # retry
         await asyncio.sleep(5)
 
     logging.warning(f"[EZHHAR] استعلام ({ng_click}) پس از {max_retries} تلاش نتیجه نداد")
@@ -695,7 +678,10 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
     این مدرک برای اظهارکننده حقوقی اجباری است.
     """
     try:
-        # انتخاب «تصوير مدرک نمايندگي»
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست در ابتدای آپلود مدرک نمایندگی تمدید شد؛ ادامه از همین‌جا...")
+
         selected = await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
             if (!sel) return false;
@@ -716,7 +702,6 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
             return
         await asyncio.sleep(3)
 
-        # پر کردن txtNo با صفر
         await page.evaluate('''() => {
             const inp = document.querySelector('#txtNo');
             if (inp) {
@@ -726,7 +711,6 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
         }''')
         await asyncio.sleep(1)
 
-        # کلیک دکمه تقویم و انتخاب «امروز»
         await page.evaluate('''() => {
             const calBtn = document.querySelector('button.btn-primary i.glyphicon-calendar');
             if (calBtn) calBtn.closest('button').click();
@@ -739,35 +723,33 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
         }''')
         await asyncio.sleep(1)
 
-        # تعداد صفحات (اگر بیشتر از یک برگ)
         page_count = len(image_paths) if image_paths else 1
         if page_count > 1:
-            await page.evaluate(f'''() => {{
+            await page.evaluate('''(count) => {
                 const inp = document.querySelector('#txt001');
-                if (inp && !(inp.disabled)) {{
-                    inp.value = "{page_count}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                }}
-            }}''')
+                if (inp && !(inp.disabled)) {
+                    inp.value = count;
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                }
+            }''', str(page_count))
             await asyncio.sleep(1)
 
-        # افزودن پیوست
         await page.evaluate('''() => {
             const btn = document.querySelector('#incAttach0');
             if (btn && !btn.disabled) btn.click();
         }''')
         await asyncio.sleep(3)
 
-        # ثبت و ویرایش پیوست
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی مدرک نمایندگی تمدید شد؛ ادامه...")
         await _close_success_popup(page)
         await asyncio.sleep(3)
 
-        # آپلود تصاویر
         if image_paths:
             await page.evaluate('''() => {
                 const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
@@ -783,13 +765,17 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 const btn = document.querySelector('#btnUploadAll');
                 if (btn && !btn.disabled) btn.click();
             }''')
-            await asyncio.sleep(30)
+            had_expiry = await resilient_sleep(page, 30, bot, user_id)
+            if had_expiry:
+                logging.info("[EZHHAR][منضمات] نشست حین آپلود فایل‌های مدرک نمایندگی تمدید شد.")
 
             await page.evaluate('''() => {
                 const btn = document.querySelector('#btnApplyAll');
                 if (btn && !btn.disabled) btn.click();
             }''')
-            await asyncio.sleep(10)
+            had_expiry = await resilient_sleep(page, 10, bot, user_id)
+            if had_expiry:
+                logging.info("[EZHHAR][منضمات] نشست حین «اعمال همه» برای مدرک نمایندگی تمدید شد.")
 
         logging.info("[EZHHAR] مدرک نمایندگی با موفقیت آپلود شد")
 
@@ -800,6 +786,10 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
 async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_value: int, bot: Bot, user_id: int):
     """آپلود وکالت‌نامه الکترونیک (مانند اعلام وکالت)"""
     try:
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست در ابتدای ثبت وکالت‌نامه الکترونیک تمدید شد؛ ادامه از همین‌جا...")
+
         selected = await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
             if (!sel) return false;
@@ -821,14 +811,14 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
         await asyncio.sleep(3)
 
         if contract_number:
-            await page.evaluate(f'''() => {{
+            await page.evaluate('''(val) => {
                 const inp = document.querySelector('#txtNo');
-                if (inp) {{
-                    inp.value = "{contract_number}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
+                if (inp) {
+                    inp.value = val;
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                    inp.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }''', contract_number)
             await asyncio.sleep(1)
         else:
             await page.evaluate('''() => {
@@ -842,22 +832,24 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
             await asyncio.sleep(1)
 
         if lawyer_amount_value > 0:
-            await page.evaluate(f'''() => {{
+            await page.evaluate('''(val) => {
                 const inp = document.querySelector('#txtLawyerAmount');
-                if (inp) {{
+                if (inp) {
                     inp.removeAttribute('disabled');
-                    inp.value = "{lawyer_amount_value}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
+                    inp.value = val;
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                    inp.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }''', str(lawyer_amount_value))
             await asyncio.sleep(1)
 
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی وکالت‌نامه الکترونیک تمدید شد؛ ادامه...")
         await _close_success_popup(page)
 
     except Exception as e:
@@ -869,7 +861,10 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
     if not image_paths:
         return
     try:
-        # انتخاب «ساير ضمائم»
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست در ابتدای آپلود «{title}» تمدید شد؛ ادامه از همین‌جا...")
+
         await page.evaluate('''() => {
             const sel = document.querySelector('#attachmentType');
             if (sel) {
@@ -883,7 +878,6 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
         }''')
         await asyncio.sleep(3)
 
-        # پر کردن txtNo با صفر (فیلد الزامی برای ادامه روند)
         await page.evaluate('''() => {
             const inp = document.querySelector('#txtNo');
             if (inp) {
@@ -894,22 +888,21 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
         }''')
         await asyncio.sleep(1)
 
-        escaped = title.replace("`", "'").replace("\\", "")
-        await page.evaluate(f'''() => {{
+        await page.evaluate('''(t) => {
             const inp = document.querySelector('#txtName');
-            if (inp) {{
-                inp.value = "{escaped}";
-                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            }}
-        }}''')
+            if (inp) {
+                inp.value = t;
+                inp.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+        }''', title)
 
-        await page.evaluate(f'''() => {{
+        await page.evaluate('''(count) => {
             const inp = document.querySelector('#txt001');
-            if (inp) {{
-                inp.value = "{len(image_paths)}";
-                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            }}
-        }}''')
+            if (inp) {
+                inp.value = count;
+                inp.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+        }''', str(len(image_paths)))
 
         await page.evaluate('''() => {
             const btn = document.querySelector('#incAttach0');
@@ -921,11 +914,12 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست حین ذخیره‌ی «{title}» تمدید شد؛ ادامه...")
         await _close_success_popup(page)
         await asyncio.sleep(3)
 
-        # ویرایش و آپلود فایل
         await page.evaluate('''() => {
             const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
             if (btns.length > 0) btns[btns.length - 1].click();
@@ -940,13 +934,17 @@ async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot
             const btn = document.querySelector('#btnUploadAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(30)
+        had_expiry = await resilient_sleep(page, 30, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست حین آپلود فایل‌های «{title}» تمدید شد.")
 
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(10)
+        had_expiry = await resilient_sleep(page, 10, bot, user_id)
+        if had_expiry:
+            logging.info(f"[EZHHAR][منضمات] نشست حین «اعمال همه» برای «{title}» تمدید شد.")
 
     except Exception as e:
         logging.error(f"[EZHHAR] خطا در آپلود پیوست «{title}»: {e}")
@@ -1103,3 +1101,5 @@ async def _download_images(bot: Bot, file_ids: list, user_id: int) -> list:
         except Exception as e:
             logging.error(f"[EZHHAR] خطا در دانلود تصویر {i}: {e}")
     return paths
+```
+ 

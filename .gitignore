@@ -1,81 +1,48 @@
+
+```text
+# Environment variables
+.env
+.env.example
+
+# Credentials
+google-credentials.json
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
 venv/
 env/
-ENV/
-.venv
+.venv/
 
-# Environment variables
+# Sensitive user files (Security Fix)
+receipt_*.jpg
+lavayeh_img_*.jpg
+ezhhar_img_*.jpg
+lavayeh_receipt_*.jpg
+*_processed.jpg
+*_compressed.jpg
+
+# Temp/Bulk files
+bulk_*.xlsx
+sample_*.xlsx
+*.pdf
+
+# Environment & Secrets
 .env
-.env.local
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# Telegram Bot specific
-bot_data/
-sessions/
-
-# Google credentials (باید از environment variable استفاده شود)
 google-credentials.json
 
-# Playwright
-.playwright/
+# Database & State
+bot_state.db
+pending_payments.json
 
-# Test outputs
-test_output/
-screenshots/
-
-# Data files (اگر حجم زیاد دارند)
-all_units.json
-
-# Temporary files
-*.tmp
-temp/
-.temp/
-
-# Node.js (برای Next.js)
-node_modules/
-.next/
-out/
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Coverage
-.coverage
-htmlcov/
+# User Uploaded Files (Temp)
+receipt_*.jpg
+lavayeh_img_*.jpg
+ezhhar_img_*.jpg
+*_processed.jpg
+*_compressed.jpg
+bulk_*.xlsx
+sample_*.xlsx
+*.pdf
+```

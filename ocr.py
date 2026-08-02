@@ -1,12 +1,10 @@
-"""
-تایید خودکار فیش پرداخت با OCR چند لایه (Tesseract + OpenCV)
-این ماژول از چندین تکنیک پیش‌پردازش تصویر برای افزایش دقت OCR استفاده می‌کند.
+
 """
 import logging
 import re
 import os
 
-# ================= کتابخانه‌های اختیاری OCR فیش پرداخت =================
+# ================= کتابخانه‌های OCR =================
 HAS_OCR = False
 HAS_OPENCV = False
 
@@ -14,31 +12,26 @@ try:
     from PIL import Image, ImageEnhance, ImageFilter
     import pytesseract
     HAS_OCR = True
-    logging.info("✅ PIL و Pytesseract با موفقیت بارگذاری شد!")
-except ImportError as e:
-    logging.warning(f"⚠️ خطا در بارگذاری PIL/Pytesseract: {e}")
+except ImportError:
+    logging.warning("⚠️ خطا در بارگذاری PIL/Pytesseract. OCR غیرفعال است.")
 
 try:
     import cv2
     import numpy as np
     HAS_OPENCV = True
-    logging.info("✅ OpenCV با موفقیت بارگذاری شد!")
 except ImportError:
     logging.warning("⚠️ OpenCV یافت نشد. از پیش‌پردازش ساده استفاده می‌شود.")
 
-# تلاش برای یافتن مسیر Tesseract در ویندوز
+# مسیر Tesseract در ویندوز
 if os.name == 'nt':
     possible_paths = [
         r'C:\Program Files\Tesseract-OCR\tesseract.exe',
         r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-        r'C:\Users\Administrator\AppData\Local\Programs\Tesseract-OCR\tesseract.exe',
     ]
     for path in possible_paths:
         if os.path.exists(path):
             try:
-                import pytesseract
                 pytesseract.pytesseract.tesseract_cmd = path
-                logging.info(f"✅ Tesseract پیدا شد: {path}")
                 break
             except:
                 pass
@@ -46,43 +39,41 @@ if os.name == 'nt':
 
 def preprocess_image_opencv(image_path):
     """
-    پیش‌پردازش پیشرفته تصویر با OpenCV برای بهبود دقت OCR
-    شامل: تبدیل به خاکستری، اعمال فیلتر، threshold، و شارپنینگ
+    پیش‌پردازش فوق‌العاده برای فیش‌های بانکی:
+    ۱. بزرگ‌نمایی (Upscale) برای خوانایی بهتر متن‌های ریز
+    ۲. تبدیل به خاکستری
+    ۳. آستانه‌گذاری تطبیقی (Adaptive Thresholding) که برای بک‌گراند‌های رنگی فیش‌ها عالی است
     """
     if not HAS_OPENCV:
         return None
     
     try:
-        # خواندن تصویر
         img = cv2.imread(image_path)
         if img is None:
-            logging.error(f"❌ نمی‌توان تصویر را خواند: {image_path}")
             return None
         
-        # تبدیل به خاکستری
+        # ۱. بزرگ‌نمایی 1.5 برابری (مهم برای متن‌های ریز موبایل)
+        img = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        
+        # ۲. تبدیل به خاکستری
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
-        # اعمال فیلتر برای کاهش نویز
-        denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-        
-        # افزایش کنتراست با CLAHE
+        # ۳. افزایش کنتراست (CLAHE)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
+        enhanced = clahe.apply(gray)
         
-        # اعمال Threshold برای تبدیل به سیاه و سفید
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # ۴. حذف نویز
+        denoised = cv2.fastNlMeansDenoising(enhanced, None, 7, 7, 21)
         
-        # شارپنینگ برای وضوح بیشتر
-        kernel = np.array([[-1, -1, -1],
-                          [-1,  9, -1],
-                          [-1, -1, -1]])
-        sharpened = cv2.filter2D(binary, -1, kernel)
+        # ۵. آستانه‌گذاری تطبیقی (علیه بک‌گراند‌های متغیر)
+        binary = cv2.adaptiveThreshold(
+            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 31, 10
+        )
         
-        # ذخیره موقت
         temp_path = image_path.replace('.jpg', '_processed.jpg').replace('.png', '_processed.png')
-        cv2.imwrite(temp_path, sharpened)
+        cv2.imwrite(temp_path, binary)
         
-        logging.info(f"✅ پیش‌پردازش OpenCV انجام شد: {temp_path}")
         return temp_path
         
     except Exception as e:
@@ -91,256 +82,179 @@ def preprocess_image_opencv(image_path):
 
 
 def preprocess_image_pil(image_path):
-    """
-    پیش‌پردازش ساده با PIL (زمانی که OpenCV موجود نیست)
-    """
     try:
         img = Image.open(image_path)
-        
-        # تبدیل به خاکستری
         img = img.convert('L')
-        
-        # افزایش کنتراست
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.0)
-        
-        # افزایش وضوح
-        enhancer = ImageEnhance.Sharpness(img)
-        img = enhancer.enhance(2.0)
-        
-        # اعمال فیلتر
+        img = enhancer.enhance(2.5)
         img = img.filter(ImageFilter.SHARPEN)
-        
-        # ذخیره موقت
         temp_path = image_path.replace('.jpg', '_processed.jpg').replace('.png', '_processed.png')
         img.save(temp_path)
-        
-        logging.info(f"✅ پیش‌پردازش PIL انجام شد: {temp_path}")
         return temp_path
-        
     except Exception as e:
         logging.error(f"❌ خطا در پیش‌پردازش PIL: {e}")
         return image_path
 
 
 def normalize_persian_text(text):
-    """
-    نرمال‌سازی متن فارسی: تبدیل اعداد فارسی/عربی به انگلیسی و حذف کاراکترهای اضافی
-    """
-    # اعداد فارسی و عربی
+    """نرمال‌سازی اعداد و حذف فاصله‌ها"""
     persian_digits = '۰۱۲۳۴۵۶۷۸۹'
     arabic_digits = '٠١٢٣٤٥٦٧٨٩'
     english_digits = '0123456789'
-    
-    # ایجاد جدول ترجمه
-    translation_table = str.maketrans(
-        persian_digits + arabic_digits,
-        english_digits + english_digits
-    )
-    
-    # اعمال ترجمه
+    translation_table = str.maketrans(persian_digits + arabic_digits, english_digits + english_digits)
     normalized = text.translate(translation_table)
-    
-    # حذف کاراکترهای اضافی
-    normalized = normalized.replace(" ", "").replace(",", "").replace("/", "")
-    normalized = normalized.replace("\n", " ").replace("\r", "").replace("\t", " ")
-    normalized = normalized.replace("\u200c", "").replace("\u200f", "").replace("\u200e", "")
-    normalized = normalized.replace("_", "").replace("-", "").replace(".", "")
-    
+    normalized = normalized.replace(" ", "").replace(",", "").replace("/", "").replace("-", "").replace("_", "").replace(".", "")
     return normalized
 
 
-def extract_numbers(text):
-    """
-    استخراج تمام اعداد از متن (حتی اعداد با جداکننده)
-    """
-    # حذف کاراکترهای غیر عددی به جز اعداد
+def extract_all_digits(text):
+    """استخراج تمام ارقام به صورت یک رشته پیوسته برای تطبیق شماره کارت"""
     normalized = normalize_persian_text(text)
-    
-    # یافتن تمام اعداد
+    return re.sub(r'[^\d]', '', normalized)
+
+
+def extract_amounts(text):
+    """استخراج لیست مبالغ (اعداد ۴ رقمی به بالا)"""
+    normalized = normalize_persian_text(text)
     numbers = re.findall(r'\d+', normalized)
-    
-    return [int(n) for n in numbers if len(n) >= 3]  # فقط اعداد 3 رقمی یا بیشتر
+    amounts = []
+    for n in numbers:
+        if len(n) >= 4:
+            # تلاش برای بازیافت اعدادی که ممیز یا جداکننده داشته‌اند
+            amounts.append(int(n))
+            if len(n) > 4:
+                # ممکن است تسراکت 650000 را 65,000 خوانده باشد و ما کاما را حذف کرده باشیم
+                pass 
+    return amounts
 
 
 def verify_payment_receipt(photo_path, expected_amount, card_number):
     """
-    بررسی هوشمند و چند لایه تصویر فیش واریزی
-    
-    Args:
-        photo_path: مسیر فایل تصویر
-        expected_amount: مبلغ مورد انتظار به تومان
-        card_number: شماره کارت مقصد
-    
-    Returns:
-        (bool, str): وضعیت تایید و پیام توضیحات
+    بررسی هوشمند فیش پرداخت با منطق سخت‌گیرانه ضد فیک
     """
     if not HAS_OCR:
-        logging.warning("❌ OCR engine غیرفعال است - کتابخانه‌های لازم نصب نیستند")
-        return False, "⚠️ سیستم تایید خودکار غیرفعال است. فیش شما برای تایید دستی ارسال می‌شود."
-    
+        return False, "⚠️ سیستم OCR غیرفعال است. فیش برای تایید دستی ارسال شد."
+
     try:
-        # مرحله 1: پیش‌پردازش تصویر
-        processed_path = None
-        if HAS_OPENCV:
-            processed_path = preprocess_image_opencv(photo_path)
+        # مرحله ۱: پیش‌پردازش تصویر
+        processed_path = preprocess_image_opencv(photo_path) if HAS_OPENCV else preprocess_image_pil(photo_path)
+        img = Image.open(processed_path or photo_path)
         
-        if not processed_path:
-            processed_path = preprocess_image_pil(photo_path)
-        
-        # مرحله 2: OCR با زبان‌های مختلف
-        texts = []
-        
-        # تلاش 1: فارسی + انگلیسی
+        # مرحله ۲: OCR با تنظیمات بهینه (PSM 6 برای بلوک متن یکنواخت)
         try:
-            img = Image.open(processed_path or photo_path)
-            text_fas_eng = pytesseract.image_to_string(img, lang='fas+eng')
-            texts.append(text_fas_eng)
-            logging.info(f"📝 OCR (fas+eng):\n{text_fas_eng[:200]}")
+            text_raw = pytesseract.image_to_string(img, lang='fas+eng', config='--psm 6')
         except Exception as e:
-            logging.warning(f"⚠️ OCR با fas+eng ناموفق: {e}")
+            logging.warning(f"⚠️ OCR ناموفق: {e}")
+            text_raw = ""
+
+        normalized_text = normalize_persian_text(text_raw).lower()
+        clean_digits = extract_all_digits(text_raw)  # تمام اعداد پشت سر هم
         
-        # تلاش 2: فقط فارسی
-        try:
-            img = Image.open(processed_path or photo_path)
-            text_fas = pytesseract.image_to_string(img, lang='fas')
-            texts.append(text_fas)
-            logging.info(f"📝 OCR (fas):\n{text_fas[:200]}")
-        except Exception as e:
-            logging.warning(f"⚠️ OCR با fas ناموفق: {e}")
-        
-        # تلاش 3: فقط انگلیسی
-        try:
-            img = Image.open(processed_path or photo_path)
-            text_eng = pytesseract.image_to_string(img, lang='eng')
-            texts.append(text_eng)
-            logging.info(f"📝 OCR (eng):\n{text_eng[:200]}")
-        except Exception as e:
-            logging.warning(f"⚠️ OCR با eng ناموفق: {e}")
-        
-        if not texts:
-            return False, "❌ خطا در خواندن تصویر. لطفا تصویر واضح‌تری ارسال کنید."
-        
-        # ترکیب تمام متن‌ها
-        combined_text = " ".join(texts)
-        normalized_text = normalize_persian_text(combined_text).lower()
-        
-        logging.info(f"📊 متن نرمال شده ({len(normalized_text)} کاراکتر): {normalized_text[:300]}")
-        
-        # مرحله 3: استخراج اعداد
-        all_numbers = extract_numbers(combined_text)
-        logging.info(f"🔢 اعداد یافت شده: {all_numbers}")
-        
-        # مرحله 4: بررسی مبلغ
-        # تومان
-        expected_toman = expected_amount
-        # ریال (تومان × 10)
-        expected_rial = expected_amount * 10
+        logging.info(f"📊 متن خروجی OCR:\n{text_raw[:500]}")
+        logging.info(f"🔢 تمام ارقام پیوسته: {clean_digits[:100]}")
+
+        # مرحله ۳: بررسی مبلغ
+        expected_toman = int(expected_amount)
+        expected_rial = expected_toman * 10
         
         has_amount = False
-        found_amount = None
+        found_amounts = []
         
-        # بررسی مبلغ در لیست اعداد
-        for num in all_numbers:
-            # بررسی دقیق
+        # جستجوی مبلغ در اعداد جدا شده
+        amounts_found = extract_amounts(text_raw)
+        for num in amounts_found:
+            found_amounts.append(num)
             if num == expected_toman or num == expected_rial:
                 has_amount = True
-                found_amount = num
-                logging.info(f"✅ مبلغ دقیق یافت شد: {num}")
                 break
-            
-            # بررسی تقریبی (±5%)
-            if expected_toman > 0:
-                diff_percent_toman = abs(num - expected_toman) / expected_toman * 100
-                diff_percent_rial = abs(num - expected_rial) / expected_rial * 100
-                
-                if diff_percent_toman <= 5 or diff_percent_rial <= 5:
-                    has_amount = True
-                    found_amount = num
-                    logging.info(f"✅ مبلغ تقریبی یافت شد: {num} (انتظار: {expected_toman} تومان یا {expected_rial} ریال)")
-                    break
-        
-        # بررسی مبلغ در متن (برای اعداد با جداکننده)
-        if not has_amount:
-            # حذف تمام کاراکترهای غیر عددی و جستجو
-            clean_text = re.sub(r'[^\d]', '', normalized_text)
-            
-            if str(expected_toman) in clean_text or str(expected_rial) in clean_text:
+            # تطبیق ۹۰٪ (برای خطاهای تسراکت مثل خواندن 5 به جای 6)
+            diff_toman = abs(num - expected_toman) / expected_toman * 100 if expected_toman > 0 else 100
+            diff_rial = abs(num - expected_rial) / expected_rial * 100 if expected_rial > 0 else 100
+            if diff_toman <= 5 or diff_rial <= 5:
                 has_amount = True
-                found_amount = expected_toman
-                logging.info(f"✅ مبلغ در متن پیوسته یافت شد")
-        
-        # مرحله 5: بررسی شماره کارت
+                break
+
+        # جستجوی مبلغ در رشته پیوسته اعداد
+        if not has_amount:
+            if str(expected_toman) in clean_digits or str(expected_rial) in clean_digits:
+                has_amount = True
+
+        # مرحله ۴: بررسی شماره کارت
         has_card = False
-        last_4_card = card_number[-4:] if card_number else ""
-        last_6_card = card_number[-6:] if card_number and len(card_number) >= 6 else ""
+        last_4 = card_number[-4:] if len(card_number) >= 4 else ""
+        last_6 = card_number[-6:] if len(card_number) >= 6 else ""
+        last_8 = card_number[-8:] if len(card_number) >= 8 else ""
         
-        if last_4_card and (last_4_card in normalized_text or last_4_card in str(all_numbers)):
-            has_card = True
-            logging.info(f"✅ 4 رقم آخر کارت یافت شد: {last_4_card}")
-        elif last_6_card and (last_6_card in normalized_text):
-            has_card = True
-            logging.info(f"✅ 6 رقم آخر کارت یافت شد: {last_6_card}")
-        
-        # مرحله 6: بررسی کلمات کلیدی
-        keywords_payment = [
-            "رسید", "انتقال", "موفق", "پیگیری", "ارجاع", "شناسه", 
-            "عملیات", "بانک", "واریز", "کارت", "شماره", "سند",
-            "پایا", "ساتنا", "مبلغ", "تراکنش", "پرداخت", "successful"
-        ]
-        
-        keyword_matches = [kw for kw in keywords_payment if kw in normalized_text or kw in combined_text.lower()]
+        # برای جلوگیری از False Positive، شماره کارت را در رشته پیوسته اعداد می‌گردیم
+        if last_4 and len(last_4) == 4:
+            # گاهی تسراکت 6 را 0 می‌خواند یا برعکس، جستجوی فازی برای ۴ رقم آخر
+            possible_last_4 = [
+                last_4,
+                last_4.replace('6', '0'),
+                last_4.replace('0', '6'),
+                last_4.replace('5', '6'),
+                last_4.replace('1', '7'),
+            ]
+            for p4 in possible_last_4:
+                if p4 in clean_digits:
+                    has_card = True
+                    break
+            
+            # بررسی ۶ رقم آخر دقیق
+            if not has_card and last_6 in clean_digits:
+                has_card = True
+
+        # مرحله ۵: بررسی کلمات کلیدی بانکی
+        keywords_payment = ["رسید", "انتقال", "موفق", "پیگیری", "ارجاع", "شناسه", "بانک", "واریز", "پایا", "ساتنا", "تراکنش", "successful", "payment", "transfer"]
+        keyword_matches = [kw for kw in keywords_payment if kw in normalized_text or kw in text_raw.lower()]
         keyword_count = len(keyword_matches)
-        
-        logging.info(f"🔑 کلمات کلیدی یافت شده ({keyword_count}): {keyword_matches}")
-        
-        # مرحله 7: تصمیم‌گیری نهایی
+
+        # مرحله ۶: تصمیم‌گیری نهایی (منطق ضد فیک)
+        # برای تایید فیش: مبلغ (اجباری) + شماره کارت (اجباری) + حداقل ۱ کلمه کلیدی
         score = 0
         reasons = []
         
         if has_amount:
-            score += 60
-            reasons.append(f"✓ مبلغ صحیح ({found_amount})")
-        
+            score += 50
+            reasons.append("✓ مبلغ صحیح")
         if has_card:
-            score += 25
-            reasons.append(f"✓ شماره کارت")
-        
-        if keyword_count >= 3:
-            score += 15
-            reasons.append(f"✓ {keyword_count} کلمه کلیدی")
-        elif keyword_count >= 1:
+            score += 40
+            reasons.append("✓ شماره کارت تطبیق دارد")
+        if keyword_count >= 2:
             score += 10
-            reasons.append(f"✓ {keyword_count} کلمه کلیدی")
+            reasons.append(f"✓ شامل کلمات بانکی ({keyword_count} مورد)")
         
-        logging.info(f"📊 امتیاز نهایی: {score}/100")
-        logging.info(f"📋 دلایل: {', '.join(reasons)}")
-        
-        # حداقل امتیاز برای تایید: 70
-        if score >= 70:
+        logging.info(f"📊 امتیاز نهایی OCR: {score}/100 | مبلغ: {has_amount} | کارت: {has_card}")
+
+        # شرط تایید: حداقل ۸۰ امتیاز (یعنی حتماً مبلغ + کارت خوانده شده باشد)
+        if has_amount and has_card and score >= 80:
             detail = f"✅ رسید پرداخت تایید شد!\n\n📊 امتیاز: {score}/100\n📝 {', '.join(reasons)}"
             return True, detail
-        
-        # اگر مبلغ درست است ولی امتیاز کم است
-        if has_amount and score >= 60:
-            detail = f"✅ رسید پرداخت تایید شد (بر اساس مبلغ)\n\n⚠️ امتیاز: {score}/100\n📝 {', '.join(reasons)}\n\nتوجه: برخی جزئیات تشخیص داده نشد ولی مبلغ صحیح است."
-            return True, detail
-        
-        # رد شدن
+            
+        # اگر مبلغ درست باشد اما کارت خوانده نشود (احتمالا عکس بد است یا فیک است)
+        if has_amount and not has_card:
+            detail = "❌ مبلغ درست است اما شماره کارت مقصد در فیش شما مشخص نیست!\n\n⚠️ لطفا تصویر واضح‌تری ارسال کنید."
+            return False, detail
+            
+        # در غیر این صورت (مبلغ اشتباه است)
         missing = []
         if not has_amount:
-            missing.append("❌ مبلغ صحیح")
-        if not has_card:
-            missing.append("⚠️ شماره کارت")
-        if keyword_count < 1:
-            missing.append("⚠️ کلمات کلیدی رسید")
-        
-        detail = f"❌ رسید تایید نشد\n\n📊 امتیاز: {score}/100\n\nموارد یافت نشده:\n" + "\n".join(missing)
-        detail += f"\n\n💡 انتظار: {expected_toman:,} تومان"
-        detail += f"\n🔢 اعداد یافت شده: {', '.join([f'{n:,}' for n in all_numbers[:10]])}"
-        
+            missing.append(f"❌ مبلغ (انتظار: {expected_toman:,} تومان)\n🔢 اعداد یافت شده: {found_amounts[:5]}")
+        if not has_card and not has_amount:
+            missing.append("❌ شماره کارت")
+            
+        detail = "❌ رسید تایید نشد.\n\nموارد یافت نشده:\n" + "\n".join(missing)
         return False, detail
         
     except Exception as ocr_err:
         logging.error(f"❌ خطای کلی در OCR: {ocr_err}", exc_info=True)
-        return False, f"❌ خطا در پردازش تصویر: {str(ocr_err)}\n\nلطفا تصویر واضح‌تری ارسال کنید یا با ادمین تماس بگیرید."
+        return False, "❌ خطا در پردازش تصویر. لطفا تصویر واضح‌تری ارسال کنید."
+    finally:
+        # پاکسازی فایل‌های موقت
+        if 'processed_path' in locals() and processed_path and os.path.exists(processed_path):
+            try:
+                os.remove(processed_path)
+            except:
+                pass
+```
+ 

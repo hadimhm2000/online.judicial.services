@@ -1,3 +1,5 @@
+
+```python
 """
 سناریوی کامل ثبت لایحه در سامانه قضایی ثنا.
 """
@@ -80,7 +82,6 @@ async def process_lavayeh_task(data: dict, bot: Bot):
     attachment_groups = data.get("lavayeh_attachments", [])
     has_images    = len(attachment_groups) > 0
     total_image_count = sum(len(g.get("images", [])) for g in attachment_groups)
-    total_image_count = sum(len(g.get("images", [])) for g in attachment_groups)
     
     # بررسی روش ثبت: شماره پرونده یا شماره بایگانی
     tracking_method = data.get("tracking_method", "case_number")
@@ -133,27 +134,22 @@ async def process_lavayeh_task(data: dict, bot: Bot):
             # بررسی روش ثبت: شماره پرونده یا شماره بایگانی
             if tracking_method == "archive_number":
                 # مسیر شماره بایگانی
-                # کلیک روی رادیو باتن شماره بایگانی
                 await sana_page.evaluate('''() => {
                     const rdb = document.querySelector('input[type="radio"][name="rdbCaseInfo"][value="2"]#rdbCaseInfo2');
                     if (rdb) rdb.click();
                 }''')
                 await resilient_sleep(sana_page, 2, bot, user_id)
                 
-                # وارد کردن کد ۵ رقمی واحد قضایی (بر اساس شعبه انتخابی)
                 if branch_code:
                     await _fill_input(sana_page, "#txtCourtCode", branch_code, bot, user_id)
                     await resilient_sleep(sana_page, 2, bot, user_id)
                 
-                # وارد کردن شماره بایگانی
                 await _fill_input(sana_page, "#txtCaseArchiveNo", archive_number, bot, user_id)
                 await resilient_sleep(sana_page, 1, bot, user_id)
                 
-                # کلیک روی دکمه صحت‌سنجی
                 await _click_validate_with_retry_archive(sana_page, bot, user_id)
                 await resilient_sleep(sana_page, 10, bot, user_id)
                 
-                # بررسی موفقیت
                 table_ok = await _wait_for_case_table(sana_page, bot, user_id)
                 if not table_ok:
                     await bot.send_message(
@@ -173,7 +169,6 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                     )
                     return
             else:
-                # مسیر شماره پرونده (کد قبلی)
                 await _fill_input(sana_page, "#txtCaseNo", tracking_code, bot, user_id)
                 await resilient_sleep(sana_page, 1, bot, user_id)
 
@@ -213,11 +208,9 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                 ptype = person.get("person_type", "شخص حقیقی")
 
                 if ptype == "وکیل":
-                    # برای وکیل از رادیو باتن value="6" استفاده می‌کنیم
                     await _click_add_person(sana_page, bot, user_id)
                     await resilient_sleep(sana_page, 3, bot, user_id)
 
-                    # کلیک روی رادیو باتن وکیل — با fallback
                     await sana_page.evaluate('''() => {
                         const rdb = document.querySelector('input[type="radio"][name="personType"][value="6"]#rdb6');
                         if (rdb) {
@@ -230,7 +223,6 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                     await resilient_sleep(sana_page, 3, bot, user_id)
                     await wait_for_angular_idle(sana_page)
 
-                    # پر کردن کدملی وکیل با روش چندگانه
                     filled = await _fill_national_id_field(sana_page, person["national_id"], bot, user_id)
                     if not filled:
                         logging.error(
@@ -276,13 +268,13 @@ async def process_lavayeh_task(data: dict, bot: Bot):
 
                     rep_type = person.get("representative_type", "نماینده")
                     agent_value = AGENT_TYPE_VALUES.get(rep_type, "0091000010000007")
-                    await sana_page.evaluate(f'''() => {{
+                    await sana_page.evaluate('''(val) => {
                         const sel = document.querySelector('select[ng-model="viewModel.currentDeclarantPerson.AgentTypeId"]');
-                        if (sel) {{
-                            sel.value = "{agent_value}";
+                        if (sel) {
+                            sel.value = val;
                             sel.dispatchEvent(new Event("change"));
-                        }}
-                    }}''')
+                        }
+                    }''', agent_value)
                     await resilient_sleep(sana_page, 1, bot, user_id)
 
                     await _fill_input(sana_page, "#txtRealIrNationalityCode", person["national_id"], bot, user_id)
@@ -373,7 +365,18 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                         note=f"آپلود پیوست‌ها ناموفق (کد لایحه: {lavayeh_bill_no})"
                     )
 
-                await _click_goto_main(sana_page, bot, user_id)
+                await _close_success_popup(sana_page)
+                await _close_error_popup(sana_page)
+                await asyncio.sleep(1)
+                await wait_for_angular_idle(sana_page)
+                await asyncio.sleep(1)
+
+                logging.info(f"[LAVAYEH] پیوست‌ها تمام شد، بازگشت به فهرست... (user={user_id})")
+                goto_ok = await _click_goto_main(sana_page, bot, user_id)
+                if not goto_ok:
+                    logging.warning(f"[LAVAYEH] بازگشت به فهرست بعد از منضمات ناموفق (user={user_id})")
+                    await sana_page.reload()
+                    await asyncio.sleep(5)
                 await resilient_sleep(sana_page, 4, bot, user_id)
 
             await _click_step_box(sana_page, "آماده سازي جهت محاسبه هزينه و ارسال", bot, user_id)
@@ -411,7 +414,6 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                 f"{tracking_code} | کد لایحه: {lavayeh_bill_no}"
                 if lavayeh_bill_no else tracking_code
             )
-            # ── ارسال نتیجه به همراه اطلاعات لازم برای مرحله امضا ──────
             await send_lavayeh_result(
                 bot, user_id, pdf_path, court_total,
                 tracking_code=combined_tracking,
@@ -473,12 +475,12 @@ async def process_lavayeh_task(data: dict, bot: Bot):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _click_menu_item(page, text: str, bot: Bot, user_id: int):
-    clicked = await page.evaluate(f'''() => {{
+    clicked = await page.evaluate('''(txt) => {
         const links = Array.from(document.querySelectorAll('a.list-group-item'));
-        const target = links.find(el => el.innerText && el.innerText.trim().includes("{text}"));
-        if (target) {{ target.click(); return true; }}
+        const target = links.find(el => el.innerText && el.innerText.trim().includes(txt));
+        if (target) { target.click(); return true; }
         return false;
-    }}''')
+    }''', text)
     if not clicked:
         await safe_click_by_text(page, text, bot, user_id)
 
@@ -507,21 +509,21 @@ async def _select_bill_type(page, search_kw: str, row_idx: int, bot: Bot, user_i
     await search_input.type(search_kw, delay=150)
     await asyncio.sleep(2)
 
-    clicked = await page.evaluate(f'''(idx) => {{
+    clicked = await page.evaluate('''(idx) => {
         const choices = Array.from(document.querySelectorAll('.ui-select-choices-row, .ui-select-choices div[ng-repeat]'));
-        const visible = choices.filter(el => {{
+        const visible = choices.filter(el => {
             const rect = el.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
-        }});
-        if (visible.length > idx) {{ visible[idx].click(); return true; }}
+        });
+        if (visible.length > idx) { visible[idx].click(); return true; }
         const lis = Array.from(document.querySelectorAll('.ui-select-choices li'));
-        const visLis = lis.filter(el => {{
+        const visLis = lis.filter(el => {
             const rect = el.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
-        }});
-        if (visLis.length > idx) {{ visLis[idx].click(); return true; }}
+        });
+        if (visLis.length > idx) { visLis[idx].click(); return true; }
         return false;
-    }}''', row_idx)
+    }''', row_idx)
 
     if not clicked:
         logging.warning(f"[LAVAYEH] نتوانست ردیف {row_idx} برای '{search_kw}' را کلیک کند")
@@ -553,26 +555,41 @@ async def _click_taqdim_lavayeh(page, bot: Bot, user_id: int):
 
 
 async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
-    clicked = await page.evaluate(f'''() => {{
+    clicked = await page.evaluate('''(name) => {
         const heads = Array.from(document.querySelectorAll('.box h5'));
-        const target = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
-        if (target) {{
+        const target = heads.find(el => el.innerText && el.innerText.trim().includes(name));
+        if (target) {
             const box = target.closest('.box');
-            if (box) {{ box.click(); return true; }}
-        }}
+            if (box) { box.click(); return true; }
+        }
         return false;
-    }}''')
+    }''', step_name)
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
+        return
+
+    await asyncio.sleep(1.5)
+    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+    if had_expiry:
+        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
+        await page.evaluate('''(name) => {
+            const heads = Array.from(document.querySelectorAll('.box h5'));
+            const target = heads.find(el => el.innerText && el.innerText.trim().includes(name));
+            if (target) {
+                const box = target.closest('.box');
+                if (box) box.click();
+            }
+        }''', step_name)
+        await asyncio.sleep(1.5)
 
 
 async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
-    clicked = await page.evaluate(f'''() => {{
+    clicked = await page.evaluate('''(name) => {
         const steps = Array.from(document.querySelectorAll('.step'));
-        const target = steps.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
-        if (target) {{ target.click(); return true; }}
+        const target = steps.find(el => el.innerText && el.innerText.trim().includes(name));
+        if (target) { target.click(); return true; }
         return false;
-    }}''')
+    }''', step_name)
     if not clicked:
         await safe_click_by_text(page, step_name, bot, user_id)
 
@@ -584,7 +601,6 @@ async def _fill_input(page, selector: str, value: str, bot: Bot, user_id: int):
         await elem.click()
         await elem.fill("")
         await elem.fill(value)
-        # اطمینان از اطلاع AngularJS از تغییر مقدار
         await page.evaluate("""(sel) => {
             const el = document.querySelector(sel);
             if (el) {
@@ -619,11 +635,6 @@ async def _wait_for_any_selector(page, selectors: list, timeout_sec: int = 15) -
 
 
 async def _fill_national_id_field(page, national_id: str, bot: Bot, user_id: int) -> bool:
-    """
-    پر کردن فیلد کدملی وکیل/شخص با چندین سلکتور و روش.
-    وقتی نوع شخص «وکیل» انتخاب می‌شود، فرم AngularJS فیلدهای جدیدی
-    نمایش می‌دهد و ممکن است آی‌دی فیلد کدملی متفاوت باشد.
-    """
     candidate_selectors = [
         "#txtNationalityCode",
         "#txtRealIrNationalityCode1",
@@ -635,7 +646,6 @@ async def _fill_national_id_field(page, national_id: str, bot: Bot, user_id: int
     found_selector = await _wait_for_any_selector(page, candidate_selectors, timeout_sec=15)
 
     if not found_selector:
-        # هیچ‌کدام از سلکتورهای شناخته‌شده پیدا نشد — لاگ دیباگ
         visible_ids = await page.evaluate("""() => {
             return Array.from(document.querySelectorAll('input'))
                 .filter(i => i.offsetParent !== null)
@@ -654,7 +664,6 @@ async def _fill_national_id_field(page, national_id: str, bot: Bot, user_id: int
 
     logging.info(f"[LAVAYEH] فیلد کدملی پیدا شد: {found_selector}")
 
-    # ── روش ۱: Playwright fill ─────────────────────────────────────────
     try:
         elem = page.locator(found_selector).first
         await elem.click()
@@ -672,7 +681,6 @@ async def _fill_national_id_field(page, national_id: str, bot: Bot, user_id: int
     except Exception as e:
         logging.warning(f"[LAVAYEH] روش ۱ (Playwright fill) ناموفق: {e}")
 
-    # ── روش ۲: JavaScript مستقیم + Angular ngModel ─────────────────────
     try:
         success = await page.evaluate("""(args) => {
             const { selector, value } = args;
@@ -704,7 +712,6 @@ async def _fill_national_id_field(page, national_id: str, bot: Bot, user_id: int
     except Exception as e:
         logging.warning(f"[LAVAYEH] روش ۲ (JS مستقیم) ناموفق: {e}")
 
-    # ── روش ۳: تایپ حرف‌به‌حرف (شبه‌انسانی) ──────────────────────────
     try:
         elem = page.locator(found_selector).first
         await elem.click()
@@ -756,13 +763,10 @@ async def _select_province(page, province: str, bot: Bot, user_id: int):
     clicked = await page.evaluate('''(args) => {
         const { province, isTehranExcl, isTehranCityOnly } = args;
 
-        // سامانه سنا از حروف عربی (ي، ك) استفاده می‌کند در حالی که مقدار ذخیره‌شده
-        // در ربات با حروف فارسی (ی، ک) است. بدون یکسان‌سازی، هیچ گزینه‌ای مچ نمی‌شد
-        // و همین باعث ارور «استان انتخاب نشد» بود.
         const normalize = (s) => (s || '')
-            .replace(/\\u064A/g, '\\u06CC')   // ي عربی -> ی فارسی
-            .replace(/\\u0643/g, '\\u06A9')   // ك عربی -> ک فارسی
-            .replace(/\\u200c/g, ' ')          // نیم‌فاصله -> فاصله ساده
+            .replace(/\\u064A/g, '\\u06CC')
+            .replace(/\\u0643/g, '\\u06A9')
+            .replace(/\\u200c/g, ' ')
             .trim();
 
         const normProvince = normalize(province);
@@ -931,14 +935,76 @@ async def _click_save_temp_with_retry(page, bot: Bot, user_id: int, max_retries:
         await asyncio.sleep(5)
 
 
-async def _click_goto_main(page, bot: Bot, user_id: int):
-    clicked = await page.evaluate('''() => {
-        const btn = document.querySelector('#gotoMainPage');
-        if (btn && !btn.disabled) { btn.click(); return true; }
-        return false;
-    }''')
-    if not clicked:
-        await soft_click_if_exists(page, "بازگشت به فهرست")
+async def _click_goto_main(page, bot: Bot, user_id: int, max_retries: int = 5):
+    for attempt in range(max_retries):
+        await _close_success_popup(page)
+        await _close_error_popup(page)
+        await asyncio.sleep(0.5)
+
+        await wait_for_angular_idle(page)
+        await asyncio.sleep(1)
+
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('#gotoMainPage');
+            if (btn && !btn.disabled) {
+                btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                btn.click();
+                return true;
+            }
+            return false;
+        }''')
+        if clicked:
+            logging.info(f"[LAVAYEH] _click_goto_main: کلیک روی #gotoMainPage (تلاش {attempt+1})")
+            await asyncio.sleep(2)
+            return True
+
+        clicked_via_scope = await page.evaluate('''() => {
+            const btn = document.querySelector('#gotoMainPage') ||
+                        document.querySelector('[ng-click*="gotoMainStep"]');
+            if (btn) {
+                try {
+                    const scope = angular.element(btn).scope();
+                    if (scope && scope.actions && scope.actions.gotoMainStep) {
+                        scope.actions.gotoMainStep();
+                        scope.$apply();
+                        return true;
+                    }
+                } catch(e) {}
+                btn.click();
+                return true;
+            }
+            return false;
+        }''')
+        if clicked_via_scope:
+            logging.info(f"[LAVAYEH] _click_goto_main: کلیک از طریق scope (تلاش {attempt+1})")
+            await asyncio.sleep(2)
+            return True
+
+        clicked_text = await page.evaluate('''() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const target = buttons.find(b =>
+                b.innerText && b.innerText.includes("بازگشت به فهرست")
+            );
+            if (target && !target.disabled) {
+                target.scrollIntoView({behavior: 'smooth', block: 'center'});
+                target.click();
+                return true;
+            }
+            return false;
+        }''')
+        if clicked_text:
+            logging.info(f"[LAVAYEH] _click_goto_main: کلیک متنی (تلاش {attempt+1})")
+            await asyncio.sleep(2)
+            return True
+
+        logging.warning(
+            f"[LAVAYEH] _click_goto_main: تلاش {attempt+1}/{max_retries} ناموفق (user={user_id})"
+        )
+        await asyncio.sleep(2)
+
+    await soft_click_if_exists(page, "بازگشت به فهرست")
+    logging.warning(f"[LAVAYEH] _click_goto_main: همه تلاش‌ها ناموفق (user={user_id})")
+    return False
 
 
 MAX_IMAGE_BYTES = 450 * 1024
@@ -1017,6 +1083,10 @@ async def _upload_single_attachment_group(page, doc_title: str, image_paths: lis
     image_count = len(image_paths)
     for upload_attempt in range(2):
         try:
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info(f"[LAVAYEH][منضمات] نشست در ابتدای آپلود «{doc_title}» تمدید شد؛ ادامه از همین‌جا...")
+
             await page.evaluate('''() => {
                 const sel = document.querySelector('#attachmentType');
                 if (sel) {
@@ -1038,22 +1108,22 @@ async def _upload_single_attachment_group(page, doc_title: str, image_paths: lis
                 }
             }''')
 
-            escaped_title = doc_title.replace("`", "'").replace("\\", "")
-            await page.evaluate(f'''() => {{
+            # اصلاحیه امنیتی: حذف f-string و استفاده از آرگومان برای جلوگیری از JS Injection
+            await page.evaluate('''(title) => {
                 const inputs = Array.from(document.querySelectorAll('input#txtName'));
-                if (inputs.length > 0) {{
-                    inputs[0].value = "{escaped_title}";
-                    inputs[0].dispatchEvent(new Event("input", {{ bubbles: true }}));
-                }}
-            }}''')
+                if (inputs.length > 0) {
+                    inputs[0].value = title;
+                    inputs[0].dispatchEvent(new Event("input", { bubbles: true }));
+                }
+            }''', doc_title)
 
-            await page.evaluate(f'''() => {{
+            await page.evaluate('''(count) => {
                 const inp = document.querySelector('#txt001');
-                if (inp) {{
-                    inp.value = "{image_count}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                }}
-            }}''')
+                if (inp) {
+                    inp.value = count;
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                }
+            }''', image_count)
 
             await page.evaluate('''() => {
                 const btn = document.querySelector('#incAttach0');
@@ -1083,23 +1153,36 @@ async def _upload_single_attachment_group(page, doc_title: str, image_paths: lis
                 if (btn && !btn.disabled) btn.click();
             }''')
 
-            all_uploaded = await _wait_for_upload_alerts(page, image_count)
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info(f"[LAVAYEH][منضمات] نشست درست بعد از کلیک «آپلود همه» برای «{doc_title}» تمدید شد؛ تلاش دوباره...")
+                await asyncio.sleep(3)
+                continue
+
+            all_uploaded = await _wait_for_upload_alerts(page, image_count, bot, user_id)
 
             if not all_uploaded:
-                await asyncio.sleep(30)
+                await resilient_sleep(page, 30, bot, user_id)
                 await _click_step_box(page, "منضمات", bot, user_id)
-                await asyncio.sleep(5)
+                await resilient_sleep(page, 5, bot, user_id)
                 await page.evaluate('''() => {
                     const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
                     if (btns.length > 0) btns[btns.length - 1].click();
                 }''')
                 await asyncio.sleep(4)
-                await _delete_uploaded_files(page)
+                await _delete_uploaded_files(page, bot, user_id)
                 await asyncio.sleep(3)
                 continue
 
             all_confirmed = await _click_apply_all_with_retry(page, image_count, bot, user_id)
             if all_confirmed:
+                await _close_success_popup(page)
+                await asyncio.sleep(1)
+                await _close_error_popup(page)
+                await asyncio.sleep(0.5)
+                await wait_for_angular_idle(page)
+                await asyncio.sleep(2)
+                logging.info(f"[LAVAYEH] آپلود '{doc_title}' موفق — آماده بازگشت به فهرست")
                 return True
 
         except Exception as e:
@@ -1118,7 +1201,11 @@ async def _click_save_doc_with_retry(page, bot: Bot, user_id: int, max_retries: 
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(8)
+
+        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+        if had_expiry:
+            logging.info("[LAVAYEH][منضمات] نشست حین انتظار برای ذخیره‌ی سند تمدید شد؛ تلاش دوباره...")
+            continue
 
         success = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
@@ -1133,8 +1220,14 @@ async def _click_save_doc_with_retry(page, bot: Bot, user_id: int, max_retries: 
         await asyncio.sleep(4)
 
 
-async def _wait_for_upload_alerts(page, expected_count: int, timeout_sec: int = 120) -> bool:
-    for _ in range(timeout_sec * 2):
+async def _wait_for_upload_alerts(page, expected_count: int, bot: Bot, user_id: int, timeout_sec: int = 120) -> bool:
+    for i in range(timeout_sec * 2):
+        if i % 4 == 0:
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                logging.info("[LAVAYEH][منضمات] نشست حین انتظار برای تایید آپلود تمدید شد؛ ادامه‌ی همین انتظار...")
+                await asyncio.sleep(1)
+
         count = await page.evaluate('''() => {
             const alerts = Array.from(document.querySelectorAll('.alert-success [ng-bind-html]'));
             return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت ثبت گردید")).length;
@@ -1145,8 +1238,12 @@ async def _wait_for_upload_alerts(page, expected_count: int, timeout_sec: int = 
     return False
 
 
-async def _delete_uploaded_files(page):
+async def _delete_uploaded_files(page, bot: Bot, user_id: int):
     while True:
+        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+        if had_expiry:
+            logging.info("[LAVAYEH][منضمات] نشست حین حذف فایل‌های آپلودشده تمدید شد؛ ادامه...")
+
         deleted = await page.evaluate('''() => {
             const btn = document.querySelector('button[ng-click*="removeAttachment"]');
             if (btn && !btn.disabled) { btn.click(); return true; }
@@ -1163,15 +1260,19 @@ async def _click_apply_all_with_retry(page, expected_count: int, bot: Bot, user_
             const btn = document.querySelector('#btnApplyAll');
             if (btn && !btn.disabled) btn.click();
         }''')
-        await asyncio.sleep(10)
 
-        confirmed = await page.evaluate(f'''() => {{
+        had_expiry = await resilient_sleep(page, 10, bot, user_id)
+        if had_expiry:
+            logging.info("[LAVAYEH][منضمات] نشست حین انتظار برای «اعمال همه» تمدید شد؛ تلاش دوباره...")
+            continue
+
+        confirmed = await page.evaluate('''(count) => {
             const alerts = Array.from(document.querySelectorAll('[ng-bind-html]'));
-            return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت تایید شد")).length >= {expected_count};
-        }}''')
+            return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت تایید شد")).length >= count;
+        }''', expected_count)
         if confirmed:
             return True
-        await asyncio.sleep(30)
+        await resilient_sleep(page, 30, bot, user_id)
 
     return False
 
@@ -1343,10 +1444,6 @@ async def _close_success_popup(page) -> bool:
 
 
 async def _click_validate_with_retry_archive(page, bot: Bot, user_id: int):
-    """
-    کلیک روی دکمه صحت‌سنجی اطلاعات برای شماره بایگانی.
-    این تابع مشابه _click_validate_with_retry است اما از دکمه btnAddHst2 استفاده می‌کند.
-    """
     for attempt in range(5):
         clicked = await page.evaluate('''() => {
             const btn = document.querySelector('#btnAddHst2');
@@ -1371,3 +1468,4 @@ async def _click_validate_with_retry_archive(page, bot: Bot, user_id: int):
             return
 
     logging.warning(f"[LAVAYEH] صحت‌سنجی بایگانی ناموفق پس از 5 تلاش")
+```

@@ -1,3 +1,4 @@
+```python
 """
 هندلرهای بخش ثبت لایحه — فقط فلوی مکالمه تلگرام.
 شامل پشتیبانی از عنوان «اعلام وکالت» با جریان خاص خود.
@@ -7,6 +8,8 @@ import datetime
 import logging
 import os
 import re
+import uuid
+import tempfile
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -216,7 +219,7 @@ def _build_ealam_preview(data: dict) -> str:
     attachments = data.get("lavayeh_attachments", [])
 
     lawyers_text = "\n".join([f"  {i+1}. `{l}`" for i, l in enumerate(lawyers)]) or "  (ندارد)"
-    contracts_text = "\n".join([f"  {i+1}. `{c}`" for i, c in enumerate(contracts)]) or "  (ندارد)"
+    contracts_text = "\n".join([f"  {i+1}. `{c}`" for i, c in enumerate(contracts)]) or "  (ندارید)"
 
     if stamp_type == "بدون تمبر":
         stamp_text = "بدون نیاز به تمبر"
@@ -334,7 +337,7 @@ async def bulk_input_method_handler(message: Message, state: FSMContext):
         
         # انتخاب نام و مسیر فایل بر اساس نوع سرویس
         if service_type == "ezhharnameh":
-            sample_path = "/tmp/sample_ezhharnameh_bulk.xlsx"
+            sample_path = os.path.join(tempfile.gettempdir(), "sample_ezhharnameh_bulk.xlsx")
             generate_sample_excel("ezhharnameh", sample_path)
             file_send = FSInputFile(sample_path, filename="نمونه_ثبت_دسته_جمعی_اظهارنامه.xlsx")
             caption_text = (
@@ -344,7 +347,7 @@ async def bulk_input_method_handler(message: Message, state: FSMContext):
                 "✅ اکنون فایل اکسل تکمیل‌شده خود را ارسال (آپلود) فرمایید:"
             )
         else:
-            sample_path = "/tmp/sample_lavayeh_bulk.xlsx"
+            sample_path = os.path.join(tempfile.gettempdir(), "sample_lavayeh_bulk.xlsx")
             generate_sample_excel("lavayeh", sample_path)
             file_send = FSInputFile(sample_path, filename="نمونه_ثبت_دسته_جمعی_لوایح.xlsx")
             caption_text = (
@@ -394,7 +397,13 @@ async def bulk_file_upload_handler(message: Message, state: FSMContext):
         bot = message.bot
         file_id = doc.file_id
         file_info = await bot.get_file(file_id)
-        local_path = f"/tmp/{doc.file_name}"
+        
+        # اصلاحیه امنیتی: جلوگیری از Path Traversal با استفاده از UUID
+        safe_ext = os.path.splitext(doc.file_name)[1].lower()
+        if safe_ext not in ('.xlsx', '.xls'):
+            safe_ext = '.xlsx'
+        local_path = os.path.join(tempfile.gettempdir(), f"bulk_{uuid.uuid4().hex}{safe_ext}")
+        
         await bot.download_file(file_info.file_path, local_path)
         items = parse_excel_file(local_path, service_type)
         if not items:
@@ -459,7 +468,6 @@ async def bulk_attachment_row_handler(message: Message, state: FSMContext):
     service_type = data.get("service_type", "lavayeh")
     
     if text == "📎 افزودن پیوست برای این ردیف":
-        # رفتن به مرحله انتخاب عنوان پیوست
         await message.answer(
             f"📄 **عنوان پیوست برای ردیف {current_index + 1}:**\n\n"
             "لطفاً عنوان پیوست را وارد کنید (مثلاً «کارت ملی»، «وکالتنامه»، «مستندات»):\n\n"
@@ -1985,6 +1993,8 @@ async def send_lavayeh_result(
 # ══════════════════════════════════════════════════════════════════════════════
 # پرداخت هزینه لایحه
 # ══════════════════════════════════════════════════════════════════════════════
+
+```python
 @lavayeh_router.message(Form.waiting_for_lavayeh_payment_receipt, F.photo)
 async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSMContext):
     pending = runtime_state.pending_lavayeh_payments.get(message.from_user.id)
@@ -2024,6 +2034,8 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
             "resend_notified": False,
         }
         runtime_state.pending_lavayeh_payments.pop(user_id, None)
+        # اصلاحیه معماری: ذخیره تغییرات در فایل JSON
+        runtime_state.save_pending_payments()
 
         await bot.send_message(
             user_id,
@@ -2046,7 +2058,7 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
             os.remove(photo_path)
         except Exception:
             pass
-
+ 
 
 @lavayeh_router.message(Form.waiting_for_lavayeh_payment_receipt)
 async def lavayeh_payment_receipt_text_only(message: Message):
@@ -2056,6 +2068,8 @@ async def lavayeh_payment_receipt_text_only(message: Message):
 # ══════════════════════════════════════════════════════════════════════════════
 # یادآوری ۲۴ ساعته + مسدودسازی
 # ══════════════════════════════════════════════════════════════════════════════
+
+```python
 async def lavayeh_payment_reminder_loop(bot: Bot):
     while True:
         try:
@@ -2072,6 +2086,8 @@ async def lavayeh_payment_reminder_loop(bot: Bot):
                             reply_markup=lavayeh_cancel_reminder_kb
                         )
                         info["reminder_sent"] = True
+                        # اصلاحیه معماری: ذخیره وضعیت یادآوری در فایل JSON
+                        runtime_state.save_pending_payments()
                         user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
                         await user_state.set_state(Form.lavayeh_payment_reminder_response)
                     except Exception as e:
@@ -2079,17 +2095,9 @@ async def lavayeh_payment_reminder_loop(bot: Bot):
         except Exception as e:
             logging.error(f"[LAVAYEH] خطا در حلقه یادآوری: {e}")
         await asyncio.sleep(1800)
+```
 
-
-@lavayeh_router.message(Form.lavayeh_payment_reminder_response, F.text == "خیر")
-async def lavayeh_reminder_no(message: Message, state: FSMContext):
-    await message.answer(
-        "مورد ثبتی شما تا پایان فردا ابطال خواهد شد؛ هرچه سریع‌تر پرداخت فرمایید.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    await state.set_state(Form.waiting_for_lavayeh_payment_receipt)
-
-
+```python
 @lavayeh_router.message(Form.lavayeh_payment_reminder_response, F.text == "بله")
 async def lavayeh_reminder_yes(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -2100,6 +2108,9 @@ async def lavayeh_reminder_yes(message: Message, state: FSMContext):
     reduced_amount = pending["final_fee"] - pending["court_total"]
     pending["blocked"] = True
     pending["final_fee"] = reduced_amount
+    # اصلاحیه معماری: ذخیره تغییر مبلغ فاکتور در فایل JSON
+    runtime_state.save_pending_payments()
+    
     await message.answer(
         f"لطفاً هزینه ثبت لایحه را پرداخت بفرمائید.\n"
         f"مبلغ: **{reduced_amount:,} تومان**\n\nباتشکر",
@@ -2107,11 +2118,5 @@ async def lavayeh_reminder_yes(message: Message, state: FSMContext):
         parse_mode="Markdown"
     )
     await state.set_state(Form.waiting_for_lavayeh_payment_receipt)
-
-
-@lavayeh_router.message(Form.lavayeh_payment_reminder_response)
-async def lavayeh_reminder_invalid(message: Message):
-    await message.answer(
-        "لطفاً یکی از گزینه‌های «بله» یا «خیر» را انتخاب فرمایید:",
-        reply_markup=lavayeh_cancel_reminder_kb
-    )
+```
+ 

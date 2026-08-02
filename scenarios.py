@@ -17,7 +17,7 @@ from browser_helpers import (
     human_delay, force_click_by_text, soft_click_if_exists, human_type,
     handle_session_expired, wait_for_angular_idle, check_and_handle_expiry,
     check_and_handle_load_error, resilient_sleep, goto_url_with_retry,
-    safe_click_by_text, safe_type,
+    safe_click_by_text, safe_type, NavigationResetError,
 )
 from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
 
@@ -284,7 +284,7 @@ async def process_task(data, bot: Bot):
                         await asyncio.sleep(3)
 
                     except Exception as e:
-                        if "Session expired" in str(e):
+                        if isinstance(e, NavigationResetError) or "Session expired" in str(e):
                             raise e
                         await bot.send_message(ADMIN_ID, f"❌ خطا در پروفایل {nat_id}: {e}")
 

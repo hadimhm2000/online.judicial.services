@@ -1,39 +1,26 @@
-"""تنظیمات کلی ربات: توکن، شناسه ادمین، پروکسی، تعرفه‌ها. تنها فایلی که برای تغییر قیمت/شماره کارت/توکن باید ویرایش کنی."""
+```python
 import os
-
 from dotenv import load_dotenv
 
-# مقادیر رو از فایل .env (کنار همین فایل‌ها) می‌خونه، اگه .env نبود چیزی رو خراب نمی‌کنه
 load_dotenv()
 
-
-# ================= تنظیمات اصلی ربات =================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise RuntimeError(
-        "❌ متغیر محیطی BOT_TOKEN تنظیم نشده است.\n"
-        "قبل از اجرا این دستور را در ترمینال بزن (ویندوز):\n"
-        "    set BOT_TOKEN=توکن_ربات_شما\n"
-        "یا در Linux/Mac:\n"
-        "    export BOT_TOKEN=توکن_ربات_شما"
-    )
+    raise RuntimeError("❌ متغیر محیطی BOT_TOKEN تنظیم نشده است.")
 
 _admin_id_raw = os.environ.get("ADMIN_ID")
 if not _admin_id_raw:
-    raise RuntimeError(
-        "❌ متغیر محیطی ADMIN_ID تنظیم نشده است.\n"
-        "قبل از اجرا این دستور را در ترمینال بزن (ویندوز):\n"
-        "    set ADMIN_ID=آیدی_عددی_تلگرام_ادمین\n"
-        "یا در Linux/Mac:\n"
-        "    export ADMIN_ID=آیدی_عددی_تلگرام_ادمین"
-    )
+    raise RuntimeError("❌ متغیر محیطی ADMIN_ID تنظیم نشده است.")
 ADMIN_ID = int(_admin_id_raw)
 
 PROXY_URL = os.environ.get("PROXY_URL", "http://127.0.0.1:10808")
 
-# ================= تنظیمات مالی ربات =================
-CARD_NUMBER = "6219861936929354"
-ACCOUNT_NAME = "هادی منتظران"
+# تنظیمات مالی ربات
+CARD_NUMBER = os.environ.get("CARD_NUMBER")
+ACCOUNT_NAME = os.environ.get("ACCOUNT_NAME")
+
+if not CARD_NUMBER or not ACCOUNT_NAME:
+    raise RuntimeError("❌ متغیرهای محیطی CARD_NUMBER یا ACCOUNT_NAME تنظیم نشده‌اند.")
 
 DEBUG_LOG_REQUESTS = False
 
@@ -55,30 +42,17 @@ def get_fee(query_type, need_attachments):
         else:
             return FEES["کد رهگیری ساده"]
 
-
-# ================= محاسبه هزینه لایحه =================
 def calculate_lavayeh_fee(court_total: int) -> int:
-    """
-    محاسبه هزینه نهایی لایحه بر اساس مجموع هزینه درج شده پایین برگ لایحه.
-
-    فرمول:
-      تا ۲۰۰,۰۰۰ تومان     → کسر ۱۰,۰۰۰  → هزینه نهایی = court_total + (court_total - 10,000)
-      ۲۰۱,۰۰۰ تا ۳۰۰,۰۰۰  → کسر ۲۰,۰۰۰  → هزینه نهایی = court_total + (court_total - 20,000)
-      بالای ۳۰۰,۰۰۰        → کسر ۳۵,۰۰۰  → هزینه نهایی = court_total + (court_total - 35,000)
-    """
     if court_total <= 200_000:
         deduction = 10_000
     elif court_total <= 300_000:
         deduction = 20_000
     else:
         deduction = 35_000
-
     final_fee = court_total + (court_total - deduction)
     return final_fee
 
-
 def format_lavayeh_fee_explanation(court_total: int) -> str:
-    """توضیح فرمول هزینه لایحه برای نمایش به کاربر"""
     if court_total <= 200_000:
         deduction = 10_000
         bracket = "تا ۲۰۰,۰۰۰ تومان"
