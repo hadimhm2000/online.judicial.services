@@ -1,0 +1,3172 @@
+From 26d55da18032de7a7ca505af76647be80bc160e5 Mon Sep 17 00:00:00 2001
+From: Z User <z@container>
+Date: Mon, 3 Aug 2026 14:03:31 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20=D8=B1=D9=81=D8=B9=20=DB=B4=20=D9=85?=
+ =?UTF-8?q?=D8=B4=DA=A9=D9=84=20=D8=A7=D8=B5=D9=84=DB=8C=20=D8=B1=D8=A8?=
+ =?UTF-8?q?=D8=A7=D8=AA=20=D9=82=D8=B6=D8=A7=DB=8C=DB=8C?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. اظهارنامه - انتخاب نماینده شخص حقوقی:
+   - بهبود انتخاب رادیوباتن نماینده با ۳ روش و تلاش چندباره
+   - اضافه شدن صبر برای بارگذاری Angular
+   - لاگ‌گیری کامل برای عیب‌یابی
+
+2. بازگشت (Back Navigation) در تمام مسیرها:
+   - اضافه شدن دکمه بازگشت در مرحله متن لایحه و اظهارنامه
+   - اضافه شدن دکمه بازگشت در انتخاب عنوان پیوست
+   - اضافه شدن دکمه بازگشت در ارسال تصاویر مدارک
+   - اضافه شدن دکمه بازگشت در ادامه/اتمام مدارک
+   - کیبوردهای جدید با دکمه بازگشت برای مدیریت تصاویر
+
+3. تبدیل PDF به عکس - هر صفحه جداگانه (قبلاً پیاده‌سازی شده)
+4. محدودیت استفاده ۲ بار رایگان با پیام اشتراک ۱۰۰,۰۰۰ تومان (قبلاً پیاده‌سازی شده)
+---
+ ezhharnameh_handlers.py |  198 +++-
+ ezhharnameh_scenario.py | 2038 ++++++++++++++++++++-------------------
+ file_tools_handlers.py  |  142 ++-
+ keyboards.py            |   29 +-
+ lavayeh_handlers.py     |  221 ++++-
+ 5 files changed, 1508 insertions(+), 1120 deletions(-)
+
+diff --git a/ezhharnameh_handlers.py b/ezhharnameh_handlers.py
+index 60e73f1..0bf57c9 100644
+--- a/ezhharnameh_handlers.py
++++ b/ezhharnameh_handlers.py
+@@ -21,7 +21,7 @@ import re
+ from aiogram import Bot, F, Router
+ from aiogram.filters import StateFilter
+ from aiogram.fsm.context import FSMContext
+-from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
++from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+ 
+ import runtime_state
+ from states import Form
+@@ -53,6 +53,29 @@ from bulk_submissions import (
+ 
+ ezhharnameh_router = Router()
+ 
++# کیبورد بازگشت برای مرحله متن اظهارنامه
++ezhhar_text_back_kb = ReplyKeyboardMarkup(
++    keyboard=[[KeyboardButton(text="🔙 بازگشت")]],
++    resize_keyboard=True
++)
++
++# کیبورد مدیریت تصاویر اظهارنامه با دکمه بازگشت
++_ezhhar_image_manage_kb = ReplyKeyboardMarkup(
++    keyboard=[
++        [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
++        [KeyboardButton(text="🗑 حذف تصویر"), KeyboardButton(text="🔙 بازگشت")]
++    ],
++    resize_keyboard=True
++)
++
++_ezhhar_image_manage_kb_no_delete = ReplyKeyboardMarkup(
++    keyboard=[
++        [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
++        [KeyboardButton(text="🔙 بازگشت")]
++    ],
++    resize_keyboard=True
++)
++
+ _FA_AR = str.maketrans(
+     "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩",
+     "01234567890123456789"
+@@ -126,6 +149,29 @@ async def ezhhar_declarant_person_type_handler(message: Message, state: FSMConte
+     declarants = data.get("ezhhar_declarants", [])
+     used_types = [p.get("person_type") for p in declarants]
+ 
++
++    if text == "🔙 بازگشت":
++        data = await state.get_data()
++        declarants = data.get("ezhhar_declarants", [])
++        if declarants:
++            last = declarants[-1]
++            last_type = last.get("person_type", "شخص حقیقی")
++            declarants.pop()
++            await state.update_data(ezhhar_declarants=declarants, _ezhhar_current_declarant=last)
++            await state.set_state(Form.ezhhar_declarant_national_id)
++            label = "نماینده" if last_type == "شخص حقیقی" else last.get("representative_type", "نماینده")
++            await message.answer(
++                f"🔢 لطفاً کد ملی {label} اظهارکننده را مجدداً وارد کنید:\n_(۱۰ رقمی)_",
++                reply_markup=back_only_kb,
++                parse_mode="Markdown"
++            )
++        else:
++            await message.answer(
++                "👤 لطفاً نوع شخص اظهارکننده را انتخاب کنید:",
++                reply_markup=create_ezhhar_declarant_person_type_kb()
++            )
++            await state.set_state(Form.ezhhar_declarant_person_type)
++        return
+     if text == "✅ اتمام و ادامه":
+         if not declarants:
+             await message.answer("⚠️ حداقل یک اظهارکننده باید اضافه شود.")
+@@ -213,6 +259,14 @@ async def ezhhar_declarant_company_id_handler(message: Message, state: FSMContex
+ @ezhharnameh_router.message(Form.ezhhar_declarant_representative_type)
+ async def ezhhar_declarant_representative_type_handler(message: Message, state: FSMContext):
+     text = message.text or ""
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "🏢 لطفاً شناسه ملی شرکت را ارسال فرمایید:\n_(۱۱ رقمی)_",
++            reply_markup=back_only_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ezhhar_declarant_company_id)
++        return
+     if text not in ["مدیرعامل", "نماینده"]:
+         await message.answer("⚠️ لطفاً یکی از گزینه‌ها را انتخاب کنید:", reply_markup=representative_type_kb)
+         return
+@@ -235,14 +289,11 @@ async def ezhhar_declarant_national_id_handler(message: Message, state: FSMConte
+     if not message.text:
+         return
+     if message.text == "🔙 بازگشت":
+-        data = await state.get_data()
+-        declarants = data.get("ezhhar_declarants", [])
+-        used_types = [p.get("person_type") for p in declarants]
+         await message.answer(
+-            "👤 لطفاً نوع شخص اظهارکننده را انتخاب کنید:",
+-            reply_markup=create_ezhhar_declarant_person_type_kb(exclude=used_types if declarants else [])
++            "👔 نماینده شرکت چه سمتی دارد؟",
++            reply_markup=representative_type_kb
+         )
+-        await state.set_state(Form.ezhhar_declarant_person_type)
++        await state.set_state(Form.ezhhar_declarant_representative_type)
+         return
+ 
+     nat_id = _to_en(message.text)
+@@ -280,6 +331,29 @@ async def ezhhar_addressee_person_type_handler(message: Message, state: FSMConte
+     used_types = [p.get("person_type") for p in addressees]
+ 
+     # استعلام شماره تماس — متوقف کردن اظهارنامه
++    if text == "🔙 بازگشت":
++        data = await state.get_data()
++        addressees = data.get("ezhhar_addressees", [])
++        if addressees:
++            last = addressees[-1]
++            last_type = last.get("person_type", "شخص حقیقی")
++            addressees.pop()
++            await state.update_data(ezhhar_addressees=addressees, _ezhhar_current_addressee=last)
++            await state.set_state(Form.ezhhar_addressee_national_id)
++            label = "نماینده" if last_type == "شخص حقیقی" else last.get("representative_type", "نماینده")
++            await message.answer(
++                f"🔢 لطفاً کد ملی {label} مخاطب را مجدداً وارد کنید:\n_(۱۰ رقمی)_",
++                reply_markup=back_only_kb,
++                parse_mode="Markdown"
++            )
++        else:
++            await message.answer(
++                "👤 لطفاً نوع شخص اظهارکننده را انتخاب کنید:",
++                reply_markup=create_ezhhar_declarant_person_type_kb()
++            )
++            await state.set_state(Form.ezhhar_declarant_person_type)
++        return
++
+     if text == "📞 استعلام شماره تماس":
+         await message.answer(
+             "📞 **فرایند اظهارنامه متوقف گردید.**\n\n"
+@@ -371,6 +445,14 @@ async def ezhhar_addressee_company_id_handler(message: Message, state: FSMContex
+ @ezhharnameh_router.message(Form.ezhhar_addressee_representative_type)
+ async def ezhhar_addressee_representative_type_handler(message: Message, state: FSMContext):
+     text = message.text or ""
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "🏢 لطفاً شناسه ملی شرکت مخاطب را ارسال فرمایید:\n_(۱۱ رقمی)_",
++            reply_markup=back_only_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ezhhar_addressee_company_id)
++        return
+     if text not in ["مدیرعامل", "نماینده"]:
+         await message.answer("⚠️ لطفاً یکی از گزینه‌ها را انتخاب کنید:", reply_markup=representative_type_kb)
+         return
+@@ -393,14 +475,12 @@ async def ezhhar_addressee_national_id_handler(message: Message, state: FSMConte
+     if not message.text:
+         return
+     if message.text == "🔙 بازگشت":
+-        data = await state.get_data()
+-        addressees = data.get("ezhhar_addressees", [])
+-        used_types = [p.get("person_type") for p in addressees]
+         await message.answer(
+-            "👥 لطفاً نوع شخص مخاطب را انتخاب کنید:",
+-            reply_markup=create_ezhhar_addressee_person_type_kb(exclude=used_types if addressees else [])
++            "👔 نماینده شرکت مخاطب چه سمتی دارد؟",
++            reply_markup=representative_type_kb
+         )
+-        await state.set_state(Form.ezhhar_addressee_person_type)
++        await state.set_state(Form.ezhhar_addressee_representative_type)
++        return
+         return
+ 
+     nat_id = _to_en(message.text)
+@@ -434,6 +514,14 @@ async def ezhhar_addressee_national_id_handler(message: Message, state: FSMConte
+ @ezhharnameh_router.message(Form.ezhhar_subject)
+ async def ezhhar_subject_handler(message: Message, state: FSMContext):
+     text = (message.text or "").strip()
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "👥 لطفاً نوع شخص مخاطب را انتخاب کنید:",
++            reply_markup=create_ezhhar_addressee_person_type_kb()
++        )
++        await state.set_state(Form.ezhhar_addressee_person_type)
++        return
++
+     if not text:
+         await message.answer("⚠️ لطفاً عنوان را وارد کنید یا از گزینه زیر استفاده کنید:", reply_markup=ezhhar_subject_kb)
+         return
+@@ -449,7 +537,7 @@ async def ezhhar_subject_handler(message: Message, state: FSMContext):
+         f"✅ عنوان «**{subject}**» ثبت شد.\n\n"
+         "**مرحله ۴:** لطفاً **شرح متن اظهارنامه** را به صورت کامل و تایپ‌شده ارسال فرمایید:\n\n"
+         "⚠️ **توجه:** متن پس از ارسال قابل ویرایش نمی‌باشد.",
+-        reply_markup=ReplyKeyboardRemove(),
++        reply_markup=ezhhar_text_back_kb,
+         parse_mode="Markdown"
+     )
+     await state.set_state(Form.ezhhar_text)
+@@ -461,7 +549,15 @@ async def ezhhar_subject_handler(message: Message, state: FSMContext):
+ @ezhharnameh_router.message(Form.ezhhar_text)
+ async def ezhhar_text_handler(message: Message, state: FSMContext):
+     if not message.text:
+-        await message.answer("⚠️ لطفاً شرح متن را به صورت **متن** ارسال فرمایید.")
++        await message.answer("⚠️ لطفاً شرح متن را به صورت **متن** ارسال فرمایید.", reply_markup=ezhhar_text_back_kb)
++        return
++
++    if message.text == "🔙 بازگشت":
++        await message.answer(
++            "📌 لطفاً عنوان اظهارنامه را انتخاب فرمایید:",
++            reply_markup=ezhhar_subject_kb
++        )
++        await state.set_state(Form.ezhhar_subject)
+         return
+ 
+     await state.update_data(ezhhar_text=message.text, ezhhar_attachments=[], ezhhar_images=[])
+@@ -514,6 +610,16 @@ async def ezhhar_attachment_title_handler(message: Message, state: FSMContext):
+         await message.answer("⚠️ لطفاً عنوان را وارد کنید.")
+         return
+ 
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "**مرحله ۴:** لطفاً **شرح متن اظهارنامه** را به صورت کامل و تایپ‌شده ارسال فرمایید:\n\n"
++            "⚠️ **توجه:** متن پس از ارسال قابل ویرایش نمی‌باشد.",
++            reply_markup=ezhhar_text_back_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ezhhar_text)
++        return
++
+     data = await state.get_data()
+     attachments = data.get("ezhhar_attachments", [])
+     mandatory_sent = data.get("_ezhhar_mandatory_proxy_sent", True)
+@@ -536,7 +642,7 @@ async def ezhhar_attachment_title_handler(message: Message, state: FSMContext):
+         "🖼 لطفاً تصاویر مربوط به این مدرک را به صورت **عکس (Photo)** ارسال فرمایید.\n"
+         "⚠️ فقط فرمت **JPG / JPEG** قابل قبول است.\n\n"
+         "پس از ارسال همه تصاویر، دکمه **«اتمام ارسال تصاویر»** را بفشارید.",
+-        reply_markup=ReplyKeyboardRemove(),
++        reply_markup=_ezhhar_image_manage_kb_no_delete,
+         parse_mode="Markdown"
+     )
+     await state.set_state(Form.ezhhar_images)
+@@ -549,18 +655,10 @@ async def ezhhar_receive_image(message: Message, state: FSMContext, bot: Bot):
+     images.append(message.photo[-1].file_id)
+     await state.update_data(ezhhar_images=images)
+ 
+-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+-    manage_kb = ReplyKeyboardMarkup(
+-        keyboard=[
+-            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+-            [KeyboardButton(text="🗑 حذف تصویر")]
+-        ],
+-        resize_keyboard=True
+-    )
+     await message.reply(
+         f"✅ تصویر شماره **{len(images)}** دریافت شد.\n"
+         f"مجموع تصاویر این مدرک: **{len(images)} تصویر**",
+-        reply_markup=manage_kb,
++        reply_markup=_ezhhar_image_manage_kb,
+         parse_mode="Markdown"
+     )
+ 
+@@ -598,6 +696,11 @@ async def ezhhar_images_text(message: Message, state: FSMContext):
+     images = data.get("ezhhar_images", [])
+     deleting = data.get("_ezhhar_deleting_image", False)
+ 
++    if text == "\u25c0\ufe0f بازگشت":
++        # بازگشت به انتخاب عنوان پیوست
++        await _ask_ezhhar_attachment(message, state, is_first=not data.get("ezhhar_attachments"))
++        return
++
+     if deleting:
+         num_str = _to_en(text)
+         if num_str.isdigit():
+@@ -605,23 +708,19 @@ async def ezhhar_images_text(message: Message, state: FSMContext):
+             if 0 <= idx < len(images):
+                 images.pop(idx)
+                 await state.update_data(ezhhar_images=images, _ezhhar_deleting_image=False)
+-                from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+                 if images:
+-                    manage_kb = ReplyKeyboardMarkup(
+-                        keyboard=[
+-                            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+-                            [KeyboardButton(text="🗑 حذف تصویر")]
+-                        ],
+-                        resize_keyboard=True
++                    await message.answer(
++                        f"✅ تصویر شماره **{idx+1}** حذف شد.\n"
++                        f"مجموع باقیمانده: **{len(images)} تصویر**",
++                        reply_markup=_ezhhar_image_manage_kb,
++                        parse_mode="Markdown"
+                     )
+                 else:
+-                    manage_kb = ReplyKeyboardRemove()
+-                await message.answer(
+-                    f"✅ تصویر شماره **{idx+1}** حذف شد.\n"
+-                    f"مجموع باقیمانده: **{len(images)} تصویر**",
+-                    reply_markup=manage_kb,
+-                    parse_mode="Markdown"
+-                )
++                    await message.answer(
++                        f"✅ تصویر شماره **{idx+1}** حذف شد.",
++                        reply_markup=_ezhhar_image_manage_kb_no_delete,
++                        parse_mode="Markdown"
++                    )
+                 return
+             else:
+                 await message.answer(f"⚠️ شماره نامعتبر. لطفاً عددی بین ۱ تا {len(images)} وارد کنید:")
+@@ -651,17 +750,10 @@ async def ezhhar_images_text(message: Message, state: FSMContext):
+         await state.set_state(Form.ezhhar_attachment_more)
+         return
+ 
+-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+     if images:
+-        kb = ReplyKeyboardMarkup(
+-            keyboard=[
+-                [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+-                [KeyboardButton(text="🗑 حذف تصویر")]
+-            ],
+-            resize_keyboard=True
+-        )
++        kb = _ezhhar_image_manage_kb
+     else:
+-        kb = None
++        kb = _ezhhar_image_manage_kb_no_delete
+     await message.answer("⚠️ لطفاً تصویر این مدرک را ارسال کنید:", reply_markup=kb)
+ 
+ 
+@@ -671,6 +763,14 @@ async def ezhhar_attachment_more_handler(message: Message, state: FSMContext):
+     if text == "➕ بله، عنوان و مدرک دیگر دارم":
+         await _ask_ezhhar_attachment(message, state, is_first=False)
+         return
++    if text == "🔙 بازگشت":
++        # بازگشت به ارسال تصاویر آخرین مدرک
++        await message.answer(
++            "🖼 لطفاً تصاویر مربوط به مدرک را ارسال فرمایید:",
++            reply_markup=_ezhhar_image_manage_kb_no_delete
++        )
++        await state.set_state(Form.ezhhar_images)
++        return
+     if text == "✅ خیر، ادامه بده":
+         await _go_to_ezhhar_preview(message, state)
+         return
+@@ -809,7 +909,7 @@ async def ezhhar_edit_choice_handler(message: Message, state: FSMContext):
+         return
+ 
+     if text == "📄 ویرایش شرح متن":
+-        await message.answer("📄 لطفاً متن جدید را ارسال فرمایید:", reply_markup=ReplyKeyboardRemove())
++        await message.answer("📄 لطفاً متن جدید را ارسال فرمایید:", reply_markup=ezhhar_text_back_kb)
+         await state.set_state(Form.ezhhar_text)
+         return
+ 
+diff --git a/ezhharnameh_scenario.py b/ezhharnameh_scenario.py
+index 5cb5f42..3501cd9 100644
+--- a/ezhharnameh_scenario.py
++++ b/ezhharnameh_scenario.py
+@@ -1,43 +1,43 @@
+-"""
+-سناریوی ثبت اظهارنامه در سامانه قضایی ثنا.
+-
+-جریان کلی:
+-  ۱. کلیک «ارایه و پیگیری اظهارنامه»
+-  ۲. کلیک «ثبت و اصلاح اظهارنامه»
+-  ۳. مرحله «شروع» — انتخاب نوع ارائه‌دهنده (حقیقی / حقوقی / وکیل)
+-  ۴. مرحله «اظهارکننده» — افزودن اشخاص اظهارکننده
+-  ۵. مرحله «وکیل» (در صورت وجود وکیل) — افزودن وکیل
+-  ۶. مرحله «موضوع اظهارنامه» (در صورت وجود حقوقی) — ثبت نماینده
+-  ۷. مرحله «متن» — وارد کردن شرح متن
+-  ۸. ثبت موقت
+-  ۹. مرحله «منضمات»:
+-     - اگر حقوقی: ثبت مدرک نمایندگی (اجباری) + سایر پیوست‌ها
+-     - اگر وکیل داشت: مانند اعلام وکالت (تصویر الکترونیک وکالت‌نامه)
+-     - در غیر این صورت: سایر ضمائم
+-  ۱۰. آماده‌سازی جهت محاسبه هزینه
+-  ۱۱. محاسبه و دریافت هزینه
+-  ۱۲. چاپ PDF
+-  ۱۳. ارسال نتیجه به کاربر
+-"""
+-
+-import asyncio
+-import logging
+-import os
+-import html as html_lib
+-
+-from aiogram import Bot
+-from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+-
+-import runtime_state
+-from config import ADMIN_ID
+-from sheets import log_event
+-from browser_helpers import (
+-    resilient_sleep, check_and_handle_expiry, soft_click_if_exists,
+-    goto_url_with_retry, human_delay, force_click_by_text,
+-    safe_click_by_text, safe_type, wait_for_angular_idle,
+-)
+-
+-
++"""
++سناریوی ثبت اظهارنامه در سامانه قضایی ثنا.
++
++جریان کلی:
++  ۱. کلیک «ارایه و پیگیری اظهارنامه»
++  ۲. کلیک «ثبت و اصلاح اظهارنامه»
++  ۳. مرحله «شروع» — انتخاب نوع ارائه‌دهنده (حقیقی / حقوقی / وکیل)
++  ۴. مرحله «اظهارکننده» — افزودن اشخاص اظهارکننده
++  ۵. مرحله «وکیل» (در صورت وجود وکیل) — افزودن وکیل
++  ۶. مرحله «موضوع اظهارنامه» (در صورت وجود حقوقی) — ثبت نماینده
++  ۷. مرحله «متن» — وارد کردن شرح متن
++  ۸. ثبت موقت
++  ۹. مرحله «منضمات»:
++     - اگر حقوقی: ثبت مدرک نمایندگی (اجباری) + سایر پیوست‌ها
++     - اگر وکیل داشت: مانند اعلام وکالت (تصویر الکترونیک وکالت‌نامه)
++     - در غیر این صورت: سایر ضمائم
++  ۱۰. آماده‌سازی جهت محاسبه هزینه
++  ۱۱. محاسبه و دریافت هزینه
++  ۱۲. چاپ PDF
++  ۱۳. ارسال نتیجه به کاربر
++"""
++
++import asyncio
++import logging
++import os
++import html as html_lib
++
++from aiogram import Bot
++from playwright.async_api import TimeoutError as PlaywrightTimeoutError
++
++import runtime_state
++from config import ADMIN_ID
++from sheets import log_event
++from browser_helpers import (
++    resilient_sleep, check_and_handle_expiry, soft_click_if_exists,
++    goto_url_with_retry, human_delay, force_click_by_text,
++    safe_click_by_text, safe_type, wait_for_angular_idle,
++)
++
++
+ class EzhharFatalError(Exception):
+     """خطای قطعی که retry را متوقف می‌کند."""
+     pass
+@@ -50,118 +50,118 @@ class EzhharSanaQueryError(Exception):
+         self.national_id = national_id
+         self.person_role = person_role      # "declarant" یا "addressee"
+         self.person_index = person_index    # ایندکس شخص در لیست
+-
+-
+-# مقدار value برای نوع نماینده در سامانه
+-AGENT_TYPE_VALUES = {
+-    "مدیرعامل": "0091000010000008",
+-    "نماینده":  "0091000010000007",
+-}
+-
+-
+-def _text_to_editor_html(text: str) -> str:
+-    """متن کاربر را با حفظ فاصله‌ها/اینترها به HTML امن برای ادیتور تبدیل می‌کند."""
+-    if not text:
+-        return "<p><br></p>"
+-    lines = text.split("\n")
+-    parts = []
+-    for line in lines:
+-        escaped = html_lib.escape(line, quote=False)
+-        if escaped.startswith(" "):
+-            leading = len(escaped) - len(escaped.lstrip(" "))
+-            escaped = ("&nbsp;" * leading) + escaped[leading:]
+-        escaped = escaped.replace("  ", "&nbsp; ")
+-        parts.append(f"<p>{escaped}</p>" if escaped else "<p><br></p>")
+-    return "".join(parts)
+-
+-
+-async def process_ezhharnameh_task(data: dict, bot: Bot):
+-    """پردازش تسک ثبت اظهارنامه"""
+-    sana_page = runtime_state.sana_page
+-    browser_context = runtime_state.browser_context
+-    user_id = data["user_id"]
+-
+-    declarants = data.get("ezhhar_declarants", [])
+-    addressees = data.get("ezhhar_addressees", [])
+-    subject = data.get("ezhhar_subject", "سایر")
+-    ezhhar_text = data.get("ezhhar_text", "")
+-    attachment_groups = data.get("ezhhar_attachments", [])
+-
+-    # تشخیص وجود وکیل و حقوقی در اظهارکنندگان
+-    has_lawyer = any(p.get("person_type") == "وکیل" for p in declarants)
+-    has_legal_declarant = any(p.get("person_type") == "شخص حقوقی" for p in declarants)
+-    has_real_declarant = any(p.get("person_type") == "شخص حقیقی" for p in declarants)
+-    # تنها حقیقی (بدون حقوقی و وکیل)
+-    only_real_declarant = has_real_declarant and not has_legal_declarant and not has_lawyer
+-
+-    logging.info(
+-        f"[EZHHAR] user={user_id} declarants={declarants} addressees={addressees} "
+-        f"subject={subject} has_lawyer={has_lawyer} has_legal={has_legal_declarant}"
+-    )
+-
+-    await bot.send_message(
+-        user_id,
+-        f"⏳ **در حال ثبت اظهارنامه...**\n"
+-        f"موضوع: **{subject}**",
+-        parse_mode="Markdown"
+-    )
+-    await bot.send_message(
+-        ADMIN_ID,
+-        f"🔄 [EZHHAR] شروع ثبت اظهارنامه برای کاربر {user_id}\n"
+-        f"موضوع: {subject} | اظهارکنندگان: {len(declarants)} | مخاطبین: {len(addressees)}"
+-    )
+-
+-    max_attempts = 3
+-    for attempt in range(max_attempts):
+-        try:
+-            ok = await goto_url_with_retry(
+-                sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
+-            )
+-            if not ok:
+-                return
+-            await human_delay(3.0, 5.0)
+-
+-            # ── ۱. کلیک «ارایه و پیگیری اظهارنامه» ─────────────────────
+-            clicked = await sana_page.evaluate('''() => {
+-                const links = Array.from(document.querySelectorAll('a.list-group-item'));
+-                const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری اظهارنامه"));
+-                if (t) { t.click(); return true; }
+-                return false;
+-            }''')
+-            if not clicked:
+-                await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+-            await resilient_sleep(sana_page, 5, bot, user_id)
+-
+-            # ── ۲. کلیک «ثبت و اصلاح اظهارنامه» ────────────────────────
+-            await _click_step_box(sana_page, "ثبت و اصلاح اظهارنامه", bot, user_id)
+-            await resilient_sleep(sana_page, 5, bot, user_id)
+-
+-            # ── ۳. مرحله «شروع» — انتخاب نوع ارائه ─────────────────────
+-            await _click_step_label(sana_page, "شروع", bot, user_id)
+-            await resilient_sleep(sana_page, 3, bot, user_id)
+-
+-            if only_real_declarant:
+-                # فقط حقیقی — مستقیم وارد بخش اظهارکننده می‌شویم
+-                logging.info("[EZHHAR] only real declarant — skipping start step selection")
+-            elif has_lawyer:
+-                # دارد وکیل + (احتمالاً حقیقی/حقوقی)
+-                await sana_page.evaluate('''() => {
+-                    const rdb = document.querySelector('#rdbLawyerOffer');
+-                    if (rdb) rdb.click();
+-                }''')
+-                await asyncio.sleep(2)
+-            else:
+-                # حقوقی بدون وکیل
+-                await sana_page.evaluate('''() => {
+-                    const rdb = document.querySelector('#rdbAgentOffer');
+-                    if (rdb) rdb.click();
+-                }''')
+-                await asyncio.sleep(2)
+-
+-            # ── ۴. مرحله «اظهارکننده» ────────────────────────────────────
+-            await _click_step_label(sana_page, "اظهاركننده", bot, user_id)
+-            await resilient_sleep(sana_page, 4, bot, user_id)
+-
++
++
++# مقدار value برای نوع نماینده در سامانه
++AGENT_TYPE_VALUES = {
++    "مدیرعامل": "0091000010000008",
++    "نماینده":  "0091000010000007",
++}
++
++
++def _text_to_editor_html(text: str) -> str:
++    """متن کاربر را با حفظ فاصله‌ها/اینترها به HTML امن برای ادیتور تبدیل می‌کند."""
++    if not text:
++        return "<p><br></p>"
++    lines = text.split("\n")
++    parts = []
++    for line in lines:
++        escaped = html_lib.escape(line, quote=False)
++        if escaped.startswith(" "):
++            leading = len(escaped) - len(escaped.lstrip(" "))
++            escaped = ("&nbsp;" * leading) + escaped[leading:]
++        escaped = escaped.replace("  ", "&nbsp; ")
++        parts.append(f"<p>{escaped}</p>" if escaped else "<p><br></p>")
++    return "".join(parts)
++
++
++async def process_ezhharnameh_task(data: dict, bot: Bot):
++    """پردازش تسک ثبت اظهارنامه"""
++    sana_page = runtime_state.sana_page
++    browser_context = runtime_state.browser_context
++    user_id = data["user_id"]
++
++    declarants = data.get("ezhhar_declarants", [])
++    addressees = data.get("ezhhar_addressees", [])
++    subject = data.get("ezhhar_subject", "سایر")
++    ezhhar_text = data.get("ezhhar_text", "")
++    attachment_groups = data.get("ezhhar_attachments", [])
++
++    # تشخیص وجود وکیل و حقوقی در اظهارکنندگان
++    has_lawyer = any(p.get("person_type") == "وکیل" for p in declarants)
++    has_legal_declarant = any(p.get("person_type") == "شخص حقوقی" for p in declarants)
++    has_real_declarant = any(p.get("person_type") == "شخص حقیقی" for p in declarants)
++    # تنها حقیقی (بدون حقوقی و وکیل)
++    only_real_declarant = has_real_declarant and not has_legal_declarant and not has_lawyer
++
++    logging.info(
++        f"[EZHHAR] user={user_id} declarants={declarants} addressees={addressees} "
++        f"subject={subject} has_lawyer={has_lawyer} has_legal={has_legal_declarant}"
++    )
++
++    await bot.send_message(
++        user_id,
++        f"⏳ **در حال ثبت اظهارنامه...**\n"
++        f"موضوع: **{subject}**",
++        parse_mode="Markdown"
++    )
++    await bot.send_message(
++        ADMIN_ID,
++        f"🔄 [EZHHAR] شروع ثبت اظهارنامه برای کاربر {user_id}\n"
++        f"موضوع: {subject} | اظهارکنندگان: {len(declarants)} | مخاطبین: {len(addressees)}"
++    )
++
++    max_attempts = 3
++    for attempt in range(max_attempts):
++        try:
++            ok = await goto_url_with_retry(
++                sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
++            )
++            if not ok:
++                return
++            await human_delay(3.0, 5.0)
++
++            # ── ۱. کلیک «ارایه و پیگیری اظهارنامه» ─────────────────────
++            clicked = await sana_page.evaluate('''() => {
++                const links = Array.from(document.querySelectorAll('a.list-group-item'));
++                const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری اظهارنامه"));
++                if (t) { t.click(); return true; }
++                return false;
++            }''')
++            if not clicked:
++                await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
++            await resilient_sleep(sana_page, 5, bot, user_id)
++
++            # ── ۲. کلیک «ثبت و اصلاح اظهارنامه» ────────────────────────
++            await _click_step_box(sana_page, "ثبت و اصلاح اظهارنامه", bot, user_id)
++            await resilient_sleep(sana_page, 5, bot, user_id)
++
++            # ── ۳. مرحله «شروع» — انتخاب نوع ارائه ─────────────────────
++            await _click_step_label(sana_page, "شروع", bot, user_id)
++            await resilient_sleep(sana_page, 3, bot, user_id)
++
++            if only_real_declarant:
++                # فقط حقیقی — مستقیم وارد بخش اظهارکننده می‌شویم
++                logging.info("[EZHHAR] only real declarant — skipping start step selection")
++            elif has_lawyer:
++                # دارد وکیل + (احتمالاً حقیقی/حقوقی)
++                await sana_page.evaluate('''() => {
++                    const rdb = document.querySelector('#rdbLawyerOffer');
++                    if (rdb) rdb.click();
++                }''')
++                await asyncio.sleep(2)
++            else:
++                # حقوقی بدون وکیل
++                await sana_page.evaluate('''() => {
++                    const rdb = document.querySelector('#rdbAgentOffer');
++                    if (rdb) rdb.click();
++                }''')
++                await asyncio.sleep(2)
++
++            # ── ۴. مرحله «اظهارکننده» ────────────────────────────────────
++            await _click_step_label(sana_page, "اظهاركننده", bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
+             for idx, person in enumerate(declarants):
+                 ptype = person.get("person_type", "شخص حقیقی")
+                 if ptype in ("شخص حقیقی", "وکیل"):
+@@ -215,237 +215,237 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
+                     await _fill_lawyer_person(sana_page, person["national_id"], bot, user_id,
+                                                person_role="declarant", person_index=idx)
+                     await resilient_sleep(sana_page, 10, bot, user_id)
+-
+-            # ── ۶. مرحله «موضوع اظهارنامه» ──────────────────────────────
+-            # این مرحله همیشه باید طی شود (چه اظهارکننده حقیقی باشد چه حقوقی)
+-            await _click_step_label(sana_page, "موضوع اظهارنامه", bot, user_id)
+-            await resilient_sleep(sana_page, 4, bot, user_id)
+-
+-            # کلیک «افزودن»
+-            await _click_add_btn(sana_page, bot, user_id)
+-            await resilient_sleep(sana_page, 3, bot, user_id)
+-
+-            # باز کردن dropdown «موضوع» و جستجوی «سایر»
+-            search_input = sana_page.locator('.ui-select-search').first
+-            opened = False
+-            for open_attempt in range(4):
+-                await sana_page.evaluate('''() => {
+-                    const btn = document.querySelector('.ui-select-toggle');
+-                    if (btn) btn.click();
+-                }''')
+-                try:
+-                    await search_input.wait_for(state="visible", timeout=4000)
+-                    opened = True
+-                    break
+-                except PlaywrightTimeoutError:
+-                    logging.warning(f"[EZHHAR] dropdown موضوع باز نشد (تلاش {open_attempt + 1})")
+-                    await asyncio.sleep(1.5)
+-
+-            if opened:
+-                await search_input.fill("")
+-                await search_input.type("سایر", delay=150)
+-                await asyncio.sleep(3)
+-
+-                subject_clicked = await sana_page.evaluate('''() => {
+-                    // اولویت با آیتم دقیق typeahead که شامل «سایر موضوعات اظهارنامه» است
+-                    const highlighted = Array.from(document.querySelectorAll('[ng-bind-html*="typeaheadHighlight"]'));
+-                    const visibleHighlighted = highlighted.filter(el => {
+-                        const r = el.getBoundingClientRect();
+-                        return r.width > 0 && r.height > 0;
+-                    });
+-                    if (visibleHighlighted.length > 0) {
+-                        let target = visibleHighlighted[0];
+-                        // کلیک روی والد قابل‌کلیک (ردیف) در صورت وجود، وگرنه خود المان
+-                        const row = target.closest('a, .ui-select-choices-row, li') || target;
+-                        row.click();
+-                        target.click();
+-                        return true;
+-                    }
+-                    const choices = Array.from(document.querySelectorAll('.ui-select-choices-row, .ui-select-choices div[ng-repeat]'));
+-                    const visible = choices.filter(el => {
+-                        const r = el.getBoundingClientRect();
+-                        return r.width > 0 && r.height > 0;
+-                    });
+-                    if (visible.length > 0) { visible[0].click(); return true; }
+-                    const lis = Array.from(document.querySelectorAll('.ui-select-choices li'));
+-                    const visLis = lis.filter(el => {
+-                        const r = el.getBoundingClientRect();
+-                        return r.width > 0 && r.height > 0;
+-                    });
+-                    if (visLis.length > 0) { visLis[0].click(); return true; }
+-                    return false;
+-                }''')
+-                await asyncio.sleep(3)
+-
+-                if not subject_clicked:
+-                    logging.warning("[EZHHAR] گزینه اول dropdown موضوع پیدا/کلیک نشد — تلاش مجدد")
+-                    # تلاش دوم: کلیک با locator روی آیتم typeahead
+-                    try:
+-                        option_locator = sana_page.locator('[ng-bind-html*="typeaheadHighlight"]').first
+-                        await option_locator.wait_for(state="visible", timeout=3000)
+-                        await option_locator.click()
+-                        await asyncio.sleep(3)
+-                    except PlaywrightTimeoutError:
+-                        logging.warning("[EZHHAR] تلاش دوم انتخاب موضوع نیز ناموفق بود")
+-            else:
+-                logging.warning("[EZHHAR] dropdown موضوع باز نشد — ادامه بدون انتخاب موضوع")
+-
+-            # اگر کاربر عنوانی متفاوت از پیش‌فرض انتخاب کرده باشد، در فیلد توضیحات درج می‌شود
+-            if subject and subject != "سایر":
+-                await sana_page.evaluate('''(desc) => {
+-                    const inp = document.querySelector('input[name="txtDescription"]');
+-                    if (inp) {
+-                        inp.value = desc;
+-                        inp.dispatchEvent(new Event("input", { bubbles: true }));
+-                        inp.dispatchEvent(new Event("change", { bubbles: true }));
+-                    }
+-                }''', subject)
+-                await asyncio.sleep(1)
+-
+-            # ── ۷. مرحله «شرح» ───────────────────────────────────────────
+-            await _click_step_label(sana_page, "شرح", bot, user_id)
+-            await resilient_sleep(sana_page, 4, bot, user_id)
+-
+-            ezhhar_text_html = _text_to_editor_html(ezhhar_text)
+-            await sana_page.evaluate('''(html) => {
+-                const editor = document.querySelector('[contenteditable="true"][ta-bind]');
+-                if (editor) {
+-                    editor.focus();
+-                    editor.innerHTML = html;
+-                    editor.dispatchEvent(new Event("input", { bubbles: true }));
+-                    editor.dispatchEvent(new Event("change", { bubbles: true }));
+-                }
+-            }''', ezhhar_text_html)
+-            await resilient_sleep(sana_page, 2, bot, user_id)
+-
+-            # اعمال H3
+-            await sana_page.evaluate('''() => {
+-                const editor = document.querySelector('[contenteditable="true"][ta-bind]');
+-                if (editor) {
+-                    const range = document.createRange();
+-                    range.selectNodeContents(editor);
+-                    const sel = window.getSelection();
+-                    sel.removeAllRanges();
+-                    sel.addRange(range);
+-                    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
+-                    editor.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+-                }
+-            }''')
+-            await asyncio.sleep(0.5)
+-            await sana_page.evaluate('''() => {
+-                const btn = document.querySelector('button[name="h3"]') ||
+-                    Array.from(document.querySelectorAll('button')).find(b => b.title === "Heading 3");
+-                if (btn && !btn.disabled) btn.click();
+-            }''')
+-            await asyncio.sleep(0.5)
+-
+-            # ── ۸. ثبت موقت ──────────────────────────────────────────────
+-            await _click_save_temp(sana_page, bot, user_id)
+-            await resilient_sleep(sana_page, 8, bot, user_id)
+-
+-            bill_no = await _extract_bill_no(sana_page)
+-            logging.info(f"[EZHHAR] bill_no={bill_no}")
+-
+-            await _click_goto_main(sana_page, bot, user_id)
+-            await resilient_sleep(sana_page, 4, bot, user_id)
+-
+-            # ── ۹. مرحله «منضمات» ────────────────────────────────────────
+-            # دانلود تصاویر از تلگرام
+-            groups_with_paths = []
+-            for group in attachment_groups:
+-                paths = await _download_images(bot, group.get("images", []), user_id)
+-                groups_with_paths.append({"title": group.get("title", "مستندات"), "paths": paths})
+-
+-            if has_legal_declarant or attachment_groups:
+-                await _click_step_box(sana_page, "منضمات", bot, user_id)
+-                await resilient_sleep(sana_page, 5, bot, user_id)
+-
+-                # اگر حقوقی داشتیم، مدرک نمایندگی اجباری است
+-                if has_legal_declarant:
+-                    # اولین گروه پیوست‌ها را به عنوان مدرک نمایندگی ثبت می‌کنیم
+-                    proxy_group = groups_with_paths[0] if groups_with_paths else {"title": "مدرک نمایندگی", "paths": []}
+-                    await _upload_proxy_document(sana_page, proxy_group["paths"], bot, user_id)
+-                    remaining_groups = groups_with_paths[1:]
+-                else:
+-                    remaining_groups = groups_with_paths
+-
+-                # اگر وکیل داشتیم، وکالت‌نامه الکترونیک
+-                if has_lawyer:
+-                    # یافتن اولین وکیل برای شماره قرارداد
+-                    first_lawyer = next((p for p in declarants if p.get("person_type") == "وکیل"), {})
+-                    contract_no = first_lawyer.get("contract_number", "")
+-                    stamp_val = first_lawyer.get("stamp_amount_value", 0)
+-                    await _upload_electronic_vakalaht(sana_page, contract_no, stamp_val, bot, user_id)
+-
+-                # سایر پیوست‌ها
+-                for group in remaining_groups:
+-                    if group["paths"]:
+-                        await _upload_other_attachment(sana_page, group["title"], group["paths"], bot, user_id)
+-
+-                # پاکسازی فایل‌های موقت
+-                for group in groups_with_paths:
+-                    for p in group["paths"]:
+-                        try:
+-                            if os.path.exists(p):
+-                                os.remove(p)
+-                        except Exception:
+-                            pass
+-
+-                await _click_goto_main(sana_page, bot, user_id)
+-                await resilient_sleep(sana_page, 4, bot, user_id)
+-
+-            # ── ۱۰. آماده‌سازی ───────────────────────────────────────────
+-            await _click_step_box(sana_page, "آماده سازي جهت محاسبه هزينه و ارسال", bot, user_id)
+-            await resilient_sleep(sana_page, 5, bot, user_id)
+-
+-            prep_ok = await _click_preparation(sana_page, bot, user_id)
+-            if not prep_ok:
+-                await bot.send_message(
+-                    user_id,
+-                    f"⚠️ مرحله آماده‌سازی با مشکل مواجه شد.\n"
+-                    f"کد رهگیری لایحه: `{bill_no}`\n"
+-                    f"با شماره **09306186888** در واتساپ پیام دهید.",
+-                    parse_mode="Markdown"
+-                )
+-                return
+-
+-            await _click_goto_main(sana_page, bot, user_id)
+-            await resilient_sleep(sana_page, 4, bot, user_id)
+-
+-            # ── ۱۱. محاسبه هزینه ─────────────────────────────────────────
+-            await _click_step_box(sana_page, "محاسبه و دريافت هزينه", bot, user_id)
+-            await resilient_sleep(sana_page, 8, bot, user_id)
+-
+-            court_total = await _calculate_cost(sana_page, bot, user_id)
+-            logging.info(f"[EZHHAR] court_total={court_total}")
+-
+-            await _click_goto_main(sana_page, bot, user_id)
+-            await resilient_sleep(sana_page, 4, bot, user_id)
+-
+-            # ── ۱۲. چاپ PDF ──────────────────────────────────────────────
+-            pdf_path = await _print_ezhharnameh(sana_page, browser_context, bill_no, bot, user_id)
+-
+-            # ── ۱۳. ارسال نتیجه ──────────────────────────────────────────
+-            from lavayeh_handlers import send_lavayeh_result
+-            nat_ids = ", ".join([
+-                p.get("national_id", "") for p in declarants if p.get("national_id")
+-            ])
+-            await send_lavayeh_result(
+-                bot, user_id, pdf_path, court_total,
+-                tracking_code=bill_no,
+-                national_ids=nat_ids,
+-                lavayeh_title=f"اظهارنامه — {subject}",
+-                lavayeh_province="",
+-                lavayeh_row_number=1,
+-                lavayeh_persons=declarants,
+-            )
+-
+-            await bot.send_message(
+-                ADMIN_ID,
+-                f"✅ [EZHHAR] ثبت اظهارنامه کاربر {user_id} موفق. هزینه: {court_total:,} تومان"
+-            )
+-            return
+-
++
++            # ── ۶. مرحله «موضوع اظهارنامه» ──────────────────────────────
++            # این مرحله همیشه باید طی شود (چه اظهارکننده حقیقی باشد چه حقوقی)
++            await _click_step_label(sana_page, "موضوع اظهارنامه", bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
++            # کلیک «افزودن»
++            await _click_add_btn(sana_page, bot, user_id)
++            await resilient_sleep(sana_page, 3, bot, user_id)
++
++            # باز کردن dropdown «موضوع» و جستجوی «سایر»
++            search_input = sana_page.locator('.ui-select-search').first
++            opened = False
++            for open_attempt in range(4):
++                await sana_page.evaluate('''() => {
++                    const btn = document.querySelector('.ui-select-toggle');
++                    if (btn) btn.click();
++                }''')
++                try:
++                    await search_input.wait_for(state="visible", timeout=4000)
++                    opened = True
++                    break
++                except PlaywrightTimeoutError:
++                    logging.warning(f"[EZHHAR] dropdown موضوع باز نشد (تلاش {open_attempt + 1})")
++                    await asyncio.sleep(1.5)
++
++            if opened:
++                await search_input.fill("")
++                await search_input.type("سایر", delay=150)
++                await asyncio.sleep(3)
++
++                subject_clicked = await sana_page.evaluate('''() => {
++                    // اولویت با آیتم دقیق typeahead که شامل «سایر موضوعات اظهارنامه» است
++                    const highlighted = Array.from(document.querySelectorAll('[ng-bind-html*="typeaheadHighlight"]'));
++                    const visibleHighlighted = highlighted.filter(el => {
++                        const r = el.getBoundingClientRect();
++                        return r.width > 0 && r.height > 0;
++                    });
++                    if (visibleHighlighted.length > 0) {
++                        let target = visibleHighlighted[0];
++                        // کلیک روی والد قابل‌کلیک (ردیف) در صورت وجود، وگرنه خود المان
++                        const row = target.closest('a, .ui-select-choices-row, li') || target;
++                        row.click();
++                        target.click();
++                        return true;
++                    }
++                    const choices = Array.from(document.querySelectorAll('.ui-select-choices-row, .ui-select-choices div[ng-repeat]'));
++                    const visible = choices.filter(el => {
++                        const r = el.getBoundingClientRect();
++                        return r.width > 0 && r.height > 0;
++                    });
++                    if (visible.length > 0) { visible[0].click(); return true; }
++                    const lis = Array.from(document.querySelectorAll('.ui-select-choices li'));
++                    const visLis = lis.filter(el => {
++                        const r = el.getBoundingClientRect();
++                        return r.width > 0 && r.height > 0;
++                    });
++                    if (visLis.length > 0) { visLis[0].click(); return true; }
++                    return false;
++                }''')
++                await asyncio.sleep(3)
++
++                if not subject_clicked:
++                    logging.warning("[EZHHAR] گزینه اول dropdown موضوع پیدا/کلیک نشد — تلاش مجدد")
++                    # تلاش دوم: کلیک با locator روی آیتم typeahead
++                    try:
++                        option_locator = sana_page.locator('[ng-bind-html*="typeaheadHighlight"]').first
++                        await option_locator.wait_for(state="visible", timeout=3000)
++                        await option_locator.click()
++                        await asyncio.sleep(3)
++                    except PlaywrightTimeoutError:
++                        logging.warning("[EZHHAR] تلاش دوم انتخاب موضوع نیز ناموفق بود")
++            else:
++                logging.warning("[EZHHAR] dropdown موضوع باز نشد — ادامه بدون انتخاب موضوع")
++
++            # اگر کاربر عنوانی متفاوت از پیش‌فرض انتخاب کرده باشد، در فیلد توضیحات درج می‌شود
++            if subject and subject != "سایر":
++                await sana_page.evaluate('''(desc) => {
++                    const inp = document.querySelector('input[name="txtDescription"]');
++                    if (inp) {
++                        inp.value = desc;
++                        inp.dispatchEvent(new Event("input", { bubbles: true }));
++                        inp.dispatchEvent(new Event("change", { bubbles: true }));
++                    }
++                }''', subject)
++                await asyncio.sleep(1)
++
++            # ── ۷. مرحله «شرح» ───────────────────────────────────────────
++            await _click_step_label(sana_page, "شرح", bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
++            ezhhar_text_html = _text_to_editor_html(ezhhar_text)
++            await sana_page.evaluate('''(html) => {
++                const editor = document.querySelector('[contenteditable="true"][ta-bind]');
++                if (editor) {
++                    editor.focus();
++                    editor.innerHTML = html;
++                    editor.dispatchEvent(new Event("input", { bubbles: true }));
++                    editor.dispatchEvent(new Event("change", { bubbles: true }));
++                }
++            }''', ezhhar_text_html)
++            await resilient_sleep(sana_page, 2, bot, user_id)
++
++            # اعمال H3
++            await sana_page.evaluate('''() => {
++                const editor = document.querySelector('[contenteditable="true"][ta-bind]');
++                if (editor) {
++                    const range = document.createRange();
++                    range.selectNodeContents(editor);
++                    const sel = window.getSelection();
++                    sel.removeAllRanges();
++                    sel.addRange(range);
++                    document.dispatchEvent(new Event("selectionchange", { bubbles: true }));
++                    editor.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
++                }
++            }''')
++            await asyncio.sleep(0.5)
++            await sana_page.evaluate('''() => {
++                const btn = document.querySelector('button[name="h3"]') ||
++                    Array.from(document.querySelectorAll('button')).find(b => b.title === "Heading 3");
++                if (btn && !btn.disabled) btn.click();
++            }''')
++            await asyncio.sleep(0.5)
++
++            # ── ۸. ثبت موقت ──────────────────────────────────────────────
++            await _click_save_temp(sana_page, bot, user_id)
++            await resilient_sleep(sana_page, 8, bot, user_id)
++
++            bill_no = await _extract_bill_no(sana_page)
++            logging.info(f"[EZHHAR] bill_no={bill_no}")
++
++            await _click_goto_main(sana_page, bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
++            # ── ۹. مرحله «منضمات» ────────────────────────────────────────
++            # دانلود تصاویر از تلگرام
++            groups_with_paths = []
++            for group in attachment_groups:
++                paths = await _download_images(bot, group.get("images", []), user_id)
++                groups_with_paths.append({"title": group.get("title", "مستندات"), "paths": paths})
++
++            if has_legal_declarant or attachment_groups:
++                await _click_step_box(sana_page, "منضمات", bot, user_id)
++                await resilient_sleep(sana_page, 5, bot, user_id)
++
++                # اگر حقوقی داشتیم، مدرک نمایندگی اجباری است
++                if has_legal_declarant:
++                    # اولین گروه پیوست‌ها را به عنوان مدرک نمایندگی ثبت می‌کنیم
++                    proxy_group = groups_with_paths[0] if groups_with_paths else {"title": "مدرک نمایندگی", "paths": []}
++                    await _upload_proxy_document(sana_page, proxy_group["paths"], bot, user_id)
++                    remaining_groups = groups_with_paths[1:]
++                else:
++                    remaining_groups = groups_with_paths
++
++                # اگر وکیل داشتیم، وکالت‌نامه الکترونیک
++                if has_lawyer:
++                    # یافتن اولین وکیل برای شماره قرارداد
++                    first_lawyer = next((p for p in declarants if p.get("person_type") == "وکیل"), {})
++                    contract_no = first_lawyer.get("contract_number", "")
++                    stamp_val = first_lawyer.get("stamp_amount_value", 0)
++                    await _upload_electronic_vakalaht(sana_page, contract_no, stamp_val, bot, user_id)
++
++                # سایر پیوست‌ها
++                for group in remaining_groups:
++                    if group["paths"]:
++                        await _upload_other_attachment(sana_page, group["title"], group["paths"], bot, user_id)
++
++                # پاکسازی فایل‌های موقت
++                for group in groups_with_paths:
++                    for p in group["paths"]:
++                        try:
++                            if os.path.exists(p):
++                                os.remove(p)
++                        except Exception:
++                            pass
++
++                await _click_goto_main(sana_page, bot, user_id)
++                await resilient_sleep(sana_page, 4, bot, user_id)
++
++            # ── ۱۰. آماده‌سازی ───────────────────────────────────────────
++            await _click_step_box(sana_page, "آماده سازي جهت محاسبه هزينه و ارسال", bot, user_id)
++            await resilient_sleep(sana_page, 5, bot, user_id)
++
++            prep_ok = await _click_preparation(sana_page, bot, user_id)
++            if not prep_ok:
++                await bot.send_message(
++                    user_id,
++                    f"⚠️ مرحله آماده‌سازی با مشکل مواجه شد.\n"
++                    f"کد رهگیری لایحه: `{bill_no}`\n"
++                    f"با شماره **09306186888** در واتساپ پیام دهید.",
++                    parse_mode="Markdown"
++                )
++                return
++
++            await _click_goto_main(sana_page, bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
++            # ── ۱۱. محاسبه هزینه ─────────────────────────────────────────
++            await _click_step_box(sana_page, "محاسبه و دريافت هزينه", bot, user_id)
++            await resilient_sleep(sana_page, 8, bot, user_id)
++
++            court_total = await _calculate_cost(sana_page, bot, user_id)
++            logging.info(f"[EZHHAR] court_total={court_total}")
++
++            await _click_goto_main(sana_page, bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
++            # ── ۱۲. چاپ PDF ──────────────────────────────────────────────
++            pdf_path = await _print_ezhharnameh(sana_page, browser_context, bill_no, bot, user_id)
++
++            # ── ۱۳. ارسال نتیجه ──────────────────────────────────────────
++            from lavayeh_handlers import send_lavayeh_result
++            nat_ids = ", ".join([
++                p.get("national_id", "") for p in declarants if p.get("national_id")
++            ])
++            await send_lavayeh_result(
++                bot, user_id, pdf_path, court_total,
++                tracking_code=bill_no,
++                national_ids=nat_ids,
++                lavayeh_title=f"اظهارنامه — {subject}",
++                lavayeh_province="",
++                lavayeh_row_number=1,
++                lavayeh_persons=declarants,
++            )
++
++            await bot.send_message(
++                ADMIN_ID,
++                f"✅ [EZHHAR] ثبت اظهارنامه کاربر {user_id} موفق. هزینه: {court_total:,} تومان"
++            )
++            return
++
+         except EzhharSanaQueryError as e:
+             logging.error(f"[EZHHAR] خطای استعلام ثنا user={user_id}: {e}")
+             # ذخیره اطلاعات تسک برای ادامه بعدی در صورت ویرایش شناسه ملی
+@@ -500,87 +500,87 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
+             return
+ 
+         except Exception as e:
+-            logging.error(f"[EZHHAR] تلاش {attempt+1} ناموفق user={user_id}: {e}")
+-            if attempt < max_attempts - 1:
+-                await bot.send_message(
+-                    ADMIN_ID,
+-                    f"⚠️ [EZHHAR] تلاش {attempt+1} ناموفق. ریلود...\nخطا: {str(e)[:300]}"
+-                )
+-                try:
+-                    await sana_page.reload()
+-                    await asyncio.sleep(6)
+-                except Exception:
+-                    pass
+-            else:
+-                await bot.send_message(
+-                    user_id,
+-                    "⚠️ ثبت اظهارنامه با اختلال مواجه شد. پشتیبانی پیگیری خواهد کرد."
+-                )
+-                await bot.send_message(ADMIN_ID, f"❌ [EZHHAR] کاربر {user_id} پس از {max_attempts} تلاش ناموفق.")
+-                await log_event(
+-                    "خطای سامانه", "اظهارنامه", str(user_id), user_id,
+-                    doc_name=subject,
+-                    note=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}"
+-                )
+-
+-
+-# ══════════════════════════════════════════════════════════════════════════════
+-# توابع کمکی
+-# ══════════════════════════════════════════════════════════════════════════════
+-
+-async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
+-    clicked = await page.evaluate(f'''() => {{
+-        const heads = Array.from(document.querySelectorAll('.box h5'));
+-        const t = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+-        if (t) {{
+-            const box = t.closest('.box');
+-            if (box) {{ box.click(); return true; }}
+-        }}
+-        return false;
+-    }}''')
+-    if not clicked:
+-        await safe_click_by_text(page, step_name, bot, user_id)
+-        return
+-
+-    # مسیر کلیک مستقیم از safe_click_by_text عبور نمی‌کند؛ اینجا هم صریحاً
+-    # چک انقضا انجام می‌شود (نقطه‌ای که کلیک روی «منضمات» قبلاً بدون این چک بود).
+-    await asyncio.sleep(1.5)
+-    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+-    if had_expiry:
+-        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
+-        await page.evaluate(f'''() => {{
+-            const heads = Array.from(document.querySelectorAll('.box h5'));
+-            const t = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+-            if (t) {{
+-                const box = t.closest('.box');
+-                if (box) box.click();
+-            }}
+-        }}''')
+-        await asyncio.sleep(1.5)
+-
+-
+-async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
+-    clicked = await page.evaluate(f'''() => {{
+-        const steps = Array.from(document.querySelectorAll('.step'));
+-        const t = steps.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
+-        if (t) {{ t.click(); return true; }}
+-        return false;
+-    }}''')
+-    if not clicked:
+-        await safe_click_by_text(page, step_name, bot, user_id)
+-
+-
+-async def _click_add_btn(page, bot: Bot, user_id: int):
+-    clicked = await page.evaluate('''() => {
+-        const btn = document.querySelector('#btnAddSection');
+-        if (btn && !btn.disabled) { btn.click(); return true; }
+-        return false;
+-    }''')
+-    if not clicked:
+-        await safe_click_by_text(page, "افزودن", bot, user_id)
+-    await asyncio.sleep(2)
+-
+-
++            logging.error(f"[EZHHAR] تلاش {attempt+1} ناموفق user={user_id}: {e}")
++            if attempt < max_attempts - 1:
++                await bot.send_message(
++                    ADMIN_ID,
++                    f"⚠️ [EZHHAR] تلاش {attempt+1} ناموفق. ریلود...\nخطا: {str(e)[:300]}"
++                )
++                try:
++                    await sana_page.reload()
++                    await asyncio.sleep(6)
++                except Exception:
++                    pass
++            else:
++                await bot.send_message(
++                    user_id,
++                    "⚠️ ثبت اظهارنامه با اختلال مواجه شد. پشتیبانی پیگیری خواهد کرد."
++                )
++                await bot.send_message(ADMIN_ID, f"❌ [EZHHAR] کاربر {user_id} پس از {max_attempts} تلاش ناموفق.")
++                await log_event(
++                    "خطای سامانه", "اظهارنامه", str(user_id), user_id,
++                    doc_name=subject,
++                    note=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}"
++                )
++
++
++# ══════════════════════════════════════════════════════════════════════════════
++# توابع کمکی
++# ══════════════════════════════════════════════════════════════════════════════
++
++async def _click_step_box(page, step_name: str, bot: Bot, user_id: int):
++    clicked = await page.evaluate(f'''() => {{
++        const heads = Array.from(document.querySelectorAll('.box h5'));
++        const t = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
++        if (t) {{
++            const box = t.closest('.box');
++            if (box) {{ box.click(); return true; }}
++        }}
++        return false;
++    }}''')
++    if not clicked:
++        await safe_click_by_text(page, step_name, bot, user_id)
++        return
++
++    # مسیر کلیک مستقیم از safe_click_by_text عبور نمی‌کند؛ اینجا هم صریحاً
++    # چک انقضا انجام می‌شود (نقطه‌ای که کلیک روی «منضمات» قبلاً بدون این چک بود).
++    await asyncio.sleep(1.5)
++    had_expiry = await check_and_handle_expiry(page, bot, user_id)
++    if had_expiry:
++        logging.info(f"_click_step_box: session renewed after clicking box '{step_name}', retrying click.")
++        await page.evaluate(f'''() => {{
++            const heads = Array.from(document.querySelectorAll('.box h5'));
++            const t = heads.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
++            if (t) {{
++                const box = t.closest('.box');
++                if (box) box.click();
++            }}
++        }}''')
++        await asyncio.sleep(1.5)
++
++
++async def _click_step_label(page, step_name: str, bot: Bot, user_id: int):
++    clicked = await page.evaluate(f'''() => {{
++        const steps = Array.from(document.querySelectorAll('.step'));
++        const t = steps.find(el => el.innerText && el.innerText.trim().includes("{step_name}"));
++        if (t) {{ t.click(); return true; }}
++        return false;
++    }}''')
++    if not clicked:
++        await safe_click_by_text(page, step_name, bot, user_id)
++
++
++async def _click_add_btn(page, bot: Bot, user_id: int):
++    clicked = await page.evaluate('''() => {
++        const btn = document.querySelector('#btnAddSection');
++        if (btn && !btn.disabled) { btn.click(); return true; }
++        return false;
++    }''')
++    if not clicked:
++        await safe_click_by_text(page, "افزودن", bot, user_id)
++    await asyncio.sleep(2)
++
++
+ async def _fill_real_person(page, national_id: str, bot: Bot, user_id: int,
+                             person_role: str = "", person_index: int = 0):
+     """پر کردن کدملی شخص حقیقی و استعلام"""
+@@ -602,40 +602,102 @@ async def _fill_real_person(page, national_id: str, bot: Bot, user_id: int,
+     # استعلام ثنا
+     await _query_sana(page, "actions.callNationalityCode", bot, user_id,
+                       current_national_id=national_id, person_role=person_role, person_index=person_index)
+-
+-
++
++
+ async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int,
+                               person_role: str = "", person_index: int = 0):
+     """پر کردن اطلاعات شخص حقوقی و استعلام"""
+     company_id = person.get("company_id", "")
+     national_id = person.get("national_id", "")
+     rep_type = person.get("representative_type", "نماینده")
+-
+-    # انتخاب رادیوباتن «شخص حقوقی» (value=3)
+-    await page.evaluate('''() => {
+-        const rdb = document.querySelector('#rdb3, input[value="3"][name="personType"]');
+-        if (rdb) rdb.click();
+-    }''')
+-    await asyncio.sleep(2)
+-
+-    # انتخاب «غیردولتی / خصوصی» (value=4)
+-    await page.evaluate('''() => {
+-        const rdb = document.querySelector('#rdbPrivate, input[value="4"][name="LegalPersonType"]');
+-        if (rdb) rdb.click();
+-    }''')
+-    await asyncio.sleep(2)
+-
+-    # وارد کردن شناسه ملی شرکت
+-    await page.evaluate(f'''() => {{
+-        const inp = document.querySelector('#txtLegalIrNationalityCode');
+-        if (inp) {{
+-            inp.value = "{company_id}";
+-            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+-            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+-        }}
+-    }}''')
+-    await asyncio.sleep(1)
+-
++
++    # انتخاب رادیوباتن «شخص حقوقی» (value=3)
++    await page.evaluate('''() => {
++        const rdb = document.querySelector('#rdb3, input[value="3"][name="personType"]');
++        if (rdb) rdb.click();
++    }''')
++    await asyncio.sleep(2)
++
++    # انتخاب «غیردولتی / خصوصی» (value=4)
++    await page.evaluate('''() => {
++        const rdb = document.querySelector('#rdbPrivate, input[value="4"][name="LegalPersonType"]');
++        if (rdb) rdb.click();
++    }''')
++    await asyncio.sleep(2)
++
++    # صبر برای بارگذاری Angular — رادیوهای نماینده ممکن است داینامیک لود شوند
++    try:
++        await wait_for_angular_idle(page, timeout=5)
++    except Exception:
++        await asyncio.sleep(3)
++
++    # انتخاب نوع نماینده (مدیرعامل / نماینده) — رادیوباتن
++    rep_value = AGENT_TYPE_VALUES.get(rep_type, AGENT_TYPE_VALUES["نماینده"])
++    logging.info(f"[EZHHAR] انتخاب نوع نماینده: {rep_type} (value={rep_value})")
++
++    # تلاش چندباره با interp گرافیکی بین هر تلاش
++    rep_selected = False
++    for _attempt in range(3):
++        rep_selected = await page.evaluate(f'''() => {{
++            // روش ۱: جستجوی رادیو بر اساس value دقیق
++            const allRadios = document.querySelectorAll('input[type="radio"]');
++            for (const r of allRadios) {{
++                if (r.value === "{rep_value}" && r.offsetParent !== null) {{
++                    r.click();
++                    return "method1_value";
++                }}
++            }}
++
++            // روش ۲: جستجوی label/span/div که متن آن دقیقاً «نماینده» یا «مدیرعامل» باشد
++            const labels = document.querySelectorAll('label');
++            for (const lbl of labels) {{
++                if (lbl.offsetParent !== null && lbl.innerText && lbl.innerText.trim() === "{rep_type}") {{
++                    const radio = lbl.querySelector('input[type="radio"]');
++                    if (radio) {{ radio.click(); return "method2_label"; }}
++                    lbl.click();
++                    return "method2_label_click";
++                }}
++            }}
++
++            // روش ۳: کلیک روی span/div sibling رادیو
++            const spans = document.querySelectorAll('span');
++            for (const sp of spans) {{
++                if (sp.offsetParent !== null && sp.innerText && sp.innerText.trim() === "{rep_type}") {{
++                    // پیدا کردن رادیوی sibling
++                    const parent = sp.parentElement;
++                    if (parent) {{
++                        const radio = parent.querySelector('input[type="radio"]');
++                        if (radio) {{ radio.click(); return "method3_span_sibling"; }}
++                    }}
++                    sp.click();
++                    return "method3_span_click";
++                }}
++            }}
++
++            return null;
++        }}''')
++        if rep_selected:
++            logging.info(f"[EZHHAR] نماینده با روش {rep_selected} انتخاب شد")
++            break
++        logging.warning(f"[EZHHAR] تلاش {_attempt+1}: رادیوی نماینده پیدا نشد، صبر مجدد...")
++        await asyncio.sleep(3)
++
++    if not rep_selected:
++        logging.error(f"[EZHHAR] خطا: رادیوی نوع نماینده ({rep_type}) پیدا نشد!")
++
++    await asyncio.sleep(2)
++
++    # وارد کردن شناسه ملی شرکت
++    await page.evaluate(f'''() => {{
++        const inp = document.querySelector('#txtLegalIrNationalityCode');
++        if (inp) {{
++            inp.value = "{company_id}";
++            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
++            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
++        }}
++    }}''')
++    await asyncio.sleep(1)
++
+     # استعلام شرکت
+     await _query_sana(page, "actions.callLegalNationalityCode", bot, user_id, is_legal=True,
+                       current_national_id=company_id, person_role=person_role, person_index=person_index)
+@@ -655,8 +717,8 @@ async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int,
+     # استعلام نماینده
+     await _query_sana(page, "actions.callNationalityCode", bot, user_id,
+                       current_national_id=national_id, person_role=person_role, person_index=person_index)
+-
+-
++
++
+ async def _fill_lawyer_person(page, national_id: str, bot: Bot, user_id: int,
+                                person_role: str = "", person_index: int = 0):
+     """پر کردن کدملی وکیل در step وکیل"""
+@@ -673,8 +735,8 @@ async def _fill_lawyer_person(page, national_id: str, bot: Bot, user_id: int,
+     # استعلام وکیل از ثنا
+     await _query_sana(page, "actions.getLawyerDataWithSana", bot, user_id,
+                       current_national_id=national_id, person_role=person_role, person_index=person_index)
+-
+-
++
++
+ async def _query_sana(page, ng_click: str, bot: Bot, user_id: int, is_legal: bool = False, max_retries: int = 5,
+                       current_national_id: str = "", person_role: str = "", person_index: int = 0):
+     """
+@@ -749,498 +811,498 @@ async def _query_sana(page, ng_click: str, bot: Bot, user_id: int, is_legal: boo
+         await asyncio.sleep(5)
+ 
+     logging.warning(f"[EZHHAR] استعلام ({ng_click}) پس از {max_retries} تلاش نتیجه نداد")
+-
+-
+-async def _close_popup(page) -> bool:
+-    closed = await page.evaluate('''() => {
+-        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+-        if (!popup) return false;
+-        const btn = popup.querySelector('button.confirm');
+-        if (btn) { btn.click(); return true; }
+-        return false;
+-    }''')
+-    if closed:
+-        await asyncio.sleep(1)
+-    return closed
+-
+-
+-async def _click_save_temp(page, bot: Bot, user_id: int, max_retries: int = 5):
+-    for attempt in range(max_retries):
+-        clicked = await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnSave');
+-            if (btn && !btn.disabled) { btn.click(); return true; }
+-            return false;
+-        }''')
+-        if not clicked:
+-            await safe_click_by_text(page, "ثبت موقت", bot, user_id)
+-        await asyncio.sleep(10)
+-
+-        success = await page.evaluate('''() => {
+-            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+-            if (!popup) return false;
+-            const icon = popup.querySelector('.sa-icon.sa-success');
+-            return icon && window.getComputedStyle(icon).display !== 'none';
+-        }''')
+-        if success:
+-            await _close_success_popup(page)
+-            return
+-
+-        error_text = await _get_error_text(page)
+-        if error_text:
+-            raise EzhharFatalError(error_text)
+-        await asyncio.sleep(5)
+-
+-
+-async def _click_goto_main(page, bot: Bot, user_id: int):
+-    clicked = await page.evaluate('''() => {
+-        const btn = document.querySelector('#gotoMainPage');
+-        if (btn && !btn.disabled) { btn.click(); return true; }
+-        return false;
+-    }''')
+-    if not clicked:
+-        await soft_click_if_exists(page, "بازگشت به فهرست")
+-
+-
+-async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int):
+-    """
+-    آپلود مدرک نمایندگی (تصویر مدرک نمایندگی) در بخش منضمات.
+-    این مدرک برای اظهارکننده حقوقی اجباری است.
+-    """
+-    try:
+-        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
+-        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+-        if had_expiry:
+-            logging.info("[EZHHAR][منضمات] نشست در ابتدای آپلود مدرک نمایندگی تمدید شد؛ ادامه از همین‌جا...")
+-
+-        # انتخاب «تصوير مدرک نمايندگي»
+-        selected = await page.evaluate('''() => {
+-            const sel = document.querySelector('#attachmentType');
+-            if (!sel) return false;
+-            const opts = Array.from(sel.options);
+-            const opt = opts.find(o =>
+-                o.text.includes("تصوير مدرک نمايندگي") ||
+-                o.text.includes("تصویر مدرک نمایندگی")
+-            );
+-            if (opt) {
+-                sel.value = opt.value;
+-                sel.dispatchEvent(new Event("change"));
+-                return true;
+-            }
+-            return false;
+-        }''')
+-        if not selected:
+-            logging.warning("[EZHHAR] گزینه «تصویر مدرک نمایندگی» در لیست پیوست پیدا نشد")
+-            return
+-        await asyncio.sleep(3)
+-
+-        # پر کردن txtNo با صفر
+-        await page.evaluate('''() => {
+-            const inp = document.querySelector('#txtNo');
+-            if (inp) {
+-                inp.value = "0";
+-                inp.dispatchEvent(new Event("input", { bubbles: true }));
+-            }
+-        }''')
+-        await asyncio.sleep(1)
+-
+-        # کلیک دکمه تقویم و انتخاب «امروز»
+-        await page.evaluate('''() => {
+-            const calBtn = document.querySelector('button.btn-primary i.glyphicon-calendar');
+-            if (calBtn) calBtn.closest('button').click();
+-        }''')
+-        await asyncio.sleep(2)
+-        await page.evaluate('''() => {
+-            const btns = Array.from(document.querySelectorAll('button'));
+-            const todayBtn = btns.find(b => b.innerText && b.innerText.trim() === "امروز");
+-            if (todayBtn) todayBtn.click();
+-        }''')
+-        await asyncio.sleep(1)
+-
+-        # تعداد صفحات (اگر بیشتر از یک برگ)
+-        page_count = len(image_paths) if image_paths else 1
+-        if page_count > 1:
+-            await page.evaluate(f'''() => {{
+-                const inp = document.querySelector('#txt001');
+-                if (inp && !(inp.disabled)) {{
+-                    inp.value = "{page_count}";
+-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+-                }}
+-            }}''')
+-            await asyncio.sleep(1)
+-
+-        # افزودن پیوست
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#incAttach0');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        await asyncio.sleep(3)
+-
+-        # ثبت و ویرایش پیوست
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnSaveDoc');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+-        if had_expiry:
+-            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی مدرک نمایندگی تمدید شد؛ ادامه...")
+-        await _close_success_popup(page)
+-        await asyncio.sleep(3)
+-
+-        # آپلود تصاویر
+-        if image_paths:
+-            await page.evaluate('''() => {
+-                const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
+-                if (btns.length > 0) btns[btns.length - 1].click();
+-            }''')
+-            await asyncio.sleep(4)
+-
+-            file_input = page.locator('input[type="file"]').first
+-            await file_input.set_input_files(image_paths)
+-            await asyncio.sleep(3)
+-
+-            await page.evaluate('''() => {
+-                const btn = document.querySelector('#btnUploadAll');
+-                if (btn && !btn.disabled) btn.click();
+-            }''')
+-            had_expiry = await resilient_sleep(page, 30, bot, user_id)
+-            if had_expiry:
+-                logging.info("[EZHHAR][منضمات] نشست حین آپلود فایل‌های مدرک نمایندگی تمدید شد.")
+-
+-            await page.evaluate('''() => {
+-                const btn = document.querySelector('#btnApplyAll');
+-                if (btn && !btn.disabled) btn.click();
+-            }''')
+-            had_expiry = await resilient_sleep(page, 10, bot, user_id)
+-            if had_expiry:
+-                logging.info("[EZHHAR][منضمات] نشست حین «اعمال همه» برای مدرک نمایندگی تمدید شد.")
+-
+-        logging.info("[EZHHAR] مدرک نمایندگی با موفقیت آپلود شد")
+-
+-    except Exception as e:
+-        logging.error(f"[EZHHAR] خطا در آپلود مدرک نمایندگی: {e}")
+-
+-
+-async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_value: int, bot: Bot, user_id: int):
+-    """آپلود وکالت‌نامه الکترونیک (مانند اعلام وکالت)"""
+-    try:
+-        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
+-        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+-        if had_expiry:
+-            logging.info("[EZHHAR][منضمات] نشست در ابتدای ثبت وکالت‌نامه الکترونیک تمدید شد؛ ادامه از همین‌جا...")
+-
+-        selected = await page.evaluate('''() => {
+-            const sel = document.querySelector('#attachmentType');
+-            if (!sel) return false;
+-            const opts = Array.from(sel.options);
+-            const opt = opts.find(o =>
+-                o.text.includes("تصوير الكترونيك وكالت نامه") ||
+-                o.text.includes("تصویر الکترونیک وکالت نامه")
+-            );
+-            if (opt) {
+-                sel.value = opt.value;
+-                sel.dispatchEvent(new Event("change"));
+-                return true;
+-            }
+-            return false;
+-        }''')
+-        if not selected:
+-            logging.warning("[EZHHAR] گزینه «تصویر الکترونیک وکالت‌نامه» پیدا نشد")
+-            return
+-        await asyncio.sleep(3)
+-
+-        if contract_number:
+-            await page.evaluate(f'''() => {{
+-                const inp = document.querySelector('#txtNo');
+-                if (inp) {{
+-                    inp.value = "{contract_number}";
+-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+-                }}
+-            }}''')
+-            await asyncio.sleep(1)
+-        else:
+-            await page.evaluate('''() => {
+-                const inp = document.querySelector('#txtNo');
+-                if (inp) {
+-                    inp.value = "0";
+-                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+-                    inp.dispatchEvent(new Event("change", { bubbles: true }));
+-                }
+-            }''')
+-            await asyncio.sleep(1)
+-
+-        if lawyer_amount_value > 0:
+-            await page.evaluate(f'''() => {{
+-                const inp = document.querySelector('#txtLawyerAmount');
+-                if (inp) {{
+-                    inp.removeAttribute('disabled');
+-                    inp.value = "{lawyer_amount_value}";
+-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+-                }}
+-            }}''')
+-            await asyncio.sleep(1)
+-
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnSaveDoc');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+-        if had_expiry:
+-            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی وکالت‌نامه الکترونیک تمدید شد؛ ادامه...")
+-        await _close_success_popup(page)
+-
+-    except Exception as e:
+-        logging.error(f"[EZHHAR] خطا در آپلود وکالت‌نامه الکترونیک: {e}")
+-
+-
+-async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
+-    """آپلود سایر ضمائم"""
+-    if not image_paths:
+-        return
+-    try:
+-        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
+-        had_expiry = await check_and_handle_expiry(page, bot, user_id)
+-        if had_expiry:
+-            logging.info(f"[EZHHAR][منضمات] نشست در ابتدای آپلود «{title}» تمدید شد؛ ادامه از همین‌جا...")
+-
+-        # انتخاب «ساير ضمائم»
+-        await page.evaluate('''() => {
+-            const sel = document.querySelector('#attachmentType');
+-            if (sel) {
+-                const opts = Array.from(sel.options);
+-                const opt = opts.find(o => o.text.includes("ساير ضمائم") || o.text.includes("سایر ضمائم"));
+-                if (opt) {
+-                    sel.value = opt.value;
+-                    sel.dispatchEvent(new Event("change"));
+-                }
+-            }
+-        }''')
+-        await asyncio.sleep(3)
+-
+-        # پر کردن txtNo با صفر (فیلد الزامی برای ادامه روند)
+-        await page.evaluate('''() => {
+-            const inp = document.querySelector('#txtNo');
+-            if (inp) {
+-                inp.value = "0";
+-                inp.dispatchEvent(new Event("input", { bubbles: true }));
+-                inp.dispatchEvent(new Event("change", { bubbles: true }));
+-            }
+-        }''')
+-        await asyncio.sleep(1)
+-
+-        escaped = title.replace("`", "'").replace("\\", "")
+-        await page.evaluate(f'''() => {{
+-            const inp = document.querySelector('#txtName');
+-            if (inp) {{
+-                inp.value = "{escaped}";
+-                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+-            }}
+-        }}''')
+-
+-        await page.evaluate(f'''() => {{
+-            const inp = document.querySelector('#txt001');
+-            if (inp) {{
+-                inp.value = "{len(image_paths)}";
+-                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+-            }}
+-        }}''')
+-
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#incAttach0');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        await asyncio.sleep(3)
+-
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnSaveDoc');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        had_expiry = await resilient_sleep(page, 8, bot, user_id)
+-        if had_expiry:
+-            logging.info(f"[EZHHAR][منضمات] نشست حین ذخیره‌ی «{title}» تمدید شد؛ ادامه...")
+-        await _close_success_popup(page)
+-        await asyncio.sleep(3)
+-
+-        # ویرایش و آپلود فایل
+-        await page.evaluate('''() => {
+-            const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
+-            if (btns.length > 0) btns[btns.length - 1].click();
+-        }''')
+-        await asyncio.sleep(4)
+-
+-        file_input = page.locator('input[type="file"]').first
+-        await file_input.set_input_files(image_paths)
+-        await asyncio.sleep(3)
+-
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnUploadAll');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        had_expiry = await resilient_sleep(page, 30, bot, user_id)
+-        if had_expiry:
+-            logging.info(f"[EZHHAR][منضمات] نشست حین آپلود فایل‌های «{title}» تمدید شد.")
+-
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnApplyAll');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        had_expiry = await resilient_sleep(page, 10, bot, user_id)
+-        if had_expiry:
+-            logging.info(f"[EZHHAR][منضمات] نشست حین «اعمال همه» برای «{title}» تمدید شد.")
+-
+-    except Exception as e:
+-        logging.error(f"[EZHHAR] خطا در آپلود پیوست «{title}»: {e}")
+-
+-
+-async def _click_preparation(page, bot: Bot, user_id: int, max_retries: int = 3) -> bool:
+-    for attempt in range(max_retries):
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnPreparation');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        await asyncio.sleep(40 if attempt > 0 else 12)
+-
+-        success = await page.evaluate('''() => {
+-            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+-            if (!popup) return false;
+-            const icon = popup.querySelector('.sa-icon.sa-success');
+-            const h2 = popup.querySelector('h2');
+-            return icon && window.getComputedStyle(icon).display !== 'none' &&
+-                   h2 && h2.innerText.includes("آماده سازی");
+-        }''')
+-        if success:
+-            await _close_success_popup(page)
+-            return True
+-
+-        await _close_popup(page)
+-        await asyncio.sleep(30)
+-        await _close_success_popup(page)
+-
+-    return False
+-
+-
+-async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) -> int:
+-    for attempt in range(max_retries):
+-        await _close_popup(page)
+-        await asyncio.sleep(2)
+-        await page.evaluate('''() => {
+-            const btn = document.querySelector('#btnCalculateCash');
+-            if (btn && !btn.disabled) btn.click();
+-        }''')
+-        await asyncio.sleep(40)
+-        await _close_popup(page)
+-
+-        raw = await page.evaluate('''() => {
+-            const tds = Array.from(document.querySelectorAll('table td'));
+-            for (let td of tds) {
+-                const text = td.innerText.trim().replace(/,/g, '').replace(/،/g, '');
+-                if (/^[0-9]+$/.test(text) && parseInt(text) > 10000 && parseInt(text) < 100000000000) {
+-                    return text;
+-                }
+-            }
+-            return null;
+-        }''')
+-        if raw:
+-            try:
+-                amount = int(raw.replace(",", "").strip())
+-                if amount > 100_000_000:
+-                    amount = amount // 10
+-                return amount
+-            except Exception:
+-                pass
+-        await asyncio.sleep(10)
+-    return 0
+-
+-
+-async def _print_ezhharnameh(page, browser_context, bill_no: str, bot: Bot, user_id: int) -> str:
+-    pdf_path = f"ezhharnameh_{bill_no}.pdf"
+-    try:
+-        async def click_print():
+-            await page.evaluate('''() => {
+-                const heads = Array.from(document.querySelectorAll('.box h5'));
+-                const t = heads.find(el => el.innerText && (
+-                    el.innerText.includes("چاپ اوليه") || el.innerText.includes("چاپ اولیه")
+-                ));
+-                if (t) {
+-                    const box = t.closest('.box');
+-                    if (box) box.click();
+-                }
+-            }''')
+-
+-        async with browser_context.expect_page(timeout=20000) as new_page_info:
+-            await click_print()
+-
+-        print_page = await new_page_info.value
+-        await print_page.wait_for_load_state("load", timeout=30000)
+-        await asyncio.sleep(8)
+-        await check_and_handle_expiry(print_page, bot, user_id)
+-        await print_page.pdf(path=pdf_path, format="A4")
+-        await print_page.close()
+-    except Exception as e:
+-        logging.error(f"[EZHHAR] خطا در چاپ: {e}")
+-        try:
+-            await page.pdf(path=pdf_path, format="A4")
+-        except Exception:
+-            pass
+-    return pdf_path
+-
+-
+-async def _extract_bill_no(page) -> str:
+-    try:
+-        val = await page.evaluate('''() => {
+-            const inp = document.querySelector('#txtBillNo, #txtPetitionNo');
+-            return inp ? inp.value : "";
+-        }''')
+-        return val or "نامشخص"
+-    except Exception:
+-        return "نامشخص"
+-
+-
+-async def _close_success_popup(page) -> bool:
+-    closed = await page.evaluate('''() => {
+-        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+-        if (!popup) return false;
+-        const btn = popup.querySelector('button.confirm');
+-        if (btn) { btn.click(); return true; }
+-        return false;
+-    }''')
+-    if closed:
+-        await asyncio.sleep(1)
+-    return closed
+-
+-
+-async def _get_error_text(page):
+-    text = await page.evaluate('''() => {
+-        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+-        if (!popup) return null;
+-        const successIcon = popup.querySelector('.sa-icon.sa-success');
+-        if (successIcon && window.getComputedStyle(successIcon).display !== 'none') return null;
+-        const h2 = popup.querySelector('h2');
+-        const p = popup.querySelector('p');
+-        const msg = [h2 ? h2.innerText : '', p ? p.innerText : ''].filter(Boolean).join(' - ').trim();
+-        const btn = popup.querySelector('button.confirm');
+-        if (btn) btn.click();
+-        return msg || null;
+-    }''')
+-    if text:
+-        await asyncio.sleep(1)
+-    return text
+-
+-
+-async def _download_images(bot: Bot, file_ids: list, user_id: int) -> list:
+-    paths = []
+-    for i, file_id in enumerate(file_ids):
+-        try:
+-            file_info = await bot.get_file(file_id)
+-            ext = "jpg"
+-            if file_info.file_path:
+-                ext = file_info.file_path.split(".")[-1].lower()
+-                if ext not in ("jpg", "jpeg", "png"):
+-                    ext = "jpg"
+-            path = f"ezhhar_img_{user_id}_{i}.{ext}"
+-            await bot.download_file(file_info.file_path, path)
+-            paths.append(path)
++
++
++async def _close_popup(page) -> bool:
++    closed = await page.evaluate('''() => {
++        const popup = document.querySelector('.sweet-alert.showSweetAlert');
++        if (!popup) return false;
++        const btn = popup.querySelector('button.confirm');
++        if (btn) { btn.click(); return true; }
++        return false;
++    }''')
++    if closed:
++        await asyncio.sleep(1)
++    return closed
++
++
++async def _click_save_temp(page, bot: Bot, user_id: int, max_retries: int = 5):
++    for attempt in range(max_retries):
++        clicked = await page.evaluate('''() => {
++            const btn = document.querySelector('#btnSave');
++            if (btn && !btn.disabled) { btn.click(); return true; }
++            return false;
++        }''')
++        if not clicked:
++            await safe_click_by_text(page, "ثبت موقت", bot, user_id)
++        await asyncio.sleep(10)
++
++        success = await page.evaluate('''() => {
++            const popup = document.querySelector('.sweet-alert.showSweetAlert');
++            if (!popup) return false;
++            const icon = popup.querySelector('.sa-icon.sa-success');
++            return icon && window.getComputedStyle(icon).display !== 'none';
++        }''')
++        if success:
++            await _close_success_popup(page)
++            return
++
++        error_text = await _get_error_text(page)
++        if error_text:
++            raise EzhharFatalError(error_text)
++        await asyncio.sleep(5)
++
++
++async def _click_goto_main(page, bot: Bot, user_id: int):
++    clicked = await page.evaluate('''() => {
++        const btn = document.querySelector('#gotoMainPage');
++        if (btn && !btn.disabled) { btn.click(); return true; }
++        return false;
++    }''')
++    if not clicked:
++        await soft_click_if_exists(page, "بازگشت به فهرست")
++
++
++async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int):
++    """
++    آپلود مدرک نمایندگی (تصویر مدرک نمایندگی) در بخش منضمات.
++    این مدرک برای اظهارکننده حقوقی اجباری است.
++    """
++    try:
++        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
++        had_expiry = await check_and_handle_expiry(page, bot, user_id)
++        if had_expiry:
++            logging.info("[EZHHAR][منضمات] نشست در ابتدای آپلود مدرک نمایندگی تمدید شد؛ ادامه از همین‌جا...")
++
++        # انتخاب «تصوير مدرک نمايندگي»
++        selected = await page.evaluate('''() => {
++            const sel = document.querySelector('#attachmentType');
++            if (!sel) return false;
++            const opts = Array.from(sel.options);
++            const opt = opts.find(o =>
++                o.text.includes("تصوير مدرک نمايندگي") ||
++                o.text.includes("تصویر مدرک نمایندگی")
++            );
++            if (opt) {
++                sel.value = opt.value;
++                sel.dispatchEvent(new Event("change"));
++                return true;
++            }
++            return false;
++        }''')
++        if not selected:
++            logging.warning("[EZHHAR] گزینه «تصویر مدرک نمایندگی» در لیست پیوست پیدا نشد")
++            return
++        await asyncio.sleep(3)
++
++        # پر کردن txtNo با صفر
++        await page.evaluate('''() => {
++            const inp = document.querySelector('#txtNo');
++            if (inp) {
++                inp.value = "0";
++                inp.dispatchEvent(new Event("input", { bubbles: true }));
++            }
++        }''')
++        await asyncio.sleep(1)
++
++        # کلیک دکمه تقویم و انتخاب «امروز»
++        await page.evaluate('''() => {
++            const calBtn = document.querySelector('button.btn-primary i.glyphicon-calendar');
++            if (calBtn) calBtn.closest('button').click();
++        }''')
++        await asyncio.sleep(2)
++        await page.evaluate('''() => {
++            const btns = Array.from(document.querySelectorAll('button'));
++            const todayBtn = btns.find(b => b.innerText && b.innerText.trim() === "امروز");
++            if (todayBtn) todayBtn.click();
++        }''')
++        await asyncio.sleep(1)
++
++        # تعداد صفحات (اگر بیشتر از یک برگ)
++        page_count = len(image_paths) if image_paths else 1
++        if page_count > 1:
++            await page.evaluate(f'''() => {{
++                const inp = document.querySelector('#txt001');
++                if (inp && !(inp.disabled)) {{
++                    inp.value = "{page_count}";
++                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
++                }}
++            }}''')
++            await asyncio.sleep(1)
++
++        # افزودن پیوست
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#incAttach0');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        await asyncio.sleep(3)
++
++        # ثبت و ویرایش پیوست
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnSaveDoc');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        had_expiry = await resilient_sleep(page, 8, bot, user_id)
++        if had_expiry:
++            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی مدرک نمایندگی تمدید شد؛ ادامه...")
++        await _close_success_popup(page)
++        await asyncio.sleep(3)
++
++        # آپلود تصاویر
++        if image_paths:
++            await page.evaluate('''() => {
++                const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
++                if (btns.length > 0) btns[btns.length - 1].click();
++            }''')
++            await asyncio.sleep(4)
++
++            file_input = page.locator('input[type="file"]').first
++            await file_input.set_input_files(image_paths)
++            await asyncio.sleep(3)
++
++            await page.evaluate('''() => {
++                const btn = document.querySelector('#btnUploadAll');
++                if (btn && !btn.disabled) btn.click();
++            }''')
++            had_expiry = await resilient_sleep(page, 30, bot, user_id)
++            if had_expiry:
++                logging.info("[EZHHAR][منضمات] نشست حین آپلود فایل‌های مدرک نمایندگی تمدید شد.")
++
++            await page.evaluate('''() => {
++                const btn = document.querySelector('#btnApplyAll');
++                if (btn && !btn.disabled) btn.click();
++            }''')
++            had_expiry = await resilient_sleep(page, 10, bot, user_id)
++            if had_expiry:
++                logging.info("[EZHHAR][منضمات] نشست حین «اعمال همه» برای مدرک نمایندگی تمدید شد.")
++
++        logging.info("[EZHHAR] مدرک نمایندگی با موفقیت آپلود شد")
++
++    except Exception as e:
++        logging.error(f"[EZHHAR] خطا در آپلود مدرک نمایندگی: {e}")
++
++
++async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_value: int, bot: Bot, user_id: int):
++    """آپلود وکالت‌نامه الکترونیک (مانند اعلام وکالت)"""
++    try:
++        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
++        had_expiry = await check_and_handle_expiry(page, bot, user_id)
++        if had_expiry:
++            logging.info("[EZHHAR][منضمات] نشست در ابتدای ثبت وکالت‌نامه الکترونیک تمدید شد؛ ادامه از همین‌جا...")
++
++        selected = await page.evaluate('''() => {
++            const sel = document.querySelector('#attachmentType');
++            if (!sel) return false;
++            const opts = Array.from(sel.options);
++            const opt = opts.find(o =>
++                o.text.includes("تصوير الكترونيك وكالت نامه") ||
++                o.text.includes("تصویر الکترونیک وکالت نامه")
++            );
++            if (opt) {
++                sel.value = opt.value;
++                sel.dispatchEvent(new Event("change"));
++                return true;
++            }
++            return false;
++        }''')
++        if not selected:
++            logging.warning("[EZHHAR] گزینه «تصویر الکترونیک وکالت‌نامه» پیدا نشد")
++            return
++        await asyncio.sleep(3)
++
++        if contract_number:
++            await page.evaluate(f'''() => {{
++                const inp = document.querySelector('#txtNo');
++                if (inp) {{
++                    inp.value = "{contract_number}";
++                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
++                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
++                }}
++            }}''')
++            await asyncio.sleep(1)
++        else:
++            await page.evaluate('''() => {
++                const inp = document.querySelector('#txtNo');
++                if (inp) {
++                    inp.value = "0";
++                    inp.dispatchEvent(new Event("input", { bubbles: true }));
++                    inp.dispatchEvent(new Event("change", { bubbles: true }));
++                }
++            }''')
++            await asyncio.sleep(1)
++
++        if lawyer_amount_value > 0:
++            await page.evaluate(f'''() => {{
++                const inp = document.querySelector('#txtLawyerAmount');
++                if (inp) {{
++                    inp.removeAttribute('disabled');
++                    inp.value = "{lawyer_amount_value}";
++                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
++                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
++                }}
++            }}''')
++            await asyncio.sleep(1)
++
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnSaveDoc');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        had_expiry = await resilient_sleep(page, 8, bot, user_id)
++        if had_expiry:
++            logging.info("[EZHHAR][منضمات] نشست حین ذخیره‌ی وکالت‌نامه الکترونیک تمدید شد؛ ادامه...")
++        await _close_success_popup(page)
++
++    except Exception as e:
++        logging.error(f"[EZHHAR] خطا در آپلود وکالت‌نامه الکترونیک: {e}")
++
++
++async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
++    """آپلود سایر ضمائم"""
++    if not image_paths:
++        return
++    try:
++        # بررسی انقضای نشست قبل از شروع (بخش منضمات قبلاً این چک را نداشت)
++        had_expiry = await check_and_handle_expiry(page, bot, user_id)
++        if had_expiry:
++            logging.info(f"[EZHHAR][منضمات] نشست در ابتدای آپلود «{title}» تمدید شد؛ ادامه از همین‌جا...")
++
++        # انتخاب «ساير ضمائم»
++        await page.evaluate('''() => {
++            const sel = document.querySelector('#attachmentType');
++            if (sel) {
++                const opts = Array.from(sel.options);
++                const opt = opts.find(o => o.text.includes("ساير ضمائم") || o.text.includes("سایر ضمائم"));
++                if (opt) {
++                    sel.value = opt.value;
++                    sel.dispatchEvent(new Event("change"));
++                }
++            }
++        }''')
++        await asyncio.sleep(3)
++
++        # پر کردن txtNo با صفر (فیلد الزامی برای ادامه روند)
++        await page.evaluate('''() => {
++            const inp = document.querySelector('#txtNo');
++            if (inp) {
++                inp.value = "0";
++                inp.dispatchEvent(new Event("input", { bubbles: true }));
++                inp.dispatchEvent(new Event("change", { bubbles: true }));
++            }
++        }''')
++        await asyncio.sleep(1)
++
++        escaped = title.replace("`", "'").replace("\\", "")
++        await page.evaluate(f'''() => {{
++            const inp = document.querySelector('#txtName');
++            if (inp) {{
++                inp.value = "{escaped}";
++                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
++            }}
++        }}''')
++
++        await page.evaluate(f'''() => {{
++            const inp = document.querySelector('#txt001');
++            if (inp) {{
++                inp.value = "{len(image_paths)}";
++                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
++            }}
++        }}''')
++
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#incAttach0');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        await asyncio.sleep(3)
++
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnSaveDoc');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        had_expiry = await resilient_sleep(page, 8, bot, user_id)
++        if had_expiry:
++            logging.info(f"[EZHHAR][منضمات] نشست حین ذخیره‌ی «{title}» تمدید شد؛ ادامه...")
++        await _close_success_popup(page)
++        await asyncio.sleep(3)
++
++        # ویرایش و آپلود فایل
++        await page.evaluate('''() => {
++            const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
++            if (btns.length > 0) btns[btns.length - 1].click();
++        }''')
++        await asyncio.sleep(4)
++
++        file_input = page.locator('input[type="file"]').first
++        await file_input.set_input_files(image_paths)
++        await asyncio.sleep(3)
++
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnUploadAll');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        had_expiry = await resilient_sleep(page, 30, bot, user_id)
++        if had_expiry:
++            logging.info(f"[EZHHAR][منضمات] نشست حین آپلود فایل‌های «{title}» تمدید شد.")
++
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnApplyAll');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        had_expiry = await resilient_sleep(page, 10, bot, user_id)
++        if had_expiry:
++            logging.info(f"[EZHHAR][منضمات] نشست حین «اعمال همه» برای «{title}» تمدید شد.")
++
++    except Exception as e:
++        logging.error(f"[EZHHAR] خطا در آپلود پیوست «{title}»: {e}")
++
++
++async def _click_preparation(page, bot: Bot, user_id: int, max_retries: int = 3) -> bool:
++    for attempt in range(max_retries):
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnPreparation');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        await asyncio.sleep(40 if attempt > 0 else 12)
++
++        success = await page.evaluate('''() => {
++            const popup = document.querySelector('.sweet-alert.showSweetAlert');
++            if (!popup) return false;
++            const icon = popup.querySelector('.sa-icon.sa-success');
++            const h2 = popup.querySelector('h2');
++            return icon && window.getComputedStyle(icon).display !== 'none' &&
++                   h2 && h2.innerText.includes("آماده سازی");
++        }''')
++        if success:
++            await _close_success_popup(page)
++            return True
++
++        await _close_popup(page)
++        await asyncio.sleep(30)
++        await _close_success_popup(page)
++
++    return False
++
++
++async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) -> int:
++    for attempt in range(max_retries):
++        await _close_popup(page)
++        await asyncio.sleep(2)
++        await page.evaluate('''() => {
++            const btn = document.querySelector('#btnCalculateCash');
++            if (btn && !btn.disabled) btn.click();
++        }''')
++        await asyncio.sleep(40)
++        await _close_popup(page)
++
++        raw = await page.evaluate('''() => {
++            const tds = Array.from(document.querySelectorAll('table td'));
++            for (let td of tds) {
++                const text = td.innerText.trim().replace(/,/g, '').replace(/،/g, '');
++                if (/^[0-9]+$/.test(text) && parseInt(text) > 10000 && parseInt(text) < 100000000000) {
++                    return text;
++                }
++            }
++            return null;
++        }''')
++        if raw:
++            try:
++                amount = int(raw.replace(",", "").strip())
++                if amount > 100_000_000:
++                    amount = amount // 10
++                return amount
++            except Exception:
++                pass
++        await asyncio.sleep(10)
++    return 0
++
++
++async def _print_ezhharnameh(page, browser_context, bill_no: str, bot: Bot, user_id: int) -> str:
++    pdf_path = f"ezhharnameh_{bill_no}.pdf"
++    try:
++        async def click_print():
++            await page.evaluate('''() => {
++                const heads = Array.from(document.querySelectorAll('.box h5'));
++                const t = heads.find(el => el.innerText && (
++                    el.innerText.includes("چاپ اوليه") || el.innerText.includes("چاپ اولیه")
++                ));
++                if (t) {
++                    const box = t.closest('.box');
++                    if (box) box.click();
++                }
++            }''')
++
++        async with browser_context.expect_page(timeout=20000) as new_page_info:
++            await click_print()
++
++        print_page = await new_page_info.value
++        await print_page.wait_for_load_state("load", timeout=30000)
++        await asyncio.sleep(8)
++        await check_and_handle_expiry(print_page, bot, user_id)
++        await print_page.pdf(path=pdf_path, format="A4")
++        await print_page.close()
++    except Exception as e:
++        logging.error(f"[EZHHAR] خطا در چاپ: {e}")
++        try:
++            await page.pdf(path=pdf_path, format="A4")
++        except Exception:
++            pass
++    return pdf_path
++
++
++async def _extract_bill_no(page) -> str:
++    try:
++        val = await page.evaluate('''() => {
++            const inp = document.querySelector('#txtBillNo, #txtPetitionNo');
++            return inp ? inp.value : "";
++        }''')
++        return val or "نامشخص"
++    except Exception:
++        return "نامشخص"
++
++
++async def _close_success_popup(page) -> bool:
++    closed = await page.evaluate('''() => {
++        const popup = document.querySelector('.sweet-alert.showSweetAlert');
++        if (!popup) return false;
++        const btn = popup.querySelector('button.confirm');
++        if (btn) { btn.click(); return true; }
++        return false;
++    }''')
++    if closed:
++        await asyncio.sleep(1)
++    return closed
++
++
++async def _get_error_text(page):
++    text = await page.evaluate('''() => {
++        const popup = document.querySelector('.sweet-alert.showSweetAlert');
++        if (!popup) return null;
++        const successIcon = popup.querySelector('.sa-icon.sa-success');
++        if (successIcon && window.getComputedStyle(successIcon).display !== 'none') return null;
++        const h2 = popup.querySelector('h2');
++        const p = popup.querySelector('p');
++        const msg = [h2 ? h2.innerText : '', p ? p.innerText : ''].filter(Boolean).join(' - ').trim();
++        const btn = popup.querySelector('button.confirm');
++        if (btn) btn.click();
++        return msg || null;
++    }''')
++    if text:
++        await asyncio.sleep(1)
++    return text
++
++
++async def _download_images(bot: Bot, file_ids: list, user_id: int) -> list:
++    paths = []
++    for i, file_id in enumerate(file_ids):
++        try:
++            file_info = await bot.get_file(file_id)
++            ext = "jpg"
++            if file_info.file_path:
++                ext = file_info.file_path.split(".")[-1].lower()
++                if ext not in ("jpg", "jpeg", "png"):
++                    ext = "jpg"
++            path = f"ezhhar_img_{user_id}_{i}.{ext}"
++            await bot.download_file(file_info.file_path, path)
++            paths.append(path)
+         except Exception as e:
+             logging.error(f"[EZHHAR] خطا در دانلود تصویر {i}: {e}")
+     return paths
+diff --git a/file_tools_handlers.py b/file_tools_handlers.py
+index 198aa8e..f88b458 100644
+--- a/file_tools_handlers.py
++++ b/file_tools_handlers.py
+@@ -2,7 +2,7 @@
+ هندلرهای بخش «ابزار فایل» — گزینه‌ی مستقل در منوی اصلی.
+ شامل دو ابزار:
+   ۱) کاهش حجم عکس (فشرده‌سازی هوشمند تا رسیدن به حجم هدف)
+-  ۲) تبدیل فایل PDF چندصفحه‌ای به یک عکس بلند (اسکرول عمودی، همه صفحات پشت‌سرهم)
++  ۲) تبدیل فایل PDF چندصفحه‌ای به عکس (هر صفحه جداگانه)
+ """
+ import io
+ import logging
+@@ -22,6 +22,43 @@ file_tools_router = Router()
+ MAX_PDF_PAGES = 40
+ # حجم هدف برای فشرده‌سازی عکس (کیلوبایت)
+ TARGET_IMAGE_KB = 500
++# حداکثر دفعات استفاده رایگان هر ابزار برای هر کاربر
++FREE_USAGE_LIMIT = 2
++# مبلغ اشتراک ماهیانه (تومان)
++SUBSCRIPTION_PRICE = 100_000
++
++
++# ════════════════════════════════════════════════════════════════════
++# شمارنده استفاده — در حافظه (runtime) نگه‌داری می‌شود
++# ════════════════════════════════════════════════════════════════════
++# ساختار: {user_id: {"compress": N, "pdf2img": N}}
++_file_tools_usage: dict = {}
++
++
++def _get_usage(user_id: int) -> dict:
++    if user_id not in _file_tools_usage:
++        _file_tools_usage[user_id] = {"compress": 0, "pdf2img": 0}
++    return _file_tools_usage[user_id]
++
++
++def _check_usage_limit(user_id: int, tool: str) -> bool:
++    """بررسی آیا کاربر هنوز استفاده رایگان دارد. False = محدود شده."""
++    usage = _get_usage(user_id)
++    return usage[tool] < FREE_USAGE_LIMIT
++
++
++def _increment_usage(user_id: int, tool: str):
++    usage = _get_usage(user_id)
++    usage[tool] += 1
++
++
++SUBSCRIPTION_MESSAGE = (
++    "⏳ **محدودیت استفاده رایگان به اتمام رسید.**\n\n"
++    f"شما {FREE_USAGE_LIMIT} بار استفاده رایگان از این ابزار داشتید.\n\n"
++    f"💎 برای استفاده نامحدود، لطفاً **اشتراک ماهیانه** دریافت فرمایید:\n\n"
++    f"💰 مبلغ اشتراک: **{SUBSCRIPTION_PRICE:,} تومان** / ماه\n\n"
++    "برای دریافت اشتراک با پشتیبانی تماس بگیرید."
++)
+ 
+ 
+ async def file_tools_entry(message: Message, state: FSMContext):
+@@ -30,7 +67,7 @@ async def file_tools_entry(message: Message, state: FSMContext):
+         "🛠 **ابزار فایل**\n\n"
+         "لطفاً یکی از ابزارهای زیر را انتخاب فرمایید:\n\n"
+         "🖼 **کاهش حجم عکس** — عکس را ارسال کنید تا حجم آن کاهش یابد.\n"
+-        "📄➡️🖼 **تبدیل PDF به عکس** — فایل PDF چندصفحه‌ای را ارسال کنید تا تمام صفحات آن به صورت یک عکس بلند (پشت‌سرهم) تبدیل شود.",
++        "📄➡️🖼 **تبدیل PDF به عکس** — فایل PDF چندصفحه‌ای را ارسال کنید تا هر صفحه به صورت یک عکس جداگانه ارسال شود.",
+         reply_markup=file_tools_menu_kb,
+         parse_mode="Markdown"
+     )
+@@ -113,9 +150,15 @@ async def file_tools_receive_image(message: Message, state: FSMContext, bot: Bot
+         await message.answer("⚠️ لطفاً یک فایل تصویری (عکس) ارسال فرمایید.")
+         return
+ 
++    user_id = message.from_user.id
++
++    # بررسی محدودیت استفاده
++    if not _check_usage_limit(user_id, "compress"):
++        await message.answer(SUBSCRIPTION_MESSAGE, parse_mode="Markdown")
++        return
++
+     await message.answer("⏳ در حال دریافت و فشرده‌سازی عکس...")
+ 
+-    user_id = message.from_user.id
+     file_id = message.photo[-1].file_id if is_photo else message.document.file_id
+     src_path = f"filetools_src_{user_id}.jpg"
+     dst_path = f"filetools_compressed_{user_id}.jpg"
+@@ -128,20 +171,25 @@ async def file_tools_receive_image(message: Message, state: FSMContext, bot: Bot
+         final_size = _compress_image(src_path, dst_path)
+ 
+         if final_size >= original_size:
+-            # اگر فشرده‌سازی کمکی نکرد (عکس از قبل کوچک بود)، همان فایل اصلی برگردانده شود
+             os.replace(src_path, dst_path)
+             final_size = os.path.getsize(dst_path)
+ 
++        # ثبت استفاده
++        _increment_usage(user_id, "compress")
++        remaining = FREE_USAGE_LIMIT - _get_usage(user_id)["compress"]
++
+         doc = FSInputFile(dst_path)
+-        await message.answer_document(
+-            doc,
+-            caption=(
+-                f"✅ **کاهش حجم انجام شد.**\n\n"
+-                f"حجم اولیه: {original_size / 1024:.0f} کیلوبایت\n"
+-                f"حجم نهایی: {final_size / 1024:.0f} کیلوبایت"
+-            ),
+-            parse_mode="Markdown"
++        caption = (
++            f"✅ **کاهش حجم انجام شد.**\n\n"
++            f"حجم اولیه: {original_size / 1024:.0f} کیلوبایت\n"
++            f"حجم نهایی: {final_size / 1024:.0f} کیلوبایت"
+         )
++        if remaining > 0:
++            caption += f"\n\n📊 استفاده باقی‌مانده رایگان: {remaining} بار"
++        else:
++            caption += f"\n\n⏳ **محدودیت استفاده رایگان به اتمام رسید.** برای ادامه، اشتراک ماهیانه دریافت فرمایید."
++
++        await message.answer_document(doc, caption=caption, parse_mode="Markdown")
+     except Exception as e:
+         logging.error(f"file_tools image compress error: {e}")
+         await message.answer("❌ خطایی در پردازش عکس رخ داد. لطفاً دوباره تلاش کنید.")
+@@ -170,13 +218,21 @@ async def file_tools_receive_pdf(message: Message, state: FSMContext, bot: Bot):
+         await message.answer("⚠️ لطفاً فقط فایل با فرمت PDF ارسال فرمایید.")
+         return
+ 
+-    await message.answer("⏳ در حال تبدیل فایل PDF به عکس... (بسته به تعداد صفحات ممکن است کمی طول بکشد)")
++    user_id = message.from_user.id
+ 
+-    import fitz  # PyMuPDF — تبدیل صفحات PDF به تصویر
++    # بررسی محدودیت استفاده
++    if not _check_usage_limit(user_id, "pdf2img"):
++        await message.answer(SUBSCRIPTION_MESSAGE, parse_mode="Markdown")
++        return
++
++    await message.answer(
++        "⏳ در حال تبدیل فایل PDF به عکس... (بسته به تعداد صفحات ممکن است کمی طول بکشد)"
++    )
++
++    import fitz  # PyMuPDF
+ 
+-    user_id = message.from_user.id
+     pdf_path = f"filetools_src_{user_id}.pdf"
+-    img_path = f"filetools_pdf2img_{user_id}.jpg"
++    page_images_paths = []
+ 
+     try:
+         file_info = await bot.get_file(message.document.file_id)
+@@ -198,46 +254,56 @@ async def file_tools_receive_pdf(message: Message, state: FSMContext, bot: Bot):
+             pdf.close()
+             return
+ 
+-        # کیفیت رندر بر اساس تعداد صفحات تنظیم می‌شود تا فایل نهایی خیلی حجیم نشود
++        # کیفیت رندر بر اساس تعداد صفحات تنظیم می‌شود
+         zoom = 2.0 if page_count <= 10 else (1.5 if page_count <= 20 else 1.0)
+         matrix = fitz.Matrix(zoom, zoom)
+ 
+-        page_images = []
++        # تبدیل هر صفحه به یک عکس جداگانه و ارسال
+         for i in range(page_count):
+             pix = pdf.load_page(i).get_pixmap(matrix=matrix)
+             mode = "RGB" if pix.n < 4 else "RGBA"
+             page_img = Image.frombytes(mode, (pix.width, pix.height), pix.samples)
+             if mode == "RGBA":
+                 page_img = page_img.convert("RGB")
+-            page_images.append(page_img)
+-        pdf.close()
+ 
+-        max_width = max(im.width for im in page_images)
+-        total_height = sum(im.height for im in page_images)
+-        combined = Image.new("RGB", (max_width, total_height), color="white")
++            page_path = f"filetools_pdf_page_{user_id}_{i}.jpg"
++            page_img.save(page_path, format="JPEG", quality=85, optimize=True)
++            page_images_paths.append(page_path)
+ 
+-        y_offset = 0
+-        for im in page_images:
+-            x_offset = (max_width - im.width) // 2
+-            combined.paste(im, (x_offset, y_offset))
+-            y_offset += im.height
++            # فشرده‌سازی اگر حجیم بود
++            if os.path.getsize(page_path) > 9 * 1024 * 1024:
++                _compress_image(page_path, page_path, target_kb=8000)
+ 
+-        combined.save(img_path, format="JPEG", quality=85, optimize=True)
++        pdf.close()
+ 
+-        # اگر خیلی حجیم شد، فشرده‌سازی اضافه انجام شود
+-        if os.path.getsize(img_path) > 9 * 1024 * 1024:  # نزدیک به سقف تلگرام
+-            _compress_image(img_path, img_path, target_kb=8000)
++        # ثبت استفاده
++        _increment_usage(user_id, "pdf2img")
++        remaining = FREE_USAGE_LIMIT - _get_usage(user_id)["pdf2img"]
++
++        # ارسال هر صفحه به صورت عکس جداگانه
++        await message.answer(f"✅ تبدیل انجام شد. ({page_count} صفحه)")
++
++        for i, page_path in enumerate(page_images_paths):
++            try:
++                doc = FSInputFile(page_path)
++                caption = f"📄 صفحه {i + 1} از {page_count}"
++                if i == page_count - 1:
++                    if remaining > 0:
++                        caption += f"\n\n📊 استفاده باقی‌مانده رایگان: {remaining} بار"
++                    else:
++                        caption += f"\n\n⏳ **محدودیت استفاده رایگان به اتمام رسید.** برای ادامه، اشتراک ماهیانه دریافت فرمایید."
++                await message.answer_document(doc, caption=caption)
++            except Exception as e:
++                logging.error(f"file_tools pdf page {i} send error: {e}")
++                await message.answer(f"❌ خطا در ارسال صفحه {i + 1}")
+ 
+-        doc = FSInputFile(img_path)
+-        await message.answer_document(
+-            doc,
+-            caption=f"✅ تبدیل انجام شد. ({page_count} صفحه در یک عکس)"
+-        )
+     except Exception as e:
+         logging.error(f"file_tools pdf2image error: {e}")
+         await message.answer("❌ خطایی در تبدیل فایل PDF رخ داد. لطفاً از سالم بودن فایل مطمئن شوید و دوباره تلاش کنید.")
+     finally:
+-        for p in (pdf_path, img_path):
++        if os.path.exists(pdf_path):
++            os.remove(pdf_path)
++        for p in page_images_paths:
+             if os.path.exists(p):
+                 os.remove(p)
+ 
+diff --git a/keyboards.py b/keyboards.py
+index ab12214..3824f66 100644
+--- a/keyboards.py
++++ b/keyboards.py
+@@ -186,7 +186,8 @@ def create_person_type_kb(exclude: list = None):
+ 
+ representative_type_kb = ReplyKeyboardMarkup(
+     keyboard=[
+-        [KeyboardButton(text="مدیرعامل"), KeyboardButton(text="نماینده")]
++        [KeyboardButton(text="مدیرعامل"), KeyboardButton(text="نماینده")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+@@ -194,14 +195,15 @@ representative_type_kb = ReplyKeyboardMarkup(
+ add_or_finish_kb = ReplyKeyboardMarkup(
+     keyboard=[
+         [KeyboardButton(text="➕ افزودن کدملی دیگر")],
+-        [KeyboardButton(text="✅ اتمام و ادامه")]
++        [KeyboardButton(text="✅ اتمام و ادامه")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+ 
+ lavayeh_attachment_title_kb_first = ReplyKeyboardMarkup(
+     keyboard=[
+-        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)")],
++        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)"), KeyboardButton(text="🔙 بازگشت")],
+         [KeyboardButton(text="⏭ رد کردن (بدون مدرک)")]
+     ],
+     resize_keyboard=True
+@@ -209,7 +211,7 @@ lavayeh_attachment_title_kb_first = ReplyKeyboardMarkup(
+ 
+ lavayeh_attachment_title_kb = ReplyKeyboardMarkup(
+     keyboard=[
+-        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)")]
++        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)"), KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+@@ -217,7 +219,8 @@ lavayeh_attachment_title_kb = ReplyKeyboardMarkup(
+ lavayeh_attachment_more_kb = ReplyKeyboardMarkup(
+     keyboard=[
+         [KeyboardButton(text="➕ بله، عنوان و مدرک دیگر دارم")],
+-        [KeyboardButton(text="✅ خیر، ادامه بده")]
++        [KeyboardButton(text="✅ خیر، ادامه بده")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+@@ -386,7 +389,8 @@ def create_ezhhar_addressee_person_type_kb(exclude: list = None, show_finish: bo
+ ezhhar_declarant_add_more_kb = ReplyKeyboardMarkup(
+     keyboard=[
+         [KeyboardButton(text="➕ افزودن شخص اظهارکننده دیگر")],
+-        [KeyboardButton(text="✅ اتمام و ادامه")]
++        [KeyboardButton(text="✅ اتمام و ادامه")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+@@ -395,21 +399,23 @@ ezhhar_addressee_add_more_kb = ReplyKeyboardMarkup(
+     keyboard=[
+         [KeyboardButton(text="➕ افزودن مخاطب دیگر")],
+         [KeyboardButton(text="✅ اتمام و ادامه")],
+-        [KeyboardButton(text="📞 استعلام شماره تماس")]
++        [KeyboardButton(text="📞 استعلام شماره تماس")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+ 
+ ezhhar_subject_kb = ReplyKeyboardMarkup(
+     keyboard=[
+-        [KeyboardButton(text="🔹 عنوان مهم نیست (ادامه مراحل)")]
++        [KeyboardButton(text="🔹 عنوان مهم نیست (ادامه مراحل)")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+ 
+ ezhhar_attachment_title_kb_first = ReplyKeyboardMarkup(
+     keyboard=[
+-        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)")],
++        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)"), KeyboardButton(text="🔙 بازگشت")],
+         [KeyboardButton(text="⏭ رد کردن (بدون مدرک)")]
+     ],
+     resize_keyboard=True
+@@ -417,7 +423,7 @@ ezhhar_attachment_title_kb_first = ReplyKeyboardMarkup(
+ 
+ ezhhar_attachment_title_kb = ReplyKeyboardMarkup(
+     keyboard=[
+-        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)")]
++        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)"), KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+@@ -425,7 +431,8 @@ ezhhar_attachment_title_kb = ReplyKeyboardMarkup(
+ ezhhar_attachment_more_kb = ReplyKeyboardMarkup(
+     keyboard=[
+         [KeyboardButton(text="➕ بله، عنوان و مدرک دیگر دارم")],
+-        [KeyboardButton(text="✅ خیر، ادامه بده")]
++        [KeyboardButton(text="✅ خیر، ادامه بده")],
++        [KeyboardButton(text="🔙 بازگشت")]
+     ],
+     resize_keyboard=True
+ )
+diff --git a/lavayeh_handlers.py b/lavayeh_handlers.py
+index 2565142..74a360d 100644
+--- a/lavayeh_handlers.py
++++ b/lavayeh_handlers.py
+@@ -11,7 +11,7 @@ import re
+ from aiogram import Bot, F, Router
+ from aiogram.filters import StateFilter
+ from aiogram.fsm.context import FSMContext
+-from aiogram.types import Message, ReplyKeyboardRemove
++from aiogram.types import Message, ReplyKeyboardRemove, ReplyKeyboardMarkup, KeyboardButton
+ 
+ import runtime_state
+ from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME, calculate_lavayeh_fee, format_lavayeh_fee_explanation
+@@ -40,6 +40,29 @@ from keyboards import (
+     bulk_input_method_kb,
+     bulk_confirm_kb,
+ )
++
++# کیبورد بازگشت برای مرحله متن لایحه (بدون حذف کیبورد فعلی کاربر)
++lavayeh_text_back_kb = ReplyKeyboardMarkup(
++    keyboard=[[KeyboardButton(text="🔙 بازگشت")]],
++    resize_keyboard=True
++)
++
++# کیبورد مدیریت تصاویر با دکمه بازگشت
++_lavayeh_image_manage_kb = ReplyKeyboardMarkup(
++    keyboard=[
++        [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
++        [KeyboardButton(text="🗑 حذف تصویر"), KeyboardButton(text="🔙 بازگشت")]
++    ],
++    resize_keyboard=True
++)
++
++_lavayeh_image_manage_kb_no_delete = ReplyKeyboardMarkup(
++    keyboard=[
++        [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
++        [KeyboardButton(text="🔙 بازگشت")]
++    ],
++    resize_keyboard=True
++)
+ from stamp_duty import calculate_stamp_duty, format_result_fa
+ from bulk_submissions import (
+     generate_sample_excel,
+@@ -1141,6 +1164,16 @@ async def lavayeh_get_person_type(message: Message, state: FSMContext):
+     data = await state.get_data()
+     persons = data.get("lavayeh_persons", [])
+ 
++    if text == "🔙 بازگشت":
++        tracking_method = data.get("tracking_method", "case_number")
++        if tracking_method == "archive_number":
++            await message.answer("🏙 لطفاً استان را دوباره انتخاب کنید:", reply_markup=create_province_kb())
++            await state.set_state(Form.lavayeh_province)
++        else:
++            await message.answer("🔢 لطفاً ردیف فرعی را دوباره وارد کنید:", reply_markup=back_only_kb)
++            await state.set_state(Form.lavayeh_row_number)
++        return
++
+     if text == "✅ خیر، ادامه مراحل":
+         if not persons:
+             await message.answer("⚠️ حداقل یک شخص باید ارائه‌دهنده لایحه باشد.")
+@@ -1210,6 +1243,14 @@ async def lavayeh_get_company_id(message: Message, state: FSMContext):
+ @lavayeh_router.message(Form.lavayeh_representative_type)
+ async def lavayeh_get_representative_type(message: Message, state: FSMContext):
+     text = message.text or ""
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "🏢 لطفاً **شناسه ملی شرکت** را ارسال فرمایید:\n_(۱۱ رقمی)_",
++            reply_markup=back_only_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.lavayeh_company_id)
++        return
+     if text not in ["مدیرعامل", "نماینده"]:
+         await message.answer("⚠️ لطفاً یکی از گزینه‌ها را انتخاب کنید:", reply_markup=representative_type_kb)
+         return
+@@ -1273,6 +1314,32 @@ async def lavayeh_more_persons(message: Message, state: FSMContext):
+         await state.set_state(Form.lavayeh_person_type)
+         return
+ 
++    if text == "🔙 بازگشت":
++        # بازگشت به مرحله وارد کردن کدملی آخرین شخص
++        last_person = persons[-1] if persons else {}
++        last_type = last_person.get("person_type", "شخص حقیقی")
++        if last_type == "شخص حقوقی":
++            # حذف آخرین شخص و بازگشت به کدملی نماینده
++            persons.pop()
++            await state.update_data(lavayeh_persons=persons)
++            await message.answer(
++                f"🔢 لطفاً **کد ملی {last_person.get('representative_type', 'نماینده')}** شرکت را مجدداً وارد کنید:\n_(۱۰ رقمی)_",
++                reply_markup=back_only_kb,
++                parse_mode="Markdown"
++            )
++            await state.set_state(Form.lavayeh_national_id)
++        else:
++            # حذف آخرین شخص و بازگشت به کدملی
++            persons.pop()
++            await state.update_data(lavayeh_persons=persons)
++            await message.answer(
++                f"🔢 لطفاً **کد ملی {last_type}** ارائه‌دهنده را مجدداً وارد کنید:\n_(۱۰ رقمی)_",
++                reply_markup=back_only_kb,
++                parse_mode="Markdown"
++            )
++            await state.set_state(Form.lavayeh_national_id)
++        return
++
+     if text == "✅ اتمام و ادامه":
+         if await _maybe_return_to_preview(data, message, state):
+             return
+@@ -1414,6 +1481,14 @@ async def ealam_in_lavayeh_more_contracts(message: Message, state: FSMContext):
+ async def ealam_in_lavayeh_stamp_amount(message: Message, state: FSMContext):
+     text = (message.text or "").strip()
+ 
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "آیا **شماره قرارداد دیگری** نیز وجود دارد؟",
++            reply_markup=ealam_more_contracts_kb
++        )
++        await state.set_state(Form.ealam_vakalaht_more_contracts)
++        return
++
+     if text == "🚫 نیاز به ابطال تمبر ندارد":
+         await state.update_data(ealam_stamp_amount=0, ealam_stamp_type="بدون تمبر")
+         await _ask_lavayeh_text_ealam(message, state)
+@@ -1450,6 +1525,17 @@ async def ealam_in_lavayeh_stamp_amount(message: Message, state: FSMContext):
+ async def ealam_in_lavayeh_claim_type(message: Message, state: FSMContext):
+     text = message.text or ""
+ 
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "💰 **مقدار تمبر ابطالی:**\n\n"
++            "اگر مقدار تمبر را به ریال می‌دانید، عدد را وارد کنید.\n"
++            "در غیر این صورت از گزینه‌های زیر استفاده کنید:",
++            reply_markup=ealam_stamp_amount_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ealam_vakalaht_stamp_amount)
++        return
++
+     if "3️⃣" in text or "عدم نیاز" in text:
+         await state.update_data(ealam_stamp_amount=0, ealam_stamp_type="بدون تمبر")
+         await _ask_lavayeh_text_ealam(message, state)
+@@ -1482,6 +1568,17 @@ async def ealam_in_lavayeh_claim_type(message: Message, state: FSMContext):
+ async def ealam_in_lavayeh_claim_amount(message: Message, state: FSMContext):
+     if not message.text:
+         return
++    if message.text == "🔙 بازگشت":
++        await message.answer(
++            "🔍 **محاسبه تمبر:**\n\n"
++            "لطفاً گزینه‌های زیر را انتخاب کنید.\n"
++            "اگر گزینه‌های زیر کمکی نکرد، «عدم نیاز به تمبر» را انتخاب کنید "
++            "(بعداً در شعبه قابلیت پرداخت تمبر را خواهید داشت) :",
++            reply_markup=ealam_claim_type_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ealam_vakalaht_claim_type)
++        return
+     amount_str = _to_en(message.text)
+     if not amount_str.isdigit() or int(amount_str) <= 0:
+         await message.answer("⚠️ لطفاً مبلغ خواسته را به **ریال** وارد کنید (فقط عدد):", parse_mode="Markdown")
+@@ -1509,6 +1606,14 @@ async def ealam_in_lavayeh_claim_amount(message: Message, state: FSMContext):
+ @lavayeh_router.message(Form.ealam_vakalaht_stamp_type)
+ async def ealam_in_lavayeh_stamp_type(message: Message, state: FSMContext):
+     text = message.text or ""
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "💵 لطفاً **مبلغ خواسته** را به **ریال** وارد فرمایید:\n_(فقط عدد)_",
++            reply_markup=ReplyKeyboardRemove(),
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ealam_vakalaht_claim_amount)
++        return
+     data = await state.get_data()
+     result = data.get("ealam_stamp_result", {})
+ 
+@@ -1547,6 +1652,35 @@ async def _ask_lavayeh_text_ealam(message: Message, state: FSMContext):
+ @lavayeh_router.message(Form.ealam_vakalaht_text)
+ async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext):
+     text = message.text or ""
++    if text == "🔙 بازگشت":
++        data = await state.get_data()
++        stamp_type = data.get("ealam_stamp_type", "")
++        if stamp_type == "بدون تمبر":
++            await message.answer(
++                "💰 **مقدار تمبر ابطالی:**\n\n"
++                "اگر مقدار تمبر را به ریال می‌دانید، عدد را وارد کنید.\n"
++                "در غیر این صورت از گزینه‌های زیر استفاده کنید:",
++                reply_markup=ealam_stamp_amount_kb,
++                parse_mode="Markdown"
++            )
++            await state.set_state(Form.ealam_vakalaht_stamp_amount)
++        elif stamp_type in ("بدوی", "تجدیدنظر", "کلی"):
++            await message.answer(
++                "لطفاً انتخاب کنید **کدام نوع تمبر** در پرونده قرار داده شود:",
++                reply_markup=ealam_stamp_type_kb,
++                parse_mode="Markdown"
++            )
++            await state.set_state(Form.ealam_vakalaht_stamp_type)
++        else:
++            await message.answer(
++                "💰 **مقدار تمبر ابطالی:**\n\n"
++                "اگر مقدار تمبر را به ریال می‌دانید، عدد را وارد کنید.\n"
++                "در غیر این صورت از گزینه‌های زیر استفاده کنید:",
++                reply_markup=ealam_stamp_amount_kb,
++                parse_mode="Markdown"
++            )
++            await state.set_state(Form.ealam_vakalaht_stamp_amount)
++        return
+     if text == "✅ ادامه مراحل":
+         # کاربر دکمه «ادامه مراحل» را زده (از مرحله تمبر غیرمالی آمده)
+         # باید ابتدا متن لایحه را بپرسیم
+@@ -1565,7 +1699,23 @@ async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext):
+ @lavayeh_router.message(Form.lavayeh_text)
+ async def lavayeh_get_text(message: Message, state: FSMContext):
+     if not message.text:
+-        await message.answer("⚠️ لطفاً شرح متن لایحه را به صورت متن ارسال فرمایید.")
++        await message.answer("⚠️ لطفاً شرح متن لایحه را به صورت متن ارسال فرمایید.", reply_markup=lavayeh_text_back_kb)
++        return
++    if message.text == "🔙 بازگشت":
++        data = await state.get_data()
++        persons = data.get("lavayeh_persons", [])
++        if persons:
++            await message.answer(
++                "➕ آیا شخص دیگری نیز ارائه‌دهنده لایحه می‌باشد?",
++                reply_markup=add_or_finish_kb
++            )
++            await state.set_state(Form.lavayeh_more_persons)
++        else:
++            await message.answer(
++                "👤 لطفاً نوع شخص ارائه‌دهنده لایحه را انتخاب کنید:",
++                reply_markup=create_person_type_kb()
++            )
++            await state.set_state(Form.lavayeh_person_type)
+         return
+     data = await state.get_data()
+     is_editing = data.get("_is_editing")
+@@ -1598,6 +1748,14 @@ async def lavayeh_get_attachment_title(message: Message, state: FSMContext):
+     if not text:
+         await message.answer("⚠️ لطفاً عنوان را به صورت متن ارسال فرمایید.")
+         return
++    if text == "🔙 بازگشت":
++        await message.answer(
++            "📄 **شرح متن لایحه:**\n\nلطفاً متن کامل لایحه خود را ارسال فرمایید.",
++            reply_markup=lavayeh_text_back_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.lavayeh_text)
++        return
+     data = await state.get_data()
+     attachments = data.get("lavayeh_attachments", [])
+ 
+@@ -1616,7 +1774,7 @@ async def lavayeh_get_attachment_title(message: Message, state: FSMContext):
+         "🖼 لطفاً تصاویر مربوط به این مدرک را به صورت **عکس (Photo)** ارسال فرمایید.\n"
+         "⚠️ فقط فرمت **JPG / JPEG** قابل قبول است.\n\n"
+         "پس از ارسال همه تصاویر، دکمه **«اتمام ارسال تصاویر»** را بفشارید.",
+-        reply_markup=ReplyKeyboardRemove(),
++        reply_markup=_lavayeh_image_manage_kb_no_delete,
+         parse_mode="Markdown"
+     )
+     await state.set_state(Form.lavayeh_images)
+@@ -1630,19 +1788,11 @@ async def lavayeh_receive_image(message: Message, state: FSMContext, bot: Bot):
+     images.append(file_id)
+     await state.update_data(lavayeh_images=images)
+ 
+-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+-    manage_kb = ReplyKeyboardMarkup(
+-        keyboard=[
+-            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+-            [KeyboardButton(text="🗑 حذف تصویر")]
+-        ],
+-        resize_keyboard=True
+-    )
+     await message.reply(
+         f"✅ تصویر شماره **{len(images)}** دریافت شد.\n"
+         f"مجموع تصاویر این مدرک: **{len(images)} تصویر**\n\n"
+         "می‌توانید تصاویر بیشتری ارسال کنید یا «اتمام» را بزنید.",
+-        reply_markup=manage_kb,
++        reply_markup=_lavayeh_image_manage_kb,
+         parse_mode="Markdown"
+     )
+ 
+@@ -1680,6 +1830,11 @@ async def lavayeh_images_text(message: Message, state: FSMContext):
+     images = data.get("lavayeh_images", [])
+     deleting = data.get("_deleting_image", False)
+ 
++    if text == "🔙 بازگشت":
++        # بازگشت به انتخاب عنوان پیوست
++        await _ask_attachment_title(message, state, is_first=not data.get("lavayeh_attachments"))
++        return
++
+     if deleting:
+         num_str = _to_en(text)
+         if num_str.isdigit():
+@@ -1689,21 +1844,18 @@ async def lavayeh_images_text(message: Message, state: FSMContext):
+                 await state.update_data(lavayeh_images=images, _deleting_image=False)
+                 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+                 if images:
+-                    manage_kb = ReplyKeyboardMarkup(
+-                        keyboard=[
+-                            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+-                            [KeyboardButton(text="🗑 حذف تصویر")]
+-                        ],
+-                        resize_keyboard=True
++                    await message.answer(
++                        f"✅ تصویر شماره **{idx+1}** حذف شد.\n"
++                        f"مجموع باقیمانده: **{len(images)} تصویر**",
++                        reply_markup=_lavayeh_image_manage_kb,
++                        parse_mode="Markdown"
+                     )
+                 else:
+-                    manage_kb = ReplyKeyboardRemove()
+-                await message.answer(
+-                    f"✅ تصویر شماره **{idx+1}** حذف شد.\n"
+-                    f"مجموع باقیمانده: **{len(images)} تصویر**",
+-                    reply_markup=manage_kb,
+-                    parse_mode="Markdown"
+-                )
++                    await message.answer(
++                        f"✅ تصویر شماره **{idx+1}** حذف شد.",
++                        reply_markup=_lavayeh_image_manage_kb_no_delete,
++                        parse_mode="Markdown"
++                    )
+                 return
+             else:
+                 await message.answer(f"⚠️ شماره نامعتبر. لطفاً عددی بین ۱ تا {len(images)} وارد کنید:")
+@@ -1727,17 +1879,10 @@ async def lavayeh_images_text(message: Message, state: FSMContext):
+         await state.set_state(Form.lavayeh_attachment_more)
+         return
+ 
+-    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+     if images:
+-        kb = ReplyKeyboardMarkup(
+-            keyboard=[
+-                [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+-                [KeyboardButton(text="🗑 حذف تصویر")]
+-            ],
+-            resize_keyboard=True
+-        )
++        kb = _lavayeh_image_manage_kb
+     else:
+-        kb = None
++        kb = _lavayeh_image_manage_kb_no_delete
+     await message.answer("⚠️ لطفاً تصویر این مدرک را ارسال کنید:", reply_markup=kb)
+ 
+ 
+@@ -1747,6 +1892,14 @@ async def lavayeh_attachment_more(message: Message, state: FSMContext):
+     if text == "➕ بله، عنوان و مدرک دیگر دارم":
+         await _ask_attachment_title(message, state, is_first=False)
+         return
++    if text == "🔙 بازگشت":
++        # بازگشت به ارسال تصاویر آخرین مدرک
++        await message.answer(
++            "🖼 لطفاً تصاویر مربوط به مدرک را ارسال فرمایید:",
++            reply_markup=_lavayeh_image_manage_kb_no_delete
++        )
++        await state.set_state(Form.lavayeh_images)
++        return
+     if text == "✅ خیر، ادامه بده":
+         data = await state.get_data()
+         if await _maybe_return_to_preview(data, message, state):
+-- 
+2.47.3
+

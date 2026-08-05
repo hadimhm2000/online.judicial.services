@@ -1,0 +1,267 @@
+diff --git a/ezhharnameh_handlers.py b/ezhharnameh_handlers.py
+index 53c1cef..a11cd3b 100644
+--- a/ezhharnameh_handlers.py
++++ b/ezhharnameh_handlers.py
+@@ -103,7 +103,7 @@ async def ezhhar_bulk_choice_handler(message: Message, state: FSMContext):
+     await state.set_state(Form.bulk_input_method)
+ 
+ 
+-@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "1️⃣ ثبت تکی یکی‌یکی (روال عادی)")
++@ezhharnameh_router.message(Form.ezhhar_declarant_person_type, F.text == "1️⃣ ثبت تکی (روال عادی)")
+ async def ezhhar_single_choice_handler(message: Message, state: FSMContext):
+     await message.answer(
+         "📋 **ثبت اظهارنامه (روال تکی)**\n\n"
+@@ -263,7 +263,7 @@ async def ezhhar_declarant_national_id_handler(message: Message, state: FSMConte
+     await message.answer(
+         f"✅ **{person_type}** با کدملی `{nat_id}` ثبت شد.\n\n"
+         f"آیا اظهارکننده دیگری نیز وجود دارد؟",
+-        reply_markup=create_ezhhar_declarant_person_type_kb(exclude=used_types),
++        reply_markup=create_ezhhar_declarant_person_type_kb(),
+         parse_mode="Markdown"
+     )
+     await state.set_state(Form.ezhhar_declarant_person_type)
+@@ -422,7 +422,7 @@ async def ezhhar_addressee_national_id_handler(message: Message, state: FSMConte
+         f"✅ **مخاطب ({person_type})** با کدملی `{nat_id}` ثبت شد.\n\n"
+         f"آیا مخاطب دیگری نیز وجود دارد؟\n\n"
+         f"📌 اگر کدملی مخاطب بعدی را ندارید، می‌توانید «استعلام شماره تماس» را انتخاب کنید.",
+-        reply_markup=create_ezhhar_addressee_person_type_kb(exclude=used_types),
++        reply_markup=create_ezhhar_addressee_person_type_kb(show_finish=True),
+         parse_mode="Markdown"
+     )
+     await state.set_state(Form.ezhhar_addressee_person_type)
+diff --git a/ezhharnameh_scenario.py b/ezhharnameh_scenario.py
+index d046220..f762495 100644
+--- a/ezhharnameh_scenario.py
++++ b/ezhharnameh_scenario.py
+@@ -171,6 +171,24 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
+                     await _fill_legal_person(sana_page, person, bot, user_id)
+                     await resilient_sleep(sana_page, 10, bot, user_id)
+ 
++            # ── ۴.۵. مرحله «مخاطب» ────────────────────────────────────
++            await _click_step_label(sana_page, "مخاطب", bot, user_id)
++            await resilient_sleep(sana_page, 4, bot, user_id)
++
++            for person in addressees:
++                ptype = person.get("person_type", "شخص حقیقی")
++                if ptype == "شخص حقیقی":
++                    await _click_add_btn(sana_page, bot, user_id)
++                    await resilient_sleep(sana_page, 3, bot, user_id)
++                    await _fill_real_person(sana_page, person["national_id"], bot, user_id)
++                    await resilient_sleep(sana_page, 10, bot, user_id)
++
++                elif ptype == "شخص حقوقی":
++                    await _click_add_btn(sana_page, bot, user_id)
++                    await resilient_sleep(sana_page, 3, bot, user_id)
++                    await _fill_legal_person(sana_page, person, bot, user_id)
++                    await resilient_sleep(sana_page, 10, bot, user_id)
++
+             # ── ۵. مرحله «وکیل» (اگر وکیل داشتیم) ─────────────────────
+             if has_lawyer:
+                 await _click_step_label(sana_page, "وكيل", bot, user_id)
+diff --git a/handlers.py b/handlers.py
+index f26cb41..d06e4c2 100644
+--- a/handlers.py
++++ b/handlers.py
+@@ -26,6 +26,7 @@ from keyboards import (
+ from lavayeh_handlers import lavayeh_router
+ from stamp_calc_handlers import stamp_calc_router
+ from ezhharnameh_handlers import ezhharnameh_router
++from file_tools_handlers import file_tools_router, file_tools_entry
+ 
+ router = Router()
+ 
+@@ -33,6 +34,7 @@ router = Router()
+ router.include_router(lavayeh_router)
+ router.include_router(stamp_calc_router)
+ router.include_router(ezhharnameh_router)
++router.include_router(file_tools_router)
+ 
+ 
+ # ── نگهبان: مسدودسازی کاربرانی که فاکتور لایحه کنسل‌شده را پرداخت نکرده‌اند ──
+@@ -324,6 +326,8 @@ async def process_flow_type(message: types.Message, state: FSMContext):
+     elif "محاسبه تمبر" in message.text:
+         from stamp_calc_handlers import stamp_calc_entry
+         await stamp_calc_entry(message, state)
++    elif "ابزار فایل" in message.text:
++        await file_tools_entry(message, state)
+ 
+ async def _show_cart(message: types.Message, state: FSMContext):
+     data = await state.get_data()
+diff --git a/keyboards.py b/keyboards.py
+index 492741b..f8afa76 100644
+--- a/keyboards.py
++++ b/keyboards.py
+@@ -12,8 +12,22 @@ flow_type_kb = ReplyKeyboardMarkup(
+         [KeyboardButton(text="📝 ثبت لایحه")],
+         [KeyboardButton(text="📋 ثبت اظهارنامه")],
+         [KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
++        [KeyboardButton(text="🛠 ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)")],
+     ], resize_keyboard=True)
+ 
++# =========================================================
++# کیبوردهای بخش ابزار فایل
++# =========================================================
++file_tools_menu_kb = ReplyKeyboardMarkup(
++    keyboard=[
++        [KeyboardButton(text="🖼 کاهش حجم عکس")],
++        [KeyboardButton(text="📄➡️🖼 تبدیل PDF به عکس")],
++        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
++    ], resize_keyboard=True)
++
++file_tools_back_kb = ReplyKeyboardMarkup(
++    keyboard=[[KeyboardButton(text="🔙 بازگشت")]], resize_keyboard=True)
++
+ main_menu_kb = ReplyKeyboardMarkup(
+     keyboard=[
+         [KeyboardButton(text="1️⃣ استعلام لوایح، اظهارنامه، دادخواست و ...")],
+@@ -350,7 +364,7 @@ def create_ezhhar_declarant_person_type_kb(exclude: list = None):
+     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+ 
+ 
+-def create_ezhhar_addressee_person_type_kb(exclude: list = None):
++def create_ezhhar_addressee_person_type_kb(exclude: list = None, show_finish: bool = None):
+     """کیبورد نوع شخص مخاطب اظهارنامه"""
+     exclude = exclude or []
+     available = [p for p in ["شخص حقیقی", "شخص حقوقی"] if p not in exclude]
+@@ -362,7 +376,8 @@ def create_ezhhar_addressee_person_type_kb(exclude: list = None):
+         keyboard.append(row)
+     # گزینه استعلام شماره تماس
+     keyboard.append([KeyboardButton(text="📞 استعلام شماره تماس")])
+-    if exclude:
++    show_finish = bool(exclude) if show_finish is None else show_finish
++    if show_finish:
+         keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
+     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+ 
+diff --git a/lavayeh_handlers.py b/lavayeh_handlers.py
+index 2de7657..f8c0dd2 100644
+--- a/lavayeh_handlers.py
++++ b/lavayeh_handlers.py
+@@ -19,7 +19,7 @@ from sheets import log_event
+ from ocr import verify_payment_receipt
+ from states import Form
+ from keyboards import (
+-    main_menu_kb, restart_kb, back_only_kb,
++    flow_type_kb, main_menu_kb, restart_kb, back_only_kb,
+     lavayeh_title_kb, LAVAYEH_TITLES,
+     lavayeh_tracking_method_kb,
+     lavayeh_branch_input_method_kb,
+@@ -295,7 +295,7 @@ async def lavayeh_entry(message: Message, state: FSMContext):
+ @lavayeh_router.message(Form.bulk_mode_select)
+ async def bulk_mode_select_handler(message: Message, state: FSMContext):
+     text = message.text or ""
+-    if text == "1️⃣ ثبت تکی یکی‌یکی (روال عادی)":
++    if text == "1️⃣ ثبت تکی (روال عادی)":
+         await message.answer(
+             "📝 **ثبت لایحه (روال تکی)**\n\nلطفاً عنوان لایحه خود را انتخاب فرمایید:",
+             reply_markup=lavayeh_title_kb,
+@@ -316,7 +316,8 @@ async def bulk_mode_select_handler(message: Message, state: FSMContext):
+         return
+     elif text == "🔙 بازگشت به منوی اصلی":
+         await state.clear()
+-        await message.answer("بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
++        await message.answer("بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
++        await state.set_state(Form.waiting_for_flow_type)
+         return
+     else:
+         await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_choice_kb)
+@@ -451,9 +452,10 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
+             f"کد رهگیری: `{tracking_code}`\n"
+             f"هم‌اکنون درخواست‌های شما در صف پس‌زمینه قرار گرفت.\n"
+             f"شما می‌توانید با خیال راحت به منوی اصلی بازگردید یا سایر امور خود را انجام دهید.",
+-            reply_markup=main_menu_kb,
++            reply_markup=flow_type_kb,
+             parse_mode="Markdown"
+         )
++        await state.set_state(Form.waiting_for_flow_type)
+         # شروع پردازش پس‌زمینه
+         asyncio.create_task(run_bulk_processing_task(message.bot, message.from_user.id, tracking_code))
+         return
+@@ -463,7 +465,8 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
+         return
+     elif text == "❌ انصراف و بازگشت" or text == "🔙 بازگشت به منوی اصلی":
+         await state.clear()
+-        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
++        await message.answer("عملیات لغو شد. بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
++        await state.set_state(Form.waiting_for_flow_type)
+         return
+     else:
+         await message.answer("⚠️ لطفاً یکی از گزینه‌های منو را انتخاب فرمایید:", reply_markup=bulk_confirm_kb)
+@@ -478,7 +481,8 @@ async def lavayeh_get_title(message: Message, state: FSMContext):
+ 
+     if text == "🔙 بازگشت به منوی اصلی":
+         await state.clear()
+-        await message.answer("بازگشت به منوی اصلی.", reply_markup=main_menu_kb)
++        await message.answer("بازگشت به منوی اصلی.", reply_markup=flow_type_kb)
++        await state.set_state(Form.waiting_for_flow_type)
+         return
+ 
+     if text not in LAVAYEH_TITLES:
+diff --git a/requirements.txt b/requirements.txt
+index 427f1f2..4b5665c 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -8,3 +8,4 @@ Pillow==10.4.0
+ pytesseract==0.3.13
+ opencv-python==4.10.0.84
+ openpyxl==3.1.5
++PyMuPDF==1.24.9
+diff --git a/scenarios.py b/scenarios.py
+index 1177641..888bb34 100644
+--- a/scenarios.py
++++ b/scenarios.py
+@@ -247,7 +247,7 @@ async def process_task(data, bot: Bot):
+                             return
+                         await check_and_handle_expiry(sana_page, bot, user_id)
+                         try:
+-                            await sana_page.wait_for_selector('text="مشخصات شناسنامه ای"', timeout=15000)
++                            await sana_page.wait_for_selector('text=شناسنامه', timeout=15000)
+                             await asyncio.sleep(2)
+                         except Exception:
+                             await asyncio.sleep(5)
+@@ -293,8 +293,9 @@ async def process_task(data, bot: Bot):
+                                     }
+                                 });
+ 
++                                const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
+                                 sections.forEach(secName => {
+-                                    const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
++                                    const titleElem = allElements.find(el => el.innerText && norm(el.innerText) === norm(secName));
+                                     if (titleElem) {
+                                         const box = titleElem.closest('table, fieldset, .box, .panel, .card');
+                                         if (box && !clonedContainers.has(box)) {
+@@ -356,7 +357,7 @@ async def process_task(data, bot: Bot):
+                     return
+ 
+                 try:
+-                    await sana_page.wait_for_selector('text="مشخصات شناسنامه ای"', timeout=15000)
++                    await sana_page.wait_for_selector('text=شناسنامه', timeout=15000)
+                     await asyncio.sleep(2)
+                 except Exception:
+                     await asyncio.sleep(5)
+@@ -398,8 +399,9 @@ async def process_task(data, bot: Bot):
+                             }
+                         });
+ 
++                        const norm = (s) => (s || "").replace(/\u200c/g, " ").replace(/\s+/g, " ").trim();
+                         sections.forEach(secName => {
+-                            const titleElem = allElements.find(el => el.innerText && el.innerText.trim() === secName);
++                            const titleElem = allElements.find(el => el.innerText && norm(el.innerText) === norm(secName));
+                             if (titleElem) {
+                                 const box = titleElem.closest('table, fieldset, .box, .panel, .card');
+                                 if (box && !clonedContainers.has(box)) {
+diff --git a/states.py b/states.py
+index 58a1201..3b4c0e9 100644
+--- a/states.py
++++ b/states.py
+@@ -113,3 +113,10 @@ class Form(StatesGroup):
+     bulk_input_method = State()     # انتخاب نوع فایل (اکسل، تصویر، متن)
+     bulk_file_upload = State()      # دریافت فایل اکسل / تصویر / متن
+     bulk_confirm = State()          # تایید نهایی و صدور کد رهگیری دسته‌جمعی
++
++    # =========================================================
++    # State های بخش ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)
++    # =========================================================
++    file_tools_menu = State()          # انتخاب نوع ابزار
++    file_tools_waiting_image = State()  # منتظر دریافت عکس برای فشرده‌سازی
++    file_tools_waiting_pdf = State()    # منتظر دریافت PDF برای تبدیل به عکس

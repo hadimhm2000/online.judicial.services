@@ -1,0 +1,27 @@
+{
+  "bugId": "LAVAYEH-001",
+  "title": "گیر کردن فرآیند بعد از پیوست منضمات",
+  "changes": [
+    {
+      "function": "_click_goto_main",
+      "file": "lavayeh_scenario.py",
+      "line": 934,
+      "type": "enhanced",
+      "description": "اضافه کردن مکانیزم retry با حداکثر ۵ تلاش، بستن popup‌ها قبل از کلیک، صبر برای Angular idle، و اجرای actions.gotoMainStep() از طریق AngularJS scope"
+    },
+    {
+      "function": "_upload_single_attachment_group",
+      "file": "lavayeh_scenario.py", 
+      "line": 1101,
+      "type": "enhanced",
+      "description": "بستن popup موفقیت باقی‌مانده و صبر برای Angular idle بعد از تأیید همه پیوست‌ها (btnApplyAll)"
+    },
+    {
+      "function": "process_lavayeh_task (main flow)",
+      "file": "lavayeh_scenario.py",
+      "line": 376,
+      "type": "enhanced", 
+      "description": "اضافه کردن بستن popup و صبر برای Angular idle قبل از _click_goto_main بعد از بخش منضمات"
+    }
+  ]
+}
