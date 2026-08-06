@@ -787,33 +787,70 @@ async def process_task(data, bot: Bot):
 async def _process_lavayeh_send_sign_code(data: dict, bot: Bot):
     user_id = data["user_id"]
     tracking_code = data.get("tracking_code", "")
-    province = data.get("province", "")
-    row_number = data.get("row_number", 1)
-    lavayeh_title = data.get("lavayeh_title", "لایحه دفاعیه")
-    persons = data.get("persons", [])
+    phase = data.get("phase", "navigate")
 
-    from lavayeh_sign_scenario import send_sign_codes
-    from lavayeh_sign_handlers import on_sign_code_sent_success, on_sign_code_sent_failure
+    from lavayeh_sign_scenario import (
+        navigate_to_sign_page,
+        get_signable_persons,
+        send_sign_code_for_person,
+    )
+    from lavayeh_sign_handlers import (
+        on_lavayeh_sign_persons_loaded,
+        on_lavayeh_sign_code_sent_success,
+        on_lavayeh_sign_code_sent_failure,
+    )
 
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
-        await bot.send_message(ADMIN_ID, f"🔄 [SIGN] ارسال کد امضا برای کاربر {user_id}")
-        success = await send_sign_codes(
-            bot, user_id, tracking_code, province, row_number, lavayeh_title
-        )
+        if phase == "navigate":
+            # فاز ۱: ناوبری به صفحه امضا و دریافت لیست اشخاص
+            await bot.send_message(ADMIN_ID, f"🔄 [SIGN] ناوبری به صفحه امضا برای کاربر {user_id}")
+            nav_ok = await navigate_to_sign_page(bot, user_id, tracking_code)
 
-        if success:
-            persons_count = max(1, len(persons))
-            await on_sign_code_sent_success(bot, user_id, persons_count, user_state)
-            await bot.send_message(ADMIN_ID, f"✅ [SIGN] کد امضا برای کاربر {user_id} ارسال شد.")
-        else:
-            await on_sign_code_sent_failure(bot, user_id, user_state)
-            await bot.send_message(ADMIN_ID, f"❌ [SIGN] ارسال کد امضا برای کاربر {user_id} ناموفق.")
+            if not nav_ok:
+                await on_lavayeh_sign_code_sent_failure(bot, user_id, user_state)
+                await bot.send_message(ADMIN_ID, f"❌ [SIGN] ناوبری ناموفق برای کاربر {user_id}")
+                return
+
+            # دریافت لیست اشخاص
+            persons = await get_signable_persons(bot, user_id)
+            await on_lavayeh_sign_persons_loaded(bot, user_id, persons, user_state)
+
+        elif phase == "send_code":
+            # فاز ۲: ارسال کد برای شخص انتخاب‌شده
+            target_row_indices = data.get("target_row_indices", [])
+            await bot.send_message(ADMIN_ID, f"🔄 [SIGN] ارسال کد امضا برای کاربر {user_id}")
+
+            sign_info = runtime_state.pending_lavayeh_sign.get(user_id, {})
+            all_persons = sign_info.get("sign_persons", [])
+
+            results = []
+            for row_idx in target_row_indices:
+                person = next((p for p in all_persons if p["idx"] == row_idx), None)
+                person_name = person.get("name", f"شخص {row_idx + 1}") if person else f"شخص {row_idx + 1}"
+                success = await send_sign_code_for_person(bot, user_id, row_idx, person_name)
+                results.append({
+                    "idx": row_idx,
+                    "name": person_name,
+                    "person_type": person.get("personType", "") if person else "",
+                    "sent": success,
+                })
+                # فاصله ۳۰ ثانیه بین ارسال کد هر شخص
+                if row_idx != target_row_indices[-1]:
+                    await asyncio.sleep(30)
+
+            any_sent = any(r["sent"] for r in results)
+            if any_sent:
+                await on_lavayeh_sign_code_sent_success(bot, user_id, results, user_state)
+                await bot.send_message(ADMIN_ID, f"✅ [SIGN] کد امضا برای کاربر {user_id} ارسال شد.")
+            else:
+                await on_lavayeh_sign_code_sent_failure(bot, user_id, user_state)
+                await bot.send_message(ADMIN_ID, f"❌ [SIGN] ارسال کد امضا برای کاربر {user_id} ناموفق.")
 
     except Exception as e:
         logging.error(f"[SIGN] خطا در _process_lavayeh_send_sign_code: {e}")
-        await on_sign_code_sent_failure(bot, user_id, user_state)
+        await on_lavayeh_sign_code_sent_failure(bot, user_id, user_state)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -822,30 +859,37 @@ async def _process_lavayeh_send_sign_code(data: dict, bot: Bot):
 async def _process_lavayeh_submit_sign(data: dict, bot: Bot):
     user_id = data["user_id"]
     tracking_code = data.get("tracking_code", "")
-    province = data.get("province", "")
-    row_number = data.get("row_number", 1)
-    lavayeh_title = data.get("lavayeh_title", "لایحه دفاعیه")
-    sign_codes = data.get("sign_codes", {})
+    row_idx = data.get("row_idx", 0)
+    code = data.get("code", "")
 
-    from lavayeh_sign_scenario import submit_sign_codes
-    from lavayeh_sign_handlers import on_sign_submit_success, on_sign_submit_failure
+    from lavayeh_sign_scenario import submit_sign_code_for_person
+    from lavayeh_sign_handlers import (
+        on_lavayeh_sign_submit_success,
+        on_lavayeh_sign_submit_failure,
+        on_lavayeh_sign_wrong_code,
+    )
 
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
         await bot.send_message(ADMIN_ID, f"🔄 [SIGN] ثبت امضا برای کاربر {user_id}")
-        success = await submit_sign_codes(
-            bot, user_id, tracking_code, province, row_number, lavayeh_title, sign_codes
+        result = await submit_sign_code_for_person(
+            bot, user_id, row_idx, code
         )
 
-        if success:
-            await on_sign_submit_success(bot, user_id, user_state)
+        if result["success"]:
+            await on_lavayeh_sign_submit_success(bot, user_id, row_idx, user_state)
+            await bot.send_message(ADMIN_ID, f"✅ [SIGN] امضای لایحه کاربر {user_id} موفق (ردیف {row_idx}).")
         else:
-            await on_sign_submit_failure(bot, user_id, user_state)
+            error = result.get("error", "")
+            if "wrong_code" in error:
+                await on_lavayeh_sign_wrong_code(bot, user_id, row_idx, user_state)
+            else:
+                await on_lavayeh_sign_submit_failure(bot, user_id, user_state)
 
     except Exception as e:
         logging.error(f"[SIGN] خطا در _process_lavayeh_submit_sign: {e}")
-        await on_sign_submit_failure(bot, user_id, user_state)
+        await on_lavayeh_sign_submit_failure(bot, user_id, user_state)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

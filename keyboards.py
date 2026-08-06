@@ -283,6 +283,13 @@ lavayeh_sign_later_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+lavayeh_sign_try_again_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="بله، کد جدید ارسال شود"), KeyboardButton(text="خیر")]
+    ],
+    resize_keyboard=True
+)
+
 
 # =========================================================
 # کیبوردهای بخش اخذ امضای الکترونیک اظهارنامه

@@ -3,19 +3,15 @@
 
 جریان کلی:
   ۱. ناوبری به بخش «ارایه و پیگیری اظهارنامه»
-  ۲. وارد کردن کد رهگیری و جستجو
-  ۳. بستن پاپ‌آپ تأیید بازیابی
+  ۲. وارد کردن کد رهگیری در #txtPetitionNo و جستجو با #btnGetJSSPetition
+  ۳. بررسی پاپ‌آپ بازیابی — اگر غیر از «بازیابی اظهارنامه با موفقیت» بود → ریلود
   ۴. ورود به مرحله «اخذ امضای الکترونیک»
   ۵. یافتن جدول اشخاص قابل امضا
-  ۶. ارسال کد موقت برای شخص(های) انتخاب‌شده
-  ۷. وارد کردن کد تایید و امضا (actions.getPersonDataSign)
+  ۶. فیلتر اشخاص: اگر وکیل بود فقط وکیل، اگر نماینده/مدیرعامل بود همه آن‌ها
+  ۷. ارسال کد موقت برای شخص(های) انتخاب‌شده
+  ۸. وارد کردن کد تایید و امضا (actions.getPersonDataSign)
 
-تفاوت با لایحه:
-  - از منوی «ارایه و پیگیری اظهارنامه» (نه لایحه) وارد می‌شود
-  - فیلد کد رهگیری: #txtPetitionNo
-  - دکمه جستجو: #btnGetJSSPetition
-  - اگر اظهارنامه دارای وکیل بود: فقط برای وکیل کد ارسال می‌شود
-  - اگر نماینده/مدیرعامل داشت: برای همه آن‌ها کد ارسال می‌شود
+نکته مهم: ناوبری بدون radio button انجام می‌شود — مستقیم فیلد و جستجو.
 """
 
 import asyncio
@@ -36,6 +32,7 @@ from browser_helpers import (
 from config import ADMIN_ID
 
 
+
 async def send_ezhhar_sign_codes(
     bot: Bot,
     user_id: int,
@@ -46,13 +43,8 @@ async def send_ezhhar_sign_codes(
     وارد سامانه می‌شود، صفحه اخذ امضا اظهارنامه را باز می‌کند و
     برای اشخاص مشخص‌شده (target_row_indices) کد موقت ارسال می‌کند.
 
-    اگر target_row_indices مشخص نشود، برای همه اشخاص قابل ارسال کد می‌فرستد.
-
     Returns:
-        dict با کلیدهای:
-          - success: bool
-          - persons: list of dicts (idx, name, person_type, sent)
-          - error: str (در صورت خطا)
+        dict: { success, persons: [{idx, name, person_type, sent}], error }
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
@@ -60,7 +52,7 @@ async def send_ezhhar_sign_codes(
         return {"success": False, "persons": [], "error": "sana_page is None"}
 
     try:
-        # ── ۱. رفتن به صفحه اصلی ────────────────────────────────────────
+        # ── ۱. رفتن به صفحه اصلی ────────────────────────────────────
         ok = await goto_url_with_retry(
             sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
         )
@@ -80,19 +72,11 @@ async def send_ezhhar_sign_codes(
             await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
         await resilient_sleep(sana_page, 5, bot, user_id)
 
-        # ── ۳. انتخاب radio «جستجوی اظهارنامه» (value=2) ───────────────
-        await sana_page.evaluate('''() => {
-            const radio = document.querySelector('input[type="radio"][value="2"]');
-            if (radio) { radio.click(); return true; }
-            return false;
-        }''')
-        await asyncio.sleep(1)
-
-        # ── ۴. وارد کردن کد رهگیری ────────────────────────────────────
+        # ── ۳. وارد کردن کد رهگیری در #txtPetitionNo ───────────────
         await _fill_input(sana_page, "#txtPetitionNo", tracking_code)
         await resilient_sleep(sana_page, 1, bot, user_id)
 
-        # ── ۵. کلیک جستجو ──────────────────────────────────────────────
+        # ── ۴. کلیک جستجو #btnGetJSSPetition ─────────────────────────────
         await sana_page.evaluate('''() => {
             const btn = document.querySelector('#btnGetJSSPetition');
             if (btn) { btn.click(); return; }
@@ -111,7 +95,7 @@ async def send_ezhhar_sign_codes(
         await _close_any_popup(sana_page)
         await resilient_sleep(sana_page, 3, bot, user_id)
 
-        # ── ۶. بررسی پاپ‌آپ تأیید بازیابی ───────────────────────────────
+        # ── ۵. بررسی پاپ‌آپ تأیید بازیابی ───────────────────────────────
         recovery_ok = await _check_recovery_popup(sana_page, bot, user_id)
         if not recovery_ok:
             logging.warning("[EZHHAR_SIGN] پاپ‌آپ بازیابی تأیید نشد — ریلود")
@@ -120,7 +104,7 @@ async def send_ezhhar_sign_codes(
             await _close_any_popup(sana_page)
             await resilient_sleep(sana_page, 3, bot, user_id)
 
-        # ── ۷. ورود به مرحله «اخذ امضای الکترونیک» ─────────────────────
+        # ── ۶. ورود به مرحله «اخذ امضای الکترونیک» ─────────────────────
         clicked_sign = await sana_page.evaluate('''() => {
             const heads = Array.from(document.querySelectorAll('.box h5'));
             const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
@@ -134,7 +118,7 @@ async def send_ezhhar_sign_codes(
             await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
         await resilient_sleep(sana_page, 6, bot, user_id)
 
-        # ── ۸. بررسی مجدد اگر جدول ظاهر نشد ────────────────────────────
+        # ── ۷. بررسی مجدد اگر جدول ظاهر نشد ────────────────────────────
         table_exists = await sana_page.evaluate('''() => {
             const rows = Array.from(document.querySelectorAll(
                 'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
@@ -143,13 +127,11 @@ async def send_ezhhar_sign_codes(
         }''')
 
         if not table_exists:
-            # ریلود و تلاش مجدد
             await sana_page.reload()
             await resilient_sleep(sana_page, 8, bot, user_id)
             await _close_any_popup(sana_page)
             await resilient_sleep(sana_page, 3, bot, user_id)
 
-            # دوباره کلیک روی اخذ امضا
             clicked_sign2 = await sana_page.evaluate('''() => {
                 const heads = Array.from(document.querySelectorAll('.box h5'));
                 const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
@@ -162,19 +144,18 @@ async def send_ezhhar_sign_codes(
             if clicked_sign2:
                 await resilient_sleep(sana_page, 6, bot, user_id)
 
-        # ── ۹. یافتن اشخاص قابل امضا ───────────────────────────────────
+        # ── ۸. یافتن اشخاص قابل امضا ───────────────────────────────────
         persons_info = await sana_page.evaluate('''() => {
             const rows = Array.from(document.querySelectorAll(
                 'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
             ));
             return rows.map((tr, idx) => {
-                // نام شخص
                 const nameTd = tr.querySelector(
                     'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
                 );
                 const name = nameTd ? nameTd.innerText.trim() : "";
 
-                // نوع شخص (وکیل، نماینده، مدیرعامل، ...)
+                // نوع شخص — بررسی همه span های ng-if*="PersonType"
                 const typeSpans = tr.querySelectorAll('span[ng-if*="PersonType"]');
                 let personType = "";
                 for (const sp of typeSpans) {
@@ -183,7 +164,6 @@ async def send_ezhhar_sign_codes(
                     }
                 }
 
-                // آیا div ارسال کد نمایش دارد و دکمه فعال هست؟
                 const sendDiv = tr.querySelector(
                     'div[ng-if*="!(item.NationalityCode"]'
                 );
@@ -201,6 +181,11 @@ async def send_ezhhar_sign_codes(
         logging.info(f"[EZHHAR_SIGN] persons_info: {persons_info}")
 
         sendable = [p for p in persons_info if p.get("divVisible")]
+
+        # ── ۹. فیلتر اشخاص بر اساس قوانین ─────────────────────────────
+        # اگر وکیل وجود داشت → فقط وکیل
+        # اگر نماینده/مدیرعامل داشت → همه آن‌ها
+        sendable = _filter_signable_persons(sendable)
 
         if not sendable:
             await bot.send_message(
@@ -229,13 +214,13 @@ async def send_ezhhar_sign_codes(
             results.append({
                 "idx": target_idx,
                 "name": name,
-                "person_type": person.get("person_type", ""),
+                "person_type": person.get("personType", ""),
                 "sent": success,
             })
 
             # فاصله ۳۰ ثانیه بین ارسال کد هر شخص
             if target_idx != rows_to_send[-1]:
-                await resilient_sleep(sana_page, 30, bot, user_id)
+                await asyncio.sleep(30)
 
         return {"success": True, "persons": results}
 
@@ -281,12 +266,7 @@ async def submit_ezhhar_sign_code(
             await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
         await resilient_sleep(sana_page, 5, bot, user_id)
 
-        await sana_page.evaluate('''() => {
-            const radio = document.querySelector('input[type="radio"][value="2"]');
-            if (radio) radio.click();
-        }''')
-        await asyncio.sleep(1)
-
+        # مستقیم فیلد و جستجو — بدون radio
         await _fill_input(sana_page, "#txtPetitionNo", tracking_code)
         await resilient_sleep(sana_page, 1, bot, user_id)
 
@@ -335,8 +315,27 @@ async def submit_ezhhar_sign_code(
 # توابع کمکی داخلی
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _filter_signable_persons(persons: list) -> list:
+    """
+    فیلتر اشخاص قابل امضا بر اساس قوانین:
+      - اگر وکیل (PersonType==6) وجود داشت → فقط وکیل
+      - اگر نماینده/مدیرعامل داشت → همه آن‌ها (نماینده و مدیرعامل)
+      - در غیر این صورت → همه اشخاص قابل ارسال
+    """
+    has_lawyer = any(p.get("personType") == "وکیل" for p in persons)
+    if has_lawyer:
+        # فقط وکیل
+        return [p for p in persons if p.get("personType") == "وکیل"]
+
+    # نماینده و مدیرعامل
+    reps = [p for p in persons if p.get("personType") in ("نماینده", "مدیرعامل")]
+    if reps:
+        return reps
+
+    return persons
+
+
 async def _fill_input(page, selector: str, value: str):
-    """پر کردن فیلد ورودی"""
     try:
         elem = page.locator(selector).first
         await elem.click()
@@ -348,7 +347,6 @@ async def _fill_input(page, selector: str, value: str):
 
 
 async def _close_any_popup(page) -> bool:
-    """بستن هر پنجره پاپ‌آپ (موفق یا خطا)"""
     closed = await page.evaluate('''() => {
         const popup = document.querySelector('.sweet-alert.showSweetAlert');
         if (!popup) return false;
@@ -364,8 +362,8 @@ async def _close_any_popup(page) -> bool:
 async def _check_recovery_popup(page, bot: Bot, user_id: int) -> bool:
     """
     بررسی پاپ‌آپ بازیابی اظهارنامه.
-    اگر پیام «بازیابی اظهارنامه با موفقیت انجام گردید» بود → بستن و True.
-    اگر پیام دیگری بود → ریلود پیشنهاد شده → False.
+    فقط اگر «بازیابی اظهارنامه با موفقیت» بود → بستن و True.
+    هر پیام دیگری → False (باید ریلود شود).
     """
     result = await page.evaluate('''() => {
         const popup = document.querySelector('.sweet-alert.showSweetAlert');
@@ -385,28 +383,25 @@ async def _check_recovery_popup(page, bot: Bot, user_id: int) -> bool:
         return text || "other";
     }''')
 
-    if result == "recovery_success" or result == "success":
+    if result == "recovery_success":
+        await _close_any_popup(page)
+        return True
+    elif result == "success":
         await _close_any_popup(page)
         return True
     elif result and result != "other":
-        # پیام غیرمنتظره — بستن
         await _close_any_popup(page)
         return False
     elif result == "other":
-        # پاپ‌آپ بدون متن شناخته‌شده
         await _close_any_popup(page)
-        return True  # ادامه می‌دهیم
+        return True
 
-    return True  # پاپ‌آپی نبود — OK
+    return True
 
 
 async def _send_temp_password_for_row(
     page, row_idx: int, bot: Bot, user_id: int, person_name: str
 ) -> bool:
-    """
-    ارسال کد موقت برای یک ردیف از جدول امضا.
-    حداکثر ۳ بار تلاش می‌کند.
-    """
     for attempt in range(3):
         clicked = await page.evaluate(f'''(idx) => {{
             const rows = Array.from(document.querySelectorAll(
@@ -423,27 +418,15 @@ async def _send_temp_password_for_row(
             await asyncio.sleep(5)
             continue
 
-        # انتظار برای پاپ‌آپ
         popup_result = await _wait_for_popup_result(page, timeout_sec=55)
 
         if popup_result == "success":
             await _close_any_popup(page)
-            await bot.send_message(
-                user_id,
-                f"✅ **کد موقت امضا** برای **{person_name}** ارسال شد.\n"
-                "⏰ توجه: مهلت استفاده از این کد **۷ دقیقه** می‌باشد.\n\n"
-                "لطفاً کد دریافتی را هرچه سریع‌تر ارسال کنید."
-            )
             logging.info(f"[EZHHAR_SIGN] کد موقت برای ردیف {row_idx} ({person_name}) ارسال شد.")
             return True
 
         elif popup_result == "already_sent":
             await _close_any_popup(page)
-            await bot.send_message(
-                user_id,
-                f"✅ **کد موقت امضا** برای **{person_name}** قبلاً ارسال شده و هنوز معتبر است.\n"
-                "لطفاً کد دریافتی را ارسال کنید."
-            )
             logging.info(f"[EZHHAR_SIGN] کد قبلاً ارسال شده برای ردیف {row_idx}")
             return True
 
@@ -457,10 +440,6 @@ async def _send_temp_password_for_row(
 
 
 async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
-    """
-    منتظر پاپ‌آپ نتیجه ارسال کد.
-    Returns: "success" | "already_sent" | "error" | "timeout"
-    """
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
@@ -496,12 +475,7 @@ async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
 async def _enter_code_and_sign(
     page, row_idx: int, code: str, bot: Bot, user_id: int
 ) -> bool:
-    """
-    کد را در فیلد وارد می‌کند و دکمه «امضاء ثنا» را می‌زند.
-    حداکثر ۳ بار تلاش می‌کند.
-    """
     for attempt in range(3):
-        # وارد کردن کد
         filled = await page.evaluate(f'''(args) => {{
             const idx = args.idx;
             const code = args.code;
@@ -536,7 +510,6 @@ async def _enter_code_and_sign(
 
         await asyncio.sleep(1)
 
-        # کلیک دکمه «امضاء ثنا»
         clicked = await page.evaluate(f'''(idx) => {{
             const rows = Array.from(document.querySelectorAll(
                 'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
@@ -558,7 +531,6 @@ async def _enter_code_and_sign(
             await asyncio.sleep(3)
             continue
 
-        # انتظار برای نتیجه
         popup_result = await _wait_for_sign_popup(page, timeout_sec=55)
 
         if popup_result == "success":
@@ -573,7 +545,6 @@ async def _enter_code_and_sign(
             await _close_any_popup(page)
             logging.warning(f"[EZHHAR_SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
 
-            # بازگشت به مرحله اخذ امضا
             clicked_sign = await page.evaluate('''() => {
                 const heads = Array.from(document.querySelectorAll('.box h5'));
                 const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
@@ -594,6 +565,11 @@ async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
     """
     منتظر پاپ‌آپ نتیجه امضا.
     Returns: "success" | "wrong_code" | "error" | "timeout"
+
+    پیام‌های مورد انتظار:
+      - موفق (آیکون سبز): "امضاء با موفقیت در صفحه چاپ درج گردید"
+      - موفق (آیکون زرد/هشدار): "امضاء « name » در صفحه ی چاپ درج شده است"
+      - خطا (آیکون قرمز): "خطای سرویس ثنا   : رمز موقت نادرست است"
     """
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
@@ -602,13 +578,20 @@ async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
             const h2 = popup.querySelector('h2');
             const text = h2 ? h2.innerText.trim() : "";
             const successIcon = popup.querySelector('.sa-icon.sa-success');
+            const warningIcon = popup.querySelector('.sa-icon.sa-warning');
             const errorIcon = popup.querySelector('.sa-icon.sa-error');
             const isSuccessVisible = successIcon &&
                 window.getComputedStyle(successIcon).display !== "none";
+            const isWarningVisible = warningIcon &&
+                window.getComputedStyle(warningIcon).display !== "none";
             const isErrorVisible = errorIcon &&
                 window.getComputedStyle(errorIcon).display !== "none";
 
             if (isSuccessVisible) return "success";
+
+            // هشدار ولی واقعاً موفق — "امضاء « name » در صفحه ی چاپ درج شده است"
+            if (isWarningVisible && text.includes("درج شده")) return "success";
+
             if (isErrorVisible) {
                 if (text.includes("رمز موقت نادرست") || text.includes("نادرست")) {
                     return "wrong_code";

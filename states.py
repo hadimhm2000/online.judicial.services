@@ -42,10 +42,13 @@ class Form(StatesGroup):
     # =========================================================
     # State های بخش اخذ امضای الکترونیک لایحه
     # =========================================================
-    lavayeh_sign_ready = State()
-    lavayeh_sign_code_input = State()
-    lavayeh_sign_resend_prompt = State()
-    lavayeh_sign_later_prompt = State()
+    lavayeh_sign_ready = State()               # آمادگی برای ارسال کد
+    lavayeh_sign_person_select = State()       # انتخاب شخص برای ارسال کد
+    lavayeh_sign_code_input = State()          # دریافت کد از کاربر
+    lavayeh_sign_resend_prompt = State()       # سوال ارسال مجدد کد
+    lavayeh_sign_later_prompt = State()        # سوال اقدام بعدی
+    lavayeh_sign_wrong_code_wait = State()     # منتظر ۲۰ دقیقه بعد از کد اشتباه
+    lavayeh_sign_no_action_timeout = State()   # ۶۰ دقیقه بدون اقدام
 
     # =========================================================
     # State های بخش اخذ امضای الکترونیک اظهارنامه

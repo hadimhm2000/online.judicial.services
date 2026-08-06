@@ -2,13 +2,20 @@
 سناریوی اخذ امضای الکترونیک لایحه در سامانه ثنا.
 
 جریان کلی:
-  ۱. ناوبری به بخش «ارایه و پیگیری لایحه» → جستجو با کد رهگیری
-  ۲. ورود به مرحله «اخذ امضای الکترونیک»
-  ۳. یافتن جدول اشخاص قابل امضا
-  ۴. ارسال کد موقت برای هر شخص (actions.sendTempPassword)
-  ۵. اعلام موفقیت به کاربر
-  ۶. دریافت کد(های) تایید از کاربر
-  ۷. وارد کردن کد و کلیک «امضاء ثنا» (actions.getPersonDataSign)
+  ۱. ناوبری به بخش «ارایه و پیگیری لایحه» → انتخاب radio → جستجو با کد رهگیری
+  ۲. صبر ۳۰ ثانیه تا بارگذاری صفحه جدید
+  ۳. ورود به مرحله «اخذ امضای الکترونیک»
+  ۴. یافتن جدول اشخاص قابل امضا
+  ۵. ارسال کد موقت برای شخص انتخاب‌شده (actions.sendTempPassword)
+  ۶. وارد کردن کد و کلیک «امضاء ثنا» (actions.getPersonDataSign)
+
+ناوبری جدید (مطابق درخواست):
+  - کلیک «ارایه و پیگیری لایحه»
+  - انتخاب radio #rdbGetPetition (value=2)
+  - وارد کردن کد رهگیری در #billNo
+  - کلیک جستجو #btnGetJSSBill
+  - صبر ۳۰ ثانیه
+  - کلیک «اخذ امضای الکترونیک»
 """
 
 import asyncio
@@ -28,31 +35,24 @@ from browser_helpers import (
 )
 from config import ADMIN_ID
 
-# ── نگاشت عنوان لایحه به مسیر منو (همانند lavayeh_scenario.py) ─────────────
-TITLE_SEARCH_MAP = {
-    "لایحه دفاعیه":              ("دفا",   0),
-    "صدور اجرائیه":               ("اجرائ", 0),
-    "اعتراض به نظر کارشناس":      ("کارشن", 1),
-    "اعتراض به قرار رد دفتر":     ("قرار",  1),
-    "سایر عناوین":                ("دفا",   0),
-}
 
-
-async def send_sign_codes(
+async def navigate_to_sign_page(
     bot: Bot,
     user_id: int,
     tracking_code: str,
-    province: str,
-    row_number: int,
-    lavayeh_title: str,
 ) -> bool:
     """
-    وارد سامانه می‌شود، صفحه اخذ امضا را باز می‌کند و
-    برای هر شخص واجد شرایط کد موقت ارسال می‌کند.
+    ناوبری به صفحه اخذ امضای لایحه.
+    مسیر:
+      ۱. رفتن به صفحه اصلی سامانه
+      ۲. کلیک «ارایه و پیگیری لایحه»
+      ۳. انتخاب radio #rdbGetPetition (value=2)
+      ۴. وارد کردن کد رهگیری در #billNo
+      ۵. کلیک جستجو #btnGetJSSBill
+      ۶. صبر ۳۰ ثانیه
+      ۷. کلیک «اخذ امضای الکترونیک»
 
-    Returns:
-        True  اگر حداقل یک کد با موفقیت ارسال شد
-        False در صورت هر نوع خطای قطعی
+    Returns True اگر صفحه جدول امضا ظاهر شد.
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
@@ -79,46 +79,40 @@ async def send_sign_codes(
             await safe_click_by_text(sana_page, "ارایه و پیگیری لایحه", bot, user_id)
         await resilient_sleep(sana_page, 5, bot, user_id)
 
-        # ── ۳. انتخاب نوع لایحه ─────────────────────────────────────────
-        search_kw, row_idx = TITLE_SEARCH_MAP.get(lavayeh_title, ("دفا", 0))
-        await _select_bill_type(sana_page, search_kw, row_idx)
-        await resilient_sleep(sana_page, 3, bot, user_id)
+        # ── ۳. انتخاب radio #rdbGetPetition (value=2) ───────────────────
+        await sana_page.evaluate('''() => {
+            const radio = document.querySelector('#rdbGetPetition');
+            if (radio) { radio.click(); return true; }
+            // fallback: radio با value=2
+            const radios = Array.from(document.querySelectorAll('input[type="radio"][name*="rdbSelectPetitionType"]'));
+            const r = radios.find(r => r.value === "2");
+            if (r) { r.click(); return true; }
+            return false;
+        }''')
+        await asyncio.sleep(1)
 
-        # ── ۴. کلیک «تقدیم لایحه» ───────────────────────────────────────
-        await _click_taqdim(sana_page, bot, user_id)
-        await resilient_sleep(sana_page, 8, bot, user_id)
-
-        # ── ۵. کلیک «جستجوی لایحه» ──────────────────────────────────────
-        await safe_click_by_text(sana_page, "جستجوی لایحه", bot, user_id)
-        await resilient_sleep(sana_page, 4, bot, user_id)
-
-        # ── ۶. وارد کردن کد رهگیری و جستجو ──────────────────────────────
-        await _fill_input(sana_page, "#txtPetitionNo, #billNo", tracking_code)
+        # ── ۴. وارد کردن کد رهگیری در #billNo ───────────────────────────
+        await _fill_input(sana_page, "#billNo", tracking_code)
         await resilient_sleep(sana_page, 1, bot, user_id)
 
+        # ── ۵. کلیک جستجو #btnGetJSSBill ─────────────────────────────────
         await sana_page.evaluate('''() => {
-            const btn = document.querySelector('#btnGetJSSPetition');
+            const btn = document.querySelector('#btnGetJSSBill');
             if (btn) { btn.click(); return; }
+            // fallback
             const btns = Array.from(document.querySelectorAll('button'));
             const s = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
             if (s) s.click();
         }''')
 
-        # صبر اولیه قبل از بررسی لودینگ
-        await asyncio.sleep(3)
+        # ── ۶. صبر ۳۰ ثانیه تا بارگذاری صفحه جدید ─────────────────────
+        await asyncio.sleep(30)
 
-        # منتظر ناپدید شدن لودینگ افقی بالای صفحه
-        had_loading_error = await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
-        if had_loading_error:
-            logging.warning("[SIGN] خطا بعد از لودینگ جستجو — بستن پاپ‌آپ و ادامه")
-            await _close_any_popup(sana_page)
-            await asyncio.sleep(5)
-
-        # بستن هر پنجره خطایی
+        # بستن هر پاپ‌آپ خطایی
         await _close_any_popup(sana_page)
         await resilient_sleep(sana_page, 2, bot, user_id)
 
-        # ── ۷. ورود به مرحله «اخذ امضای الکترونیک» ─────────────────────
+        # ── ۷. کلیک «اخذ امضای الکترونیک» ──────────────────────────────
         clicked_sign = await sana_page.evaluate('''() => {
             const heads = Array.from(document.querySelectorAll('.box h5'));
             const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
@@ -132,233 +126,269 @@ async def send_sign_codes(
             await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
         await resilient_sleep(sana_page, 6, bot, user_id)
 
-        # ── ۸. یافتن اشخاص قابل امضا و ارسال کد ────────────────────────
+        # ── ۸. بررسی جدول امضا — اگر نبود، ریلود و تلاش مجدد ─────────
+        table_exists = await sana_page.evaluate('''() => {
+            const rows = Array.from(document.querySelectorAll(
+                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            ));
+            return rows.length > 0;
+        }''')
+
+        if not table_exists:
+            logging.warning("[SIGN] جدول امضا ظاهر نشد — ریلود و تلاش مجدد")
+            await sana_page.reload()
+            await resilient_sleep(sana_page, 8, bot, user_id)
+            await _close_any_popup(sana_page)
+            await resilient_sleep(sana_page, 3, bot, user_id)
+
+            # دوباره کلیک روی اخذ امضا
+            clicked_sign2 = await sana_page.evaluate('''() => {
+                const heads = Array.from(document.querySelectorAll('.box h5'));
+                const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
+                if (t) {
+                    const box = t.closest('.box');
+                    if (box) { box.click(); return true; }
+                }
+                return false;
+            }''')
+            if clicked_sign2:
+                await resilient_sleep(sana_page, 6, bot, user_id)
+
+        return True
+
+    except Exception as e:
+        logging.error(f"[SIGN] navigate_to_sign_page error: {e}")
+        return False
+
+
+async def get_signable_persons(
+    bot: Bot,
+    user_id: int,
+) -> list:
+    """
+    اشخاص قابل امضا را از جدول استخراج می‌کند.
+    اگر جدولی وجود نداشت، ناوبری مجدد انجام نمی‌دهد (فرض بر این است که
+    صفحه قبلاً از طریق navigate_to_sign_page باز شده است).
+
+    Returns:
+        list of dicts: [{idx, name, person_type, canSend, divVisible}]
+    """
+    sana_page = runtime_state.sana_page
+    if sana_page is None:
+        return []
+
+    try:
         persons_info = await sana_page.evaluate('''() => {
             const rows = Array.from(document.querySelectorAll(
                 'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
             ));
             return rows.map((tr, idx) => {
-                // نام شخص از ستون آخرولی
+                // نام شخص
                 const nameTd = tr.querySelector(
                     'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
                 );
                 const name = nameTd ? nameTd.innerText.trim() : "";
-                // آیا دکمه ارسال کد موجود و فعال هست؟
-                const sendBtn = tr.querySelector(
-                    'button[ng-click*="sendTempPassword"]'
-                );
-                const canSend = sendBtn && !sendBtn.disabled;
-                // آیا اصلاً div ارسال کد نمایش دارد؟
+
+                // نوع شخص (وکیل، نماینده، مدیرعامل، ...)
+                const typeSpans = tr.querySelectorAll('span[ng-if*="PersonType"]');
+                let personType = "";
+                for (const sp of typeSpans) {
+                    if (sp.getBoundingClientRect().width > 0) {
+                        personType = sp.innerText.trim();
+                    }
+                }
+
+                // آیا div ارسال کد نمایش دارد؟
                 const sendDiv = tr.querySelector(
                     'div[ng-if*="!(item.NationalityCode"]'
                 );
                 const divVisible = sendDiv &&
                     window.getComputedStyle(sendDiv).display !== "none";
-                return { idx, name, canSend, divVisible };
+
+                // آیا دکمه ارسال کد فعال هست؟
+                const sendBtn = tr.querySelector(
+                    'button[ng-click*="sendTempPassword"]'
+                );
+                const canSend = divVisible && sendBtn && !sendBtn.disabled;
+
+                return { idx, name, personType, canSend, divVisible };
             });
         }''')
 
         logging.info(f"[SIGN] persons_info: {persons_info}")
-
-        # اشخاصی که باید کد برایشان ارسال شود
-        sendable = [p for p in persons_info if p.get("divVisible")]
-
-        if not sendable:
-            await bot.send_message(
-                user_id,
-                "⚠️ **در جدول امضا، شخصی برای ارسال کد موقت یافت نشد.**\n\n"
-                "احتمالاً همه اشخاص قبلاً امضا کرده‌اند یا نوع امضا متفاوت است.\n"
-                "چاپ لایحه خود را جهت ادامه تکمیل نمودن به واتساپ به شماره "
-                "**09306186888** ارسال فرمائید.",
-                parse_mode="Markdown"
-            )
-            return False
-
-        sent_count = 0
-        for person in sendable:
-            idx = person["idx"]
-            name = person["name"] or f"شخص {idx + 1}"
-            success = await _send_temp_password_for_row(sana_page, idx, bot, user_id, name)
-            if success:
-                sent_count += 1
-
-        return sent_count > 0
+        return persons_info or []
 
     except Exception as e:
-        logging.error(f"[SIGN] send_sign_codes error: {e}")
-        return False
+        logging.error(f"[SIGN] get_signable_persons error: {e}")
+        return []
 
 
-async def submit_sign_codes(
+async def send_sign_code_for_person(
     bot: Bot,
     user_id: int,
-    tracking_code: str,
-    province: str,
-    row_number: int,
-    lavayeh_title: str,
-    sign_codes: dict,  # {row_index_str: code} یا {national_id: code}
+    row_idx: int,
+    person_name: str,
 ) -> bool:
     """
-    کدهای دریافت‌شده از کاربر را در سامانه وارد و امضا می‌کند.
+    ارسال کد موقت برای یک ردیف مشخص از جدول امضا.
+    حداکثر ۳ بار تلاش می‌کند.
 
-    sign_codes: دیکشنری {row_idx (int): code (str)}
-
-    Returns True اگر حداقل یک امضا موفق بود.
+    Returns True اگر کد ارسال شد (یا قبلاً ارسال شده بود).
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
         return False
 
-    try:
-        # ── ناوبری مجدد به صفحه اخذ امضا ─────────────────────────────
-        ok = await goto_url_with_retry(
-            sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
-        )
-        if not ok:
-            return False
-        await human_delay(3.0, 5.0)
-
-        clicked = await sana_page.evaluate('''() => {
-            const links = Array.from(document.querySelectorAll('a.list-group-item'));
-            const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری لایحه"));
-            if (t) { t.click(); return true; }
+    for attempt in range(3):
+        clicked = await sana_page.evaluate(f'''(idx) => {{
+            const rows = Array.from(document.querySelectorAll(
+                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            ));
+            if (rows.length <= idx) return false;
+            const btn = rows[idx].querySelector('button[ng-click*="sendTempPassword"]');
+            if (btn && !btn.disabled) {{ btn.click(); return true; }}
             return false;
-        }''')
+        }}''', row_idx)
+
         if not clicked:
-            await safe_click_by_text(sana_page, "ارایه و پیگیری لایحه", bot, user_id)
-        await resilient_sleep(sana_page, 5, bot, user_id)
-
-        search_kw, row_idx = TITLE_SEARCH_MAP.get(lavayeh_title, ("دفا", 0))
-        await _select_bill_type(sana_page, search_kw, row_idx)
-        await resilient_sleep(sana_page, 3, bot, user_id)
-
-        await _click_taqdim(sana_page, bot, user_id)
-        await resilient_sleep(sana_page, 8, bot, user_id)
-
-        await safe_click_by_text(sana_page, "جستجوی لایحه", bot, user_id)
-        await resilient_sleep(sana_page, 4, bot, user_id)
-
-        await _fill_input(sana_page, "#txtPetitionNo, #billNo", tracking_code)
-        await resilient_sleep(sana_page, 1, bot, user_id)
-
-        await sana_page.evaluate('''() => {
-            const btn = document.querySelector('#btnGetJSSPetition');
-            if (btn) { btn.click(); return; }
-            const btns = Array.from(document.querySelectorAll('button'));
-            const s = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
-            if (s) s.click();
-        }''')
-
-        # صبر اولیه قبل از بررسی لودینگ
-        await asyncio.sleep(3)
-
-        # منتظر ناپدید شدن لودینگ افقی بالای صفحه
-        had_loading_error = await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
-        if had_loading_error:
-            logging.warning("[SIGN] خطا بعد از لودینگ جستجو (submit) — بستن پاپ‌آپ و ادامه")
-            await _close_any_popup(sana_page)
+            logging.warning(f"[SIGN] دکمه ارسال کد برای ردیف {row_idx} پیدا نشد (تلاش {attempt+1})")
             await asyncio.sleep(5)
+            continue
 
-        await _close_any_popup(sana_page)
-        await resilient_sleep(sana_page, 2, bot, user_id)
+        # انتظار برای پاپ‌آپ
+        popup_result = await _wait_for_popup_result(sana_page, timeout_sec=55)
 
-        clicked_sign = await sana_page.evaluate('''() => {
-            const heads = Array.from(document.querySelectorAll('.box h5'));
-            const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-            if (t) {
-                const box = t.closest('.box');
-                if (box) { box.click(); return true; }
-            }
+        if popup_result == "success":
+            await _close_any_popup(sana_page)
+            logging.info(f"[SIGN] کد موقت برای ردیف {row_idx} ({person_name}) ارسال شد.")
+            return True
+
+        elif popup_result == "already_sent":
+            await _close_any_popup(sana_page)
+            logging.info(f"[SIGN] کد قبلاً ارسال شده برای ردیف {row_idx}")
+            return True
+
+        else:
+            await _close_any_popup(sana_page)
+            logging.warning(f"[SIGN] خطا در ارسال کد ردیف {row_idx} (تلاش {attempt+1})")
+            await asyncio.sleep(5)
+            continue
+
+    return False
+
+
+async def submit_sign_code_for_person(
+    bot: Bot,
+    user_id: int,
+    row_idx: int,
+    code: str,
+) -> dict:
+    """
+    کد را در فیلد وارد می‌کند و دکمه «امضاء ثنا» را می‌زند.
+    حداکثر ۳ بار تلاش می‌کند.
+
+    Returns:
+        dict: {"success": bool, "error": str}
+        error values: "wrong_code", "timeout", "error"
+    """
+    sana_page = runtime_state.sana_page
+    if sana_page is None:
+        return {"success": False, "error": "sana_page is None"}
+
+    for attempt in range(3):
+        # وارد کردن کد
+        filled = await sana_page.evaluate(f'''(args) => {{
+            const idx = args.idx;
+            const code = args.code;
+            const rows = Array.from(document.querySelectorAll(
+                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            ));
+            if (rows.length <= idx) return false;
+            const inp = rows[idx].querySelector('input[id^="txtTempPassword"]');
+            if (!inp) return false;
+            inp.value = code;
+            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+            // trigger angular ng-model
+            const scope = angular.element(inp).scope();
+            if (scope) {{
+                scope.$apply(() => {{
+                    const key = inp.getAttribute("ng-model");
+                    if (key) {{
+                        const parts = key.split(".");
+                        let obj = scope;
+                        for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+                        obj[parts[parts.length - 1]] = code;
+                    }}
+                }});
+            }}
+            return true;
+        }}''', {"idx": row_idx, "code": code})
+
+        if not filled:
+            logging.warning(f"[SIGN] وارد کردن کد در ردیف {row_idx} ناموفق (تلاش {attempt+1})")
+            await asyncio.sleep(3)
+            continue
+
+        await asyncio.sleep(1)
+
+        # کلیک دکمه «امضاء ثنا»
+        clicked = await sana_page.evaluate(f'''(idx) => {{
+            const rows = Array.from(document.querySelectorAll(
+                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            ));
+            if (rows.length <= idx) return false;
+            const btn = rows[idx].querySelector(
+                'button[ng-click*="getPersonDataSign"]'
+            );
+            if (btn) {{
+                btn.disabled = false;
+                btn.click();
+                return true;
+            }}
             return false;
-        }''')
-        if not clicked_sign:
-            await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
-        await resilient_sleep(sana_page, 6, bot, user_id)
+        }}''', row_idx)
 
-        # ── وارد کردن کد و کلیک امضا برای هر شخص ─────────────────────
-        success_count = 0
-        for row_idx_key, code in sign_codes.items():
-            row_idx_int = int(row_idx_key)
-            ok = await _enter_code_and_sign(sana_page, row_idx_int, code, bot, user_id)
-            if ok:
-                success_count += 1
+        if not clicked:
+            logging.warning(f"[SIGN] دکمه امضاء ثنا در ردیف {row_idx} پیدا نشد (تلاش {attempt+1})")
+            await asyncio.sleep(3)
+            continue
 
-        return success_count > 0
+        # انتظار برای نتیجه
+        popup_result = await _wait_for_sign_popup(sana_page, timeout_sec=55)
 
-    except Exception as e:
-        logging.error(f"[SIGN] submit_sign_codes error: {e}")
-        return False
+        if popup_result == "success":
+            await _close_any_popup(sana_page)
+            logging.info(f"[SIGN] امضای ردیف {row_idx} موفق.")
+            return {"success": True}
+        elif popup_result == "wrong_code":
+            await _close_any_popup(sana_page)
+            logging.info(f"[SIGN] رمز موقت نادرست — ردیف {row_idx}")
+            return {"success": False, "error": "wrong_code"}
+        else:
+            await _close_any_popup(sana_page)
+            logging.warning(f"[SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
+
+            # بازگشت به مرحله اخذ امضا
+            clicked_sign = await sana_page.evaluate('''() => {
+                const heads = Array.from(document.querySelectorAll('.box h5'));
+                const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
+                if (t) {
+                    const box = t.closest('.box');
+                    if (box) { box.click(); return true; }
+                }
+                return false;
+            }''')
+            if not clicked_sign:
+                await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
+            await asyncio.sleep(6)
+
+    return {"success": False, "error": "max_attempts"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # توابع کمکی داخلی
 # ══════════════════════════════════════════════════════════════════════════════
-
-async def _select_bill_type(page, search_kw: str, row_idx: int):
-    """انتخاب نوع لایحه از dropdown"""
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
-    search_input = page.locator('.ui-select-search').first
-    opened = False
-    for _ in range(4):
-        await page.evaluate('''() => {
-            const btn = document.querySelector('.ui-select-toggle');
-            if (btn) btn.click();
-        }''')
-        try:
-            await search_input.wait_for(state="visible", timeout=4000)
-            opened = True
-            break
-        except PlaywrightTimeoutError:
-            await asyncio.sleep(1.5)
-
-    if not opened:
-        return
-
-    await search_input.fill("")
-    await search_input.type(search_kw, delay=150)
-    await asyncio.sleep(2)
-
-    await page.evaluate(f'''(idx) => {{
-        const choices = Array.from(document.querySelectorAll(
-            '.ui-select-choices-row, .ui-select-choices div[ng-repeat]'
-        ));
-        const visible = choices.filter(el => {{
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        }});
-        if (visible.length > idx) {{ visible[idx].click(); return; }}
-        const lis = Array.from(document.querySelectorAll('.ui-select-choices li'));
-        const vl = lis.filter(el => {{
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        }});
-        if (vl.length > idx) vl[idx].click();
-    }}''', row_idx)
-
-
-async def _click_taqdim(page, bot: Bot, user_id: int):
-    """کلیک روی دکمه تقدیم لایحه"""
-    for _ in range(5):
-        clicked = await page.evaluate('''() => {
-            const btn = document.querySelector('button[ng-click*="setJSSBillType"]');
-            if (btn) { btn.click(); return true; }
-            return false;
-        }''')
-        if not clicked:
-            await safe_click_by_text(page, "تقدیم لایحه", bot, user_id)
-        await asyncio.sleep(3)
-        await _close_any_popup(page)
-        await asyncio.sleep(4)
-
-        loaded = await page.evaluate('''() => {
-            const steps = Array.from(document.querySelectorAll('.box h5, .step'));
-            return steps.some(el => el.innerText && el.innerText.includes("ثبت"));
-        }''')
-        if loaded:
-            return
-        await asyncio.sleep(5)
-
 
 async def _fill_input(page, selector: str, value: str):
     """پر کردن فیلد ورودی"""
@@ -386,70 +416,9 @@ async def _close_any_popup(page) -> bool:
     return closed
 
 
-async def _send_temp_password_for_row(
-    page, row_idx: int, bot: Bot, user_id: int, person_name: str
-) -> bool:
-    """
-    ارسال کد موقت برای یک ردیف از جدول امضا.
-    حداکثر ۳ بار تلاش می‌کند.
-    Returns True اگر کد ارسال شد (یا قبلاً ارسال شده بود).
-    """
-    for attempt in range(3):
-        # کلیک دکمه ارسال کد
-        clicked = await page.evaluate(f'''(idx) => {{
-            const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
-            ));
-            if (rows.length <= idx) return false;
-            const btn = rows[idx].querySelector('button[ng-click*="sendTempPassword"]');
-            if (btn && !btn.disabled) {{ btn.click(); return true; }}
-            return false;
-        }}''', row_idx)
-
-        if not clicked:
-            logging.warning(f"[SIGN] دکمه ارسال کد برای ردیف {row_idx} پیدا نشد (تلاش {attempt+1})")
-            await asyncio.sleep(5)
-            continue
-
-        # انتظار برای پاپ‌آپ (10 تا 50 ثانیه)
-        popup_result = await _wait_for_popup_result(page, timeout_sec=55)
-
-        if popup_result == "success":
-            # «رمز موقت به شماره همراه ارسال شد»
-            await _close_any_popup(page)
-            await bot.send_message(
-                user_id,
-                f"✅ **کد موقت امضا** برای **{person_name}** ارسال شد.\n"
-                "⏰ توجه: مهلت استفاده از این کد **۷ دقیقه** می‌باشد.\n\n"
-                "لطفاً کد دریافتی را هرچه سریع‌تر ارسال کنید."
-            )
-            logging.info(f"[SIGN] کد موقت برای ردیف {row_idx} ({person_name}) ارسال شد.")
-            return True
-
-        elif popup_result == "already_sent":
-            # «رمز موقت امضاء لایحه طی ۱۰ دقیقه گذشته ارسال شده است»
-            await _close_any_popup(page)
-            await bot.send_message(
-                user_id,
-                f"✅ **کد موقت امضا** برای **{person_name}** قبلاً ارسال شده است و هنوز معتبر می‌باشد.\n"
-                "لطفاً کد دریافتی را هرچه سریع‌تر ارسال کنید."
-            )
-            logging.info(f"[SIGN] کد قبلاً ارسال شده برای ردیف {row_idx}")
-            return True
-
-        else:
-            # خطای دیگر — تلاش مجدد
-            await _close_any_popup(page)
-            logging.warning(f"[SIGN] خطای ناشناخته در ارسال کد ردیف {row_idx} (تلاش {attempt+1})")
-            await asyncio.sleep(5)
-            continue
-
-    return False
-
-
 async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
     """
-    منتظر می‌ماند تا پاپ‌آپ نتیجه ظاهر شود.
+    منتظر می‌ماند تا پاپ‌آپ نتیجه ارسال کد ظاهر شود.
     Returns:
         "success"      — ارسال موفق
         "already_sent" — قبلاً ارسال شده
@@ -488,120 +457,46 @@ async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
     return "timeout"
 
 
-async def _enter_code_and_sign(
-    page, row_idx: int, code: str, bot: Bot, user_id: int
-) -> bool:
-    """
-    کد را در فیلد txtTempPassword وارد می‌کند و دکمه «امضاء ثنا» را می‌زند.
-    حداکثر ۳ بار تلاش می‌کند.
-    Returns True اگر امضا با موفقیت انجام شد.
-    """
-    for attempt in range(3):
-        # پاک کردن و وارد کردن کد
-        filled = await page.evaluate(f'''(args) => {{
-            const idx = args.idx;
-            const code = args.code;
-            const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
-            ));
-            if (rows.length <= idx) return false;
-            const inp = rows[idx].querySelector('input[id^="txtTempPassword"]');
-            if (!inp) return false;
-            inp.value = code;
-            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-            inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-            // trigger angular ng-model
-            const scope = angular.element(inp).scope();
-            if (scope) {{
-                scope.$apply(() => {{
-                    const key = inp.getAttribute("ng-model");
-                    if (key) {{
-                        const parts = key.split(".");
-                        let obj = scope;
-                        for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
-                        obj[parts[parts.length - 1]] = code;
-                    }}
-                }});
-            }}
-            return true;
-        }}''', {"idx": row_idx, "code": code})
-
-        if not filled:
-            logging.warning(f"[SIGN] وارد کردن کد در ردیف {row_idx} ناموفق (تلاش {attempt+1})")
-            await asyncio.sleep(3)
-            continue
-
-        await asyncio.sleep(1)
-
-        # کلیک دکمه «امضاء ثنا»
-        clicked = await page.evaluate(f'''(idx) => {{
-            const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
-            ));
-            if (rows.length <= idx) return false;
-            const btn = rows[idx].querySelector(
-                'button[ng-click*="getPersonDataSign"]'
-            );
-            if (btn) {{
-                btn.disabled = false;
-                btn.click();
-                return true;
-            }}
-            return false;
-        }}''', row_idx)
-
-        if not clicked:
-            logging.warning(f"[SIGN] دکمه امضاء ثنا در ردیف {row_idx} پیدا نشد (تلاش {attempt+1})")
-            await asyncio.sleep(3)
-            continue
-
-        # انتظار برای نتیجه (10 تا 50 ثانیه)
-        popup_result = await _wait_for_sign_popup(page, timeout_sec=55)
-
-        if popup_result == "success":
-            await _close_any_popup(page)
-            logging.info(f"[SIGN] امضای ردیف {row_idx} موفق.")
-            return True
-
-        else:
-            # خطا — تلاش مجدد از مرحله ناوبری به اخذ امضا
-            await _close_any_popup(page)
-            logging.warning(f"[SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
-
-            # بازگشت به مرحله اخذ امضا
-            clicked_sign = await page.evaluate('''() => {
-                const heads = Array.from(document.querySelectorAll('.box h5'));
-                const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-                if (t) {
-                    const box = t.closest('.box');
-                    if (box) { box.click(); return true; }
-                }
-                return false;
-            }''')
-            if not clicked_sign:
-                await safe_click_by_text(page, "اخذ امضاي الكترونيك", bot, user_id)
-            await asyncio.sleep(6)
-
-    return False
-
-
 async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
     """
     منتظر پاپ‌آپ نتیجه امضا می‌ماند.
-    Returns: "success" | "error" | "timeout"
+    Returns: "success" | "wrong_code" | "error" | "timeout"
+
+    پیام‌های مورد انتظار:
+      - موفق (آیکون سبز): "امضاء با موفقیت در صفحه چاپ درج گردید"
+      - موفق (آیکون زرد/هشدار): "امضاء « name » در صفحه ی چاپ درج شده است"
+      - خطا (آیکون قرمز): "خطای سرویس ثنا   : رمز موقت نادرست است"
     """
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
             if (!popup) return null;
+            const h2 = popup.querySelector('h2');
+            const text = h2 ? h2.innerText.trim() : "";
             const successIcon = popup.querySelector('.sa-icon.sa-success');
+            const warningIcon = popup.querySelector('.sa-icon.sa-warning');
             const errorIcon = popup.querySelector('.sa-icon.sa-error');
+
             const isSuccessVisible = successIcon &&
                 window.getComputedStyle(successIcon).display !== "none";
+            const isWarningVisible = warningIcon &&
+                window.getComputedStyle(warningIcon).display !== "none";
             const isErrorVisible = errorIcon &&
                 window.getComputedStyle(errorIcon).display !== "none";
+
+            // موفقیت اصلی — آیکون سبز
             if (isSuccessVisible) return "success";
-            if (isErrorVisible) return "error";
+
+            // هشدار ولی واقعاً موفق — "امضاء « name » در صفحه ی چاپ درج شده است"
+            if (isWarningVisible && text.includes("درج شده")) return "success";
+
+            // خطا — رمز موقت نادرست
+            if (isErrorVisible) {
+                if (text.includes("رمز موقت نادرست") || text.includes("نادرست")) {
+                    return "wrong_code";
+                }
+                return "error";
+            }
             return null;
         }''')
         if result:

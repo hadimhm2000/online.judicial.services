@@ -51,15 +51,20 @@ pending_lavayeh_payments: dict = {}
 # =========================================================
 # کلید: user_id (int)
 # مقدار: {
-#   "tracking_code": str,          — شماره پرونده
-#   "province": str,               — استان
-#   "row_number": int,             — ردیف فرعی
-#   "lavayeh_category": str,       — دسته لایحه برای مسیریابی سامانه
-#   "persons": list,               — لیست اشخاص ارائه‌دهنده
-#   "sign_sent_time": datetime,    — زمان ارسال آخرین کد امضا
-#   "persons_awaiting_sign": list, — لیست کدملی‌هایی که باید کد وارد شود
-#   "sign_codes_received": dict,   — {national_id: code} کدهای دریافت‌شده
-#   "resend_notified": bool,       — آیا نوتیف ارسال مجدد داده شده؟
+#   "tracking_code": str,              — کد رهگیری لایحه
+#   "province": str,                   — استان
+#   "row_number": int,                 — ردیف فرعی
+#   "lavayeh_title": str,              — عنوان لایحه
+#   "persons": list,                   — لیست اشخاص ارائه‌دهنده
+#   "sign_persons": list,              — لیست اشخاص قابل امضا از جدول [{idx, name, person_type, canSend, divVisible}]
+#   "persons_awaiting_sign": list,     — لیست idx اشخاص در انتظار امضا
+#   "current_person_idx": int,         — idx شخصی که فعلاً کدش ارسال شده
+#   "sign_codes_received": dict,       — {idx: code} کدهای دریافت‌شده
+#   "sign_sent_time": datetime,        — زمان ارسال آخرین کد
+#   "wrong_code_time": datetime,       — زمان آخرین کد اشتباه (برای ۲۰ دقیقه)
+#   "code_sent_announce_time": datetime, — زمان ارسال کد (برای ۶ دقیقه تایم‌اوت)
+#   "resend_notified": bool,           — آیا نوتیف ارسال مجدد داده شده؟
+#   "total_no_action_start": datetime, — شروع ۶۰ دقیقه بدون اقدام
 # }
 pending_lavayeh_sign: dict = {}
 

@@ -2131,14 +2131,16 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
     is_valid, ocr_msg = verify_payment_receipt(photo_path, expected_fee_toman, CARD_NUMBER)
 
     if is_valid:
+        is_ezhhar = pending.get("is_ezhharnameh", False)
+        doc_type = "اظهارنامه" if is_ezhhar else "لایحه"
         await message.answer(
-            f"✅ **تایید پرداخت:**\n{ocr_msg}\n\nهزینه لایحه تایید شد. متشکریم 🙏",
+            f"✅ **تایید پرداخت:**\n{ocr_msg}\n\nهزینه {doc_type} تایید شد. متشکریم 🙏",
             reply_markup=ReplyKeyboardRemove()
         )
         await log_event(
-            "پرداخت", "لایحه", message.from_user.full_name, message.from_user.id,
+            "پرداخت", doc_type, message.from_user.full_name, message.from_user.id,
             tracking_code=pending.get("tracking_code", ""), national_id=pending.get("national_ids", ""),
-            doc_name="لایحه", payment_status="پرداخت شده",
+            doc_name=doc_type, payment_status="پرداخت شده",
             note=f"مبلغ: {expected_fee:,} ریال"
         )
 
@@ -2189,9 +2191,15 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
                 "province": pending.get("lavayeh_province", ""),
                 "row_number": pending.get("lavayeh_row_number", 1),
                 "persons": pending.get("lavayeh_persons", []),
+                "sign_persons": [],
+                "persons_awaiting_sign": [],
+                "current_person_idx": None,
                 "sign_sent_time": None,
                 "sign_codes_received": {},
+                "wrong_code_time": None,
+                "code_sent_announce_time": None,
                 "resend_notified": False,
+                "total_no_action_start": None,
             }
             runtime_state.pending_lavayeh_payments.pop(user_id, None)
 
@@ -2267,11 +2275,13 @@ async def admin_approve_lavayeh_receipt(callback: CallbackQuery, bot: Bot):
         await bot.send_message(user_id, "⚠️ فاکتور فعالی یافت نشد. لطفاً با پشتیبانی تماس بگیرید.")
         return
 
-    await bot.send_message(user_id, "✅ **رسید شما توسط مدیریت تایید شد.**\n\nهزینه لایحه تایید شد. متشکریم 🙏", reply_markup=ReplyKeyboardRemove())
+    is_ezhhar = pending.get("is_ezhharnameh", False)
+    doc_type = "اظهارنامه" if is_ezhhar else "لایحه"
+    await bot.send_message(user_id, f"✅ **رسید شما توسط مدیریت تایید شد.**\n\nهزینه {doc_type} تایید شد. متشکریم 🙏", reply_markup=ReplyKeyboardRemove())
     await log_event(
-        "پرداخت", "لایحه", "تایید دستی مدیر", user_id,
+        "پرداخت", doc_type, "تایید دستی مدیر", user_id,
         tracking_code=pending.get("tracking_code", ""), national_id=pending.get("national_ids", ""),
-        doc_name="لایحه", payment_status="پرداخت شده (تایید دستی)",
+        doc_name=doc_type, payment_status="پرداخت شده (تایید دستی)",
         note=f"مبلغ: {review['expected_amount']:,} ریال"
     )
 
@@ -2281,9 +2291,15 @@ async def admin_approve_lavayeh_receipt(callback: CallbackQuery, bot: Bot):
         "province": pending.get("lavayeh_province", ""),
         "row_number": pending.get("lavayeh_row_number", 1),
         "persons": pending.get("lavayeh_persons", []),
+        "sign_persons": [],
+        "persons_awaiting_sign": [],
+        "current_person_idx": None,
         "sign_sent_time": None,
         "sign_codes_received": {},
+        "wrong_code_time": None,
+        "code_sent_announce_time": None,
         "resend_notified": False,
+        "total_no_action_start": None,
     }
     runtime_state.pending_lavayeh_payments.pop(user_id, None)
 
