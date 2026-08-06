@@ -1480,11 +1480,11 @@ async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) ->
 
     جدول هزینه شامل چند ردیف با ستون مبلغ است.
     دو مبلغ کل وجود دارد:
-      - costSum: مبلغ جمع کل (td سبز) — همان مبالغ ردیف‌ها جمع شده
-      - mainTotal: مبلغ اصلی (div با jud-currency) — مبلغ کل واقعی
+      - costSum: مبلغ جمع کل (td سبز) — مقدار نمایش‌داده‌شده در جدول
+      - mainTotal: جمع مبالغ تمام ردیف‌های فردی (td قرمز) — مبلغ اصلی فرمول
 
     منطق محاسبه:
-      1. استخراج costSum از td سبز و mainTotal از div با jud-currency
+      1. استخراج costSum از td سبز و mainTotal از جمع td های قرمز
       2. یافتن ۳ ردیف خاص و جمع مبالغ آن‌ها:
          - هزینه تطبیق اوراق با اصل (ردیف ۱)
          - هزینه خدمات الکترونیک قضایی (ردیف ۷)
@@ -1575,27 +1575,15 @@ async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) ->
                 }
             }
 
-            // استخراج مبلغ اصلی از div با jud-currency (مبلغ کل واقعی)
+            // استخراج مبلغ اصلی = جمع مبالغ تمام ردیف‌ها (red tds)
+            // این مبلغ همان مجموع costSum قبل از کسر است — فرمول روی این مبلغ اعمال می‌شود
             let mainTotal = 0;
-            const judDivs = document.querySelectorAll('div[jud-currency]');
-            for (const div of judDivs) {
-                const priceDiv = div.querySelector('div[ng-model="viewModel.costSum"]');
-                if (priceDiv) {
-                    const text = div.innerText.trim().replace(/,/g, '').replace(/،/g, '').replace(/\\s/g, '');
-                    if (/^[0-9]+$/.test(text) && parseInt(text) > 0) {
-                        mainTotal = parseInt(text);
-                    }
-                }
+            for (const amt of rowAmounts) {
+                mainTotal += amt;
             }
-            // fallback: اگر با ng-model پیدا نشد، اولین div[jud-currency] با عدد
+            // fallback: اگر ردیفی پیدا نشد، از td سبز استفاده کن
             if (mainTotal === 0) {
-                for (const div of judDivs) {
-                    const text = div.innerText.trim().replace(/,/g, '').replace(/،/g, '').replace(/\\s/g, '');
-                    if (/^[0-9]+$/.test(text) && parseInt(text) > 0) {
-                        mainTotal = parseInt(text);
-                        break;
-                    }
-                }
+                mainTotal = costSum;
             }
 
             return {

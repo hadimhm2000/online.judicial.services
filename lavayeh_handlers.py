@@ -2048,10 +2048,15 @@ async def send_lavayeh_result(
 
     if os.path.exists(pdf_path):
         doc = FSInputFile(pdf_path)
+        doc_caption = (
+            "📄 **نسخه ثبت‌شده اظهارنامه شما در سامانه قضایی**"
+            if is_ezhharnameh else
+            "📄 **نسخه ثبت‌شده لایحه شما در سامانه قضایی**"
+        )
         await bot.send_document(
             user_id,
             document=doc,
-            caption="📄 **نسخه ثبت‌شده لایحه شما در سامانه قضایی**",
+            caption=doc_caption,
             parse_mode="Markdown"
         )
         os.remove(pdf_path)
@@ -2066,8 +2071,9 @@ async def send_lavayeh_result(
 
     await bot.send_message(user_id, fee_text, parse_mode="Markdown")
 
+    service_label = "اظهارنامه" if is_ezhharnameh else "لایحه"
     payment_msg = (
-        f"💳 **فاکتور پرداخت خدمات لایحه:**\n\n"
+        f"💳 **فاکتور پرداخت خدمات {service_label}:**\n\n"
         f"💰 مبلغ: **{final_fee:,} ریال**\n\n"
         f"💳 شماره کارت: `{CARD_NUMBER}`\n"
         f"👤 بنام: **{ACCOUNT_NAME}**\n\n"
@@ -2075,10 +2081,11 @@ async def send_lavayeh_result(
     )
     await bot.send_message(user_id, payment_msg, parse_mode="Markdown")
 
+    doc_type = "اظهارنامه" if is_ezhharnameh else "لایحه"
     await log_event(
-        "ثبت", "لایحه", str(user_id), user_id,
+        "ثبت", doc_type, str(user_id), user_id,
         tracking_code=tracking_code, national_id=national_ids,
-        doc_name="لایحه", payment_status="در انتظار پرداخت",
+        doc_name=doc_type, payment_status="در انتظار پرداخت",
         note=f"مبلغ فاکتور: {final_fee:,} ریال (هزینه سامانه: {court_total:,} ریال)"
     )
 
@@ -2140,11 +2147,21 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
         # ── تمایز بین لایحه و اظهارنامه برای فلوی امضا ──
         if pending.get("is_ezhharnameh", False):
             # فلوی امضا اظهارنامه
+            raw_persons = pending.get("lavayeh_persons", [])
+            # تبدیل فرمت: اضافه کردن idx و name برای هندلر انتخاب شخص
+            sign_persons = []
+            for i, p in enumerate(raw_persons):
+                sign_persons.append({
+                    "idx": i,
+                    "name": p.get("name", p.get("national_id", f"شخص {i+1}")),
+                    "person_type": p.get("person_type", ""),
+                    "national_id": p.get("national_id", ""),
+                })
             runtime_state.pending_ezhhar_sign[user_id] = {
                 "tracking_code": pending.get("tracking_code", ""),
                 "is_ezhharnameh": True,
-                "sign_persons": pending.get("lavayeh_persons", []),
-                "persons_awaiting_sign": list(range(len(pending.get("lavayeh_persons", [])))),
+                "sign_persons": sign_persons,
+                "persons_awaiting_sign": list(range(len(sign_persons))),
                 "current_person_idx": 0,
                 "sign_codes_received": {},
                 "sign_sent_time": None,

@@ -523,8 +523,16 @@ async def ezhhar_attachment_title_handler(message: Message, state: FSMContext):
     attachments = data.get("ezhhar_attachments", [])
     mandatory_sent = data.get("_ezhhar_mandatory_proxy_sent", True)
 
-    # رد کردن (فقط اگر مدرک نمایندگی اجباری قبلاً ارسال شده یا نیاز نبود)
-    if text == "⏭ رد کردن (بدون مدرک)" and not attachments and mandatory_sent:
+    # رد کردن — بدون ارسال مدرک (فقط اگر مدرک نمایندگی اجباری قبلاً ارسال شده یا نیاز نبود)
+    if text == "⏭ رد کردن (بدون مدرک)":
+        if not mandatory_sent and not attachments:
+            # مدرک نمایندگی اجباری هنوز ارسال نشده — نباید رد کند
+            await message.answer(
+                "⚠️ ارسال تصویر **مدرک نمایندگی** برای شخص حقوقی اجباری است.\n\n"
+                "لطفاً تصویر مدرک را ارسال فرمایید.",
+                parse_mode="Markdown"
+            )
+            return
         await state.update_data(ezhhar_attachments=[])
         await _go_to_ezhhar_preview(message, state)
         return
@@ -646,7 +654,14 @@ async def ezhhar_images_text(message: Message, state: FSMContext):
 
     if text == "✅ اتمام ارسال تصاویر":
         if not images:
-            await message.answer("⚠️ حداقل یک تصویر برای این مدرک ارسال کنید.")
+            # کاربر بدون ارسال تصویر، اتمام را زده — مستقیم به سوال مدرک دیگر برو
+            await state.update_data(ezhhar_images=[])
+            await message.answer(
+                "آیا مدرک دیگری نیز دارید؟",
+                reply_markup=ezhhar_attachment_more_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.ezhhar_attachment_more)
             return
 
         attachments = data.get("ezhhar_attachments", [])
@@ -704,6 +719,13 @@ async def ezhhar_attachment_more_handler(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════════════════
 # ساخت پیش‌نمایش اظهارنامه
 # ══════════════════════════════════════════════════════════════════════════════
+def _escape_md(text: str) -> str:
+    """Escape کاراکترهای خاص Markdown برای جلوگیری از خطای پارس تلگرام."""
+    for ch in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+        text = text.replace(ch, f'\\{ch}')
+    return text
+
+
 def build_ezhhar_preview(data: dict) -> str:
     declarants = data.get("ezhhar_declarants", [])
     addressees = data.get("ezhhar_addressees", [])
@@ -724,13 +746,15 @@ def build_ezhhar_preview(data: dict) -> str:
     addressees_text = "\n".join([_person_line(p, i+1) for i, p in enumerate(addressees)]) or "  (ندارد)"
 
     text_preview = ezhhar_text[:200] + "..." if len(ezhhar_text) > 200 else ezhhar_text
+    text_preview = _escape_md(text_preview)
+    subject_escaped = _escape_md(subject)
 
     att_text = ""
     total_imgs = 0
     for i, att in enumerate(attachments, 1):
         n = len(att.get("images", []))
         total_imgs += n
-        att_text += f"  {i}. {att.get('title', 'مستندات')} — {n} تصویر\n"
+        att_text += f"  {i}. {_escape_md(att.get('title', 'مستندات'))} — {n} تصویر\n"
     if not att_text:
         att_text = "  (بدون مدرک)\n"
 
@@ -738,7 +762,7 @@ def build_ezhhar_preview(data: dict) -> str:
         f"📋 **پیش‌نمایش اظهارنامه:**\n\n"
         f"👤 اظهارکننده(ها):\n{declarants_text}\n\n"
         f"👥 مخاطب(ها):\n{addressees_text}\n\n"
-        f"📌 موضوع: **{subject}**\n\n"
+        f"📌 موضوع: **{subject_escaped}**\n\n"
         f"📄 شرح متن:\n{text_preview}\n\n"
         f"🖼 مدارک ({total_imgs} تصویر در {len(attachments)} عنوان):\n{att_text}\n"
         f"آیا اطلاعات فوق صحیح است؟"
@@ -748,7 +772,11 @@ def build_ezhhar_preview(data: dict) -> str:
 async def _go_to_ezhhar_preview(message: Message, state: FSMContext):
     data = await state.get_data()
     preview = build_ezhhar_preview(data)
-    await message.answer(preview, reply_markup=ezhhar_confirm_kb, parse_mode="Markdown")
+    try:
+        await message.answer(preview, reply_markup=ezhhar_confirm_kb, parse_mode="Markdown")
+    except Exception:
+        # fallback: ارسال بدون Markdown اگر پارس خطا داد
+        await message.answer(preview, reply_markup=ezhhar_confirm_kb)
     await state.set_state(Form.ezhhar_confirm)
 
 
