@@ -31,6 +31,7 @@ from lavayeh_handlers import lavayeh_router
 from stamp_calc_handlers import stamp_calc_router
 from ezhharnameh_handlers import ezhharnameh_router
 from file_tools_handlers import file_tools_router, file_tools_entry
+from subscription_handlers import subscription_router, subscription_expiry_checker
 
 router = Router()
 
@@ -39,6 +40,7 @@ router.include_router(lavayeh_router)
 router.include_router(stamp_calc_router)
 router.include_router(ezhharnameh_router)
 router.include_router(file_tools_router)
+router.include_router(subscription_router)
 
 
 # ── نگهبان: مسدودسازی کاربرانی که فاکتور لایحه کنسل‌شده را پرداخت نکرده‌اند ──
@@ -219,71 +221,6 @@ async def admin_reject_cart(callback: CallbackQuery, bot: Bot):
 
 
 # callback تایید دستی محاسبه تمبر
-@router.callback_query(F.data.startswith("ok_stamp:"))
-async def admin_approve_stamp(callback: CallbackQuery, bot: Bot):
-    await callback.answer()
-    parts = callback.data.split(":")
-    target_user_id = int(parts[1])
-    claim_amount = int(parts[2])
-
-    try:
-        from stamp_duty import calculate_stamp_duty, format_result_fa
-        result = calculate_stamp_duty(claim_amount)
-        result_text = format_result_fa(claim_amount, result)
-
-        user_state = runtime_state.dp.fsm.resolve_context(bot, target_user_id, target_user_id)
-        user_data = await user_state.get_data()
-        photo_path = user_data.get("stamp_photo_path")
-        await user_state.clear()
-
-        await bot.send_message(
-            target_user_id,
-            f"✅ **پرداخت تایید شد (توسط مدیریت).**\n\n{result_text}",
-            reply_markup=restart_kb,
-            parse_mode="Markdown"
-        )
-
-        if photo_path and os.path.exists(photo_path):
-            try:
-                os.remove(photo_path)
-            except Exception:
-                pass
-
-        await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n✅ **تایید شد.**")
-    except Exception as e:
-        logging.error(f"[ADMIN_APPROVE_STAMP] خطا: {e}")
-        await bot.send_message(ADMIN_ID, f"⚠️ خطا در تایید محاسبه تمبر کاربر {target_user_id}: {e}")
-
-
-@router.callback_query(F.data.startswith("no_stamp:"))
-async def admin_reject_stamp(callback: CallbackQuery, bot: Bot):
-    await callback.answer()
-    parts = callback.data.split(":")
-    target_user_id = int(parts[1])
-
-    try:
-        user_state = runtime_state.dp.fsm.resolve_context(bot, target_user_id, target_user_id)
-        user_data = await user_state.get_data()
-        photo_path = user_data.get("stamp_photo_path")
-        await user_state.clear()
-
-        await bot.send_message(
-            target_user_id,
-            "❌ رسید پرداخت تایید نشد. لطفاً مجدداً اقدام فرمایید.",
-            reply_markup=restart_kb
-        )
-
-        if photo_path and os.path.exists(photo_path):
-            try:
-                os.remove(photo_path)
-            except Exception:
-                pass
-
-        await callback.message.edit_caption(caption=f"{callback.message.caption}\n\n❌ **رد شد.**")
-    except Exception as e:
-        logging.error(f"[ADMIN_REJECT_STAMP] خطا: {e}")
-        await bot.send_message(ADMIN_ID, f"⚠️ خطا در رد محاسبه تمبر کاربر {target_user_id}: {e}")
-
 
 @router.message(Form.waiting_for_payment_receipt)
 async def process_payment_receipt_text_only(message: types.Message):

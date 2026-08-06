@@ -22,6 +22,243 @@ from browser_helpers import (
 )
 from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PRE_CHECK — استعلام تعداد پیوست در تب جدید (بدون دستکاری sana_page)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _process_pre_check_on_new_page(data: dict, bot: Bot):
+    """
+    استعلام تعداد پیوست‌ها در یک تب جدید — بدون دستکاری sana_page.
+    همان روند استعلام کد رهگیری را در تب جدید پیاده‌سازی می‌کند
+    تا روند ثبت پرونده در sana_page مختل نشود.
+    """
+    browser_context = runtime_state.browser_context
+    user_id = data['user_id']
+    tracking_code = data.get('tracking_code', '')
+    category = data.get('doc_category', '')
+    subcategory = data.get('doc_subcategory')
+    doc_name = subcategory if subcategory else category
+
+    page = None
+    try:
+        page = await browser_context.new_page()
+
+        # ── ۱. رفتن به صفحه اصلی ─────────────────────────────────
+        await page.goto("https://sakha2.adliran.ir/Offices/Index", timeout=30000, wait_until="domcontentloaded")
+        await asyncio.sleep(2)
+
+        # بررسی انقضا نشست
+        is_login = await page.query_selector('#txtUsername')
+        if is_login:
+            await bot.send_message(user_id, "⚠️ نشست سامانه منقضی شده. لطفاً دوباره تلاش کنید.")
+            return
+
+        # ── ۲. ناوبری به بخش مورد نظر ─────────────────────────────
+        nav_map = {
+            "لایحه": ["ارایه و پیگیری لایحه"],
+            "اظهارنامه": ["ارایه و پیگیری اظهارنامه"],
+            "شکواییه": ["ارایه و پیگیری شکواییه"],
+            "دادخواست بدوی": ["ارایه و پیگیری دادخواست", "دادخواست بدوی"],
+            "دعاوی دادگاههای صلح": ["دعاوی دادگاههای صلح", "دعاوی حقوقی"],
+            "دعاوی اعتراضی": ["دعاوی اعتراضی", subcategory],
+            "دعاوی طاری": ["ارایه و پیگیری دعاوی طاری", subcategory],
+            "دیوان عدالت اداری": ["دیوان عدالت اداری", subcategory],
+            "شورای حل اختلاف": ["شورای حل اختلاف (صلح و سازش)", subcategory],
+        }
+        steps = nav_map.get(category, [])
+        if not steps:
+            logging.error(f"[PRE_CHECK] دسته نامشخص: {category}")
+            return
+
+        for i, step in enumerate(steps):
+            if not step:
+                continue
+            await force_click_by_text(page, step)
+            await asyncio.sleep(2 if i < len(steps) - 1 else 5)
+
+        # لایحه: جستجوی لایحه
+        if category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        ):
+            await force_click_by_text(page, "جستجوی لایحه")
+            await asyncio.sleep(4)
+
+        # ── ۳. وارد کردن کد رهگیری ────────────────────────────────
+        try:
+            await page.wait_for_selector('#txtPetitionNo, #billNo', timeout=15000)
+        except Exception:
+            await bot.send_message(user_id, "⚠️ صفحه سامانه بارگذاری نشد.")
+            return
+
+        selector = '#txtPetitionNo, #billNo'
+        await page.fill(selector, tracking_code)
+        await asyncio.sleep(1.5)
+
+        # لایحه: بازیابی
+        if category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        ):
+            await force_click_by_text(page, "بازیابی")
+            await asyncio.sleep(2)
+
+        # ── ۴. کلیک جستجو ────────────────────────────────────────
+        await page.evaluate('''() => {
+            const exactBtn = document.querySelector('#btnGetJSSPetition');
+            if (exactBtn) { exactBtn.click(); return; }
+            const exactBtn2 = document.querySelector('#btnGetJSSBill');
+            if (exactBtn2) { exactBtn2.click(); return; }
+        }''')
+        await asyncio.sleep(3)
+
+        # منتظر لودینگ
+        await _precheck_wait_loading(page)
+
+        # ── ۵. بستن پاپ‌آپ خطا (اگر بود) ─────────────────────────────
+        await _precheck_dismiss_error(page)
+
+        # ── ۶. بررسی عدم یافتن پرونده ─────────────────────────────
+        not_found = await page.evaluate('''() => {
+            const alert = document.querySelector('.alert-danger');
+            if (alert && alert.offsetParent !== null) return true;
+            const text = document.body ? document.body.innerText : '';
+            return text.includes('یافت نشد');
+        }''')
+        if not_found:
+            await bot.send_message(user_id, f"❌ پرونده‌ای با کد `{tracking_code}` یافت نگردید.")
+            return
+
+        # ── ۷. کلیک «منضمات» و شمارش ────────────────────────────
+        await force_click_by_text(page, "منضمات")
+        await asyncio.sleep(5)
+
+        total_attachments_count = await page.evaluate('''() => {
+            const tbody = document.querySelector('tbody');
+            if (!tbody) return 0;
+            const trs = Array.from(tbody.querySelectorAll('tr'));
+            const isIgnored = (title) => {
+                const t = title.replace(/\\u200c/g, ' ');
+                return t.includes("قرارداد الکترونیک") &&
+                       (t.includes("وکالت نامه") || t.includes("وکالتنامه"));
+            };
+            const rows_data = trs.map((tr, index) => {
+                const tds = tr.querySelectorAll('td');
+                if (tds.length >= 6) {
+                    const title = tds[2].innerText.trim();
+                    const countText = tds[5].innerText.trim();
+                    const count = parseInt(countText) || 0;
+                    return { index, title, count };
+                }
+                return null;
+            }).filter(r => r !== null && !isIgnored(r.title));
+            const has_sig = rows_data.length > 0 &&
+                (rows_data[0].title.includes("امضا") || rows_data[0].title.includes("امضاء"));
+            const start = has_sig ? 1 : 0;
+            let sum = 0;
+            for (let i = start; i < rows_data.length; i++) { sum += rows_data[i].count; }
+            return sum;
+        }''')
+
+        # ── ۸. ارسال نتیجه به کاربر ─────────────────────────────────
+        calculated_fee = FEES["کد رهگیری با منضمات"] + total_attachments_count * 5000
+
+        user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
+        user_data = await user_state.get_data()
+        flow_type = user_data.get('flow_type', 'single')
+
+        await user_state.update_data(
+            payment_fee=calculated_fee,
+            need_attachments=True,
+            total_attachments=total_attachments_count
+        )
+
+        from states import Form
+        await user_state.set_state(Form.confirm_opt)
+
+        kb = confirm_single_kb if flow_type == "single" else confirm_cart_kb
+        action_text = (
+            "تایید نهایی و دریافت فاکتور پرداخت"
+            if flow_type == "single"
+            else "تایید و افزودن این مورد به سبد خرید"
+        )
+
+        confirm_msg = (
+            f"📋 **اطلاعات استعلام با منضمات:**\n\n"
+            f"کد پیگیری: `{tracking_code}`\n"
+            f"سند: **{doc_name}**\n"
+            f"📎 تعداد پیوست: **{total_attachments_count} برگ**\n"
+            f"💰 فاکتور: ۵۰,۰۰۰ + ({total_attachments_count} × ۵,۰۰۰) = **{calculated_fee:,} تومان**\n\n"
+            f"آیا {action_text} فرمایید؟"
+        )
+        await bot.send_message(user_id, confirm_msg, reply_markup=kb, parse_mode="Markdown")
+        await bot.send_message(ADMIN_ID, f"✅ [PRE_CHECK] تعداد پیوست {tracking_code}: {total_attachments_count} (تب جدید)")
+
+    except Exception as e:
+        logging.error(f"[PRE_CHECK] خطا در تب جدید: {e}")
+        await bot.send_message(ADMIN_ID, f"❌ [PRE_CHECK] خطا: {e}")
+        await bot.send_message(
+            user_id,
+            "⚠️ خطا در استعلام پیوست‌ها. لطفاً دوباره تلاش کنید."
+        )
+    finally:
+        if page:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+
+async def _precheck_wait_loading(page, timeout=60):
+    """منتظر ناپدید شدن لودینگ در صفحه PRE_CHECK."""
+    try:
+        await page.evaluate('''(timeout) => {
+            return new Promise((resolve) => {
+                let checks = 0;
+                const maxChecks = timeout * 2;
+                const interval = setInterval(() => {
+                    checks++;
+                    if (checks >= maxChecks) { clearInterval(interval); resolve(false); return; }
+                    const loaders = document.querySelectorAll('.blockUI, .blockOverlay, .loading-mask, .ajax-loader, .spinner, .loading, #loading, .progress-bar, .nprogress, .bar-loading, [ng-show*="loading"]');
+                    let anyVisible = false;
+                    for (const loader of loaders) {
+                        const rect = loader.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0 && window.getComputedStyle(loader).display !== 'none') { anyVisible = true; break; }
+                    }
+                    if (!anyVisible) { clearInterval(interval); resolve(false); }
+                }, 500);
+            });
+        }''', timeout)
+    except Exception:
+        pass
+    await asyncio.sleep(1)
+
+
+async def _precheck_dismiss_error(page):
+    """بستن پاپ‌آپ خطای 'لطفا اطلاعات خواسته شده را به درستی وارد نمایید' و تلاش مجدد."""
+    has_error = await page.evaluate('''() => {
+        const text = document.body ? document.body.innerText : '';
+        return text.includes('لطفا اطلاعات خواسته شده را به درستی وارد نمایید');
+    }''')
+    if has_error:
+        try:
+            await page.evaluate('''() => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                const closeBtn = btns.find(b => (b.innerText && b.innerText.trim() === "بستن") || b.classList.contains("confirm"));
+                if (closeBtn) closeBtn.click();
+            }''')
+            await asyncio.sleep(2)
+            await page.evaluate('''() => {
+                const exactBtn = document.querySelector('#btnGetJSSPetition');
+                if (exactBtn) { exactBtn.click(); return; }
+                const exactBtn2 = document.querySelector('#btnGetJSSBill');
+                if (exactBtn2) { exactBtn2.click(); return; }
+            }''')
+            await asyncio.sleep(3)
+            await _precheck_wait_loading(page)
+        except Exception:
+            pass
+
+
 async def _wait_for_mobile_search_table(page, timeout_sec: int = 30) -> bool:
     for _ in range(timeout_sec):
         has_table = await page.evaluate('''() => {
@@ -372,6 +609,13 @@ async def process_task(data, bot: Bot):
                 return
 
             # ────────────────────────────────────────────────────────────────
+            # PRE_CHECK — استعلام پیوست در تب جدید (بدون دخالت به sana_page)
+            # ────────────────────────────────────────────────────────────────
+            elif task_type == 'PRE_CHECK':
+                await _process_pre_check_on_new_page(data, bot)
+                return
+
+            # ────────────────────────────────────────────────────────────────
             # سناریوی ۲: استعلام کد رهگیری پرونده
             # ────────────────────────────────────────────────────────────────
             elif query_type == "کد رهگیری":
@@ -476,71 +720,6 @@ async def process_task(data, bot: Bot):
                     or await sana_page.locator('text="اطلاعاتی یافت نشد"').is_visible()
                 ):
                     await bot.send_message(user_id, f"❌ پرونده‌ای با کد `{tracking_code}` یافت نگردید.")
-                    return
-
-                # ── PRE_CHECK ─────────────────────────────────────────────
-                if task_type == 'PRE_CHECK':
-                    await safe_click_by_text(sana_page, "منضمات", bot, user_id)
-                    await resilient_sleep(sana_page, 5, bot, user_id)
-
-                    total_attachments_count = await sana_page.evaluate('''() => {
-                        const tbody = document.querySelector('tbody');
-                        if (!tbody) return 0;
-                        const trs = Array.from(tbody.querySelectorAll('tr'));
-                        const isIgnored = (title) => {
-                            const t = title.replace(/\\u200c/g, ' ');
-                            return t.includes("قرارداد الکترونیک") &&
-                                   (t.includes("وکالت نامه") || t.includes("وکالتنامه"));
-                        };
-                        const rows_data = trs.map((tr, index) => {
-                            const tds = tr.querySelectorAll('td');
-                            if (tds.length >= 6) {
-                                const title = tds[2].innerText.trim();
-                                const countText = tds[5].innerText.trim();
-                                const count = parseInt(countText) || 0;
-                                return { index, title, count };
-                            }
-                            return null;
-                        }).filter(r => r !== null && !isIgnored(r.title));
-                        const has_sig = rows_data.length > 0 &&
-                            (rows_data[0].title.includes("امضا") || rows_data[0].title.includes("امضاء"));
-                        const start = has_sig ? 1 : 0;
-                        let sum = 0;
-                        for (let i = start; i < rows_data.length; i++) { sum += rows_data[i].count; }
-                        return sum;
-                    }''')
-
-                    calculated_fee = FEES["کد رهگیری با منضمات"] + total_attachments_count * 5000
-
-                    user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
-                    user_data = await user_state.get_data()
-                    flow_type = user_data.get('flow_type', 'single')
-
-                    await user_state.update_data(
-                        payment_fee=calculated_fee,
-                        need_attachments=True,
-                        total_attachments=total_attachments_count
-                    )
-
-                    from states import Form
-                    await user_state.set_state(Form.confirm_opt)
-
-                    kb = confirm_single_kb if flow_type == "single" else confirm_cart_kb
-                    action_text = (
-                        "تایید نهایی و دریافت فاکتور پرداخت"
-                        if flow_type == "single"
-                        else "تایید و افزودن این مورد به سبد خرید"
-                    )
-
-                    confirm_msg = (
-                        f"📋 **اطلاعات استعلام با منضمات:**\n\n"
-                        f"کد پیگیری: `{tracking_code}`\n"
-                        f"سند: **{doc_name}**\n"
-                        f"📎 تعداد پیوست: **{total_attachments_count} برگ**\n"
-                        f"💰 فاکتور: ۵۰,۰۰۰ + ({total_attachments_count} × ۵,۰۰۰) = **{calculated_fee:,} تومان**\n\n"
-                        f"آیا {action_text} فرمایید؟"
-                    )
-                    await bot.send_message(user_id, confirm_msg, reply_markup=kb, parse_mode="Markdown")
                     return
 
                 # ── PRINT ─────────────────────────────────────────────────
@@ -898,36 +1077,73 @@ async def _process_lavayeh_submit_sign(data: dict, bot: Bot):
 async def _process_ezhharnameh_send_sign_code(data: dict, bot: Bot):
     user_id = data["user_id"]
     tracking_code = data.get("tracking_code", "")
-    target_row_indices = data.get("target_row_indices", [])
+    phase = data.get("phase", "navigate")
 
-    from ezhharnameh_sign_scenario import send_ezhhar_sign_codes
-    from lavayeh_sign_handlers import on_ezhhar_sign_code_sent_success, on_ezhhar_sign_code_sent_failure
+    from ezhharnameh_sign_scenario import (
+        navigate_to_ezhhar_sign_page,
+        get_ezhhar_signable_persons,
+        send_ezhhar_sign_code_for_person,
+    )
+    from lavayeh_sign_handlers import (
+        on_ezhhar_sign_persons_loaded,
+        on_ezhhar_sign_code_sent_success,
+        on_ezhhar_sign_code_sent_failure,
+    )
 
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
-        await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ارسال کد امضا اظهارنامه برای کاربر {user_id}")
-        result = await send_ezhhar_sign_codes(
-            bot, user_id, tracking_code, target_row_indices
-        )
+        if phase == "navigate":
+            await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ناوبری به صفحه امضا اظهارنامه برای کاربر {user_id}")
+            nav_ok = await navigate_to_ezhhar_sign_page(bot, user_id, tracking_code)
+            if not nav_ok:
+                await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
+                await bot.send_message(ADMIN_ID, f"❌ [EZHHAR_SIGN] ناوبری ناموفق برای کاربر {user_id}")
+                return
 
-        if result["success"]:
-            await on_ezhhar_sign_code_sent_success(
-                bot, user_id, result["persons"], user_state
-            )
-            await bot.send_message(ADMIN_ID, f"✅ [EZHHAR_SIGN] کد امضا اظهارنامه برای کاربر {user_id} ارسال شد.")
-        else:
-            await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
-            await bot.send_message(ADMIN_ID, f"❌ [EZHHAR_SIGN] ارسال کد امضا اظهارنامه برای کاربر {user_id} ناموفق.")
+            persons = await get_ezhhar_signable_persons(bot, user_id)
+
+            # لاگ جزئیات اشخاص برای دیباگ
+            for p in persons:
+                name_status = "✓" if p.get("name") else "✗ EMPTY"
+                logging.info(f"[EZHHAR_SIGN] شخص ردیف {p.get('idx')}: name={name_status} '{p.get('name', '')}' type='{p.get('personType', '')}' canSend={p.get('canSend')} divVisible={p.get('divVisible')}")
+
+            await on_ezhhar_sign_persons_loaded(bot, user_id, persons, user_state)
+            names_summary = ", ".join([p.get('name', 'نامشخص') for p in persons])
+            await bot.send_message(ADMIN_ID, f"✅ [EZHHAR_SIGN] لیست اشخاص اظهارنامه برای کاربر {user_id} دریافت شد ({len(persons)} نفر): {names_summary}")
+
+        elif phase == "send_code":
+            target_row_indices = data.get("target_row_indices", [])
+            await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ارسال کد امضا اظهارنامه برای کاربر {user_id}")
+
+            sign_info = runtime_state.pending_ezhhar_sign.get(user_id, {})
+            all_persons = sign_info.get("sign_persons", [])
+
+            results = []
+            for row_idx in target_row_indices:
+                person = next((p for p in all_persons if p["idx"] == row_idx), None)
+                person_name = person.get("name", "") if person else ""
+                if not person_name:
+                    person_name = f"شخص {row_idx + 1}"
+                    logging.warning(f"[EZHHAR_SIGN] نام خالی برای ردیف {row_idx} — از '{person_name}' استفاده می‌شود")
+                success = await send_ezhhar_sign_code_for_person(bot, user_id, row_idx, person_name)
+                results.append({"idx": row_idx, "name": person_name, "person_type": person.get("personType", "") if person else "", "sent": success})
+                if row_idx != target_row_indices[-1]:
+                    await asyncio.sleep(30)
+
+            any_sent = any(r["sent"] for r in results)
+            if any_sent:
+                await on_ezhhar_sign_code_sent_success(bot, user_id, results, user_state)
+                await bot.send_message(ADMIN_ID, f"✅ [EZHHAR_SIGN] کد امضا اظهارنامه برای کاربر {user_id} ارسال شد.")
+            else:
+                await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
+                await bot.send_message(ADMIN_ID, f"❌ [EZHHAR_SIGN] ارسال کد امضا اظهارنامه برای کاربر {user_id} ناموفق.")
 
     except Exception as e:
         logging.error(f"[EZHHAR_SIGN] خطا در _process_ezhharnameh_send_sign_code: {e}")
         await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# پردازش ثبت کد امضا اظهارنامه
-# ══════════════════════════════════════════════════════════════════════════════
 async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
     user_id = data["user_id"]
     tracking_code = data.get("tracking_code", "")
@@ -935,22 +1151,29 @@ async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
     code = data.get("code", "")
 
     from ezhharnameh_sign_scenario import submit_ezhhar_sign_code
-    from lavayeh_sign_handlers import on_ezhhar_sign_submit_success, on_ezhhar_sign_submit_failure, on_ezhhar_sign_wrong_code
+    from lavayeh_sign_handlers import (
+        on_ezhhar_sign_submit_success,
+        on_ezhhar_sign_submit_failure,
+        on_ezhhar_sign_wrong_code,
+        on_ezhhar_sign_sana_not_registered,
+    )
 
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
         await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ثبت امضا اظهارنامه برای کاربر {user_id}")
-        result = await submit_ezhhar_sign_code(
-            bot, user_id, tracking_code, row_idx, code
-        )
+        result = await submit_ezhhar_sign_code(bot, user_id, tracking_code, row_idx, code)
 
         if result["success"]:
             await on_ezhhar_sign_submit_success(bot, user_id, row_idx, user_state)
+            await bot.send_message(ADMIN_ID, f"✅ [EZHHAR_SIGN] امضای اظهارنامه کاربر {user_id} موفق (ردیف {row_idx}).")
         else:
             error = result.get("error", "")
-            if "نادرست" in error or "wrong_code" in str(result):
+            if "wrong_code" in error:
                 await on_ezhhar_sign_wrong_code(bot, user_id, row_idx, user_state)
+            elif "sana_not_registered" in error:
+                await on_ezhhar_sign_sana_not_registered(bot, user_id, "امضای شخص در سامانه ثنا درج نشده است", user_state)
+                await bot.send_message(ADMIN_ID, f"❌ [EZHHAR_SIGN] امضا در ثنا ثبت نیست — کاربر {user_id}.")
             else:
                 await on_ezhhar_sign_submit_failure(bot, user_id, user_state)
 
@@ -959,9 +1182,6 @@ async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
         await on_ezhhar_sign_submit_failure(bot, user_id, user_state)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Browser Worker
-# ══════════════════════════════════════════════════════════════════════════════
 async def browser_worker(bot: Bot):
     async with async_playwright() as p:
         browser = await p.chromium.launch(

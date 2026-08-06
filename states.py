@@ -144,3 +144,10 @@ class Form(StatesGroup):
     file_tools_menu = State()          # انتخاب نوع ابزار
     file_tools_waiting_image = State()  # منتظر دریافت عکس برای فشرده‌سازی
     file_tools_waiting_pdf = State()    # منتظر دریافت PDF برای تبدیل به عکس
+
+    # =========================================================
+    # State های بخش اشتراک ماهیانه
+    # =========================================================
+    subscription_main = State()                  # منوی اشتراک
+    subscription_waiting_payment = State()       # منتظر دریافت رسید پرداخت اشتراک
+    subscription_waiting_admin_review = State()   # منتظر تایید مدیر

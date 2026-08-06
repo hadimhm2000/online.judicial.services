@@ -234,40 +234,78 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
         is_login = await page.query_selector('#txtUsername')
         if is_login:
             raise SessionExpiredError("نشست منقضی")
-        await _navigate_to_section(page, category, subcategory)
-        if category == "لایحه" or (category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"):
-            await _click_if_exists(page, "جستجوی لایحه")
-            await asyncio.sleep(3)
-            await _click_if_exists(page, "بازیابی")
-            await asyncio.sleep(2)
+
+        # ── ناوبری به بخش مورد نظر ──────────────────────────────
+        nav_map = {
+            "لایحه": ["ارایه و پیگیری لایحه"],
+            "اظهارنامه": ["ارایه و پیگیری اظهارنامه"],
+            "شکواییه": ["ارایه و پیگیری شکواییه"],
+            "دادخواست بدوی": ["ارایه و پیگیری دادخواست", "دادخواست بدوی"],
+            "دعاوی دادگاههای صلح": ["دعاوی دادگاههای صلح", "دعاوی حقوقی"],
+            "دعاوی اعتراضی": ["دعاوی اعتراضی", subcategory],
+            "دعاوی طاری": ["ارایه و پیگیری دعاوی طاری", subcategory],
+            "دیوان عدالت اداری": ["دیوان عدالت اداری", subcategory],
+            "شورای حل اختلاف": ["شورای حل اختلاف (صلح و سازش)", subcategory],
+        }
+        steps = nav_map.get(category, [])
+        if not steps:
+            raise FastCheckError(f"دسته نامشخص: {category}")
+
+        for i, step in enumerate(steps):
+            if not step:
+                continue
+            await force_click_by_text(page, step)
+            await asyncio.sleep(2 if i < len(steps) - 1 else 5)
+
+        # لایحه: جستجوی لایحه و بازیابی
+        if category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        ):
+            await force_click_by_text(page, "جستجوی لایحه")
+            await asyncio.sleep(4)
+
+        # ── وارد کردن کد رهگیری ────────────────────────────────
         try:
             await page.wait_for_selector('#txtPetitionNo, #billNo', timeout=15000)
         except PlaywrightTimeoutError:
             raise FastCheckError("صفحه کارتابل لود نشد")
-        selector = '#txtPetitionNo, #billNo, input[name="txtPetitionNo"], input[name="billNo"]'
-        await page.fill(selector, tracking_code)
+
+        await page.fill('#txtPetitionNo, #billNo', tracking_code)
         await asyncio.sleep(1.5)
+
+        # لایحه: بازیابی
+        if category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        ):
+            await force_click_by_text(page, "بازیابی")
+            await asyncio.sleep(2)
+
+        # ── کلیک جستجو (بدون fallback خطرناک) ───────────────────
         await page.evaluate('''() => {
             const exactBtn = document.querySelector('#btnGetJSSPetition');
             if (exactBtn) { exactBtn.click(); return; }
-            const btns = Array.from(document.querySelectorAll('button'));
-            const searchBtn = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
-            if (searchBtn) searchBtn.click();
+            const exactBtn2 = document.querySelector('#btnGetJSSBill');
+            if (exactBtn2) { exactBtn2.click(); return; }
         }''')
         await asyncio.sleep(3)
         await _wait_for_loading(page, timeout=45)
         await _dismiss_error_and_retry(page)
+
+        # ── بررسی یافتن پرونده ───────────────────────────────────
         not_found = await page.evaluate('''() => {
             const alert = document.querySelector('.alert-danger');
             if (alert) return true;
             const text = document.body ? document.body.innerText : '';
-            return text.includes('اطلاعاتی یافت نشد');
+            return text.includes('یافت نشد');
         }''')
         if not_found:
             raise PetitionNotFoundError(f"پرونده‌ای با کد {tracking_code} یافت نشد")
+
         is_login = await page.query_selector('#txtUsername')
         if is_login:
             raise SessionExpiredError("نشست منقضی")
+
+        # ── کلیک منضمات و شمارش ─────────────────────────────────
         await force_click_by_text(page, "منضمات")
         await asyncio.sleep(4)
         count = await page.evaluate('''() => {
@@ -369,9 +407,8 @@ async def _dismiss_error_and_retry(page):
             await page.evaluate('''() => {
                 const exactBtn = document.querySelector('#btnGetJSSPetition');
                 if (exactBtn) { exactBtn.click(); return; }
-                const btns = Array.from(document.querySelectorAll('button'));
-                const searchBtn = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
-                if (searchBtn) searchBtn.click();
+                const exactBtn2 = document.querySelector('#btnGetJSSBill');
+                if (exactBtn2) { exactBtn2.click(); return; }
             }''')
             await asyncio.sleep(3)
             await _wait_for_loading(page, timeout=45)

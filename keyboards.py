@@ -572,3 +572,15 @@ admin_bulk_confirm_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+# =========================================================
+# کیبوردهای بخش اشتراک ماهیانه
+# =========================================================
+
+subscription_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💳 فعال‌سازی اشتراک ماهیانه")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+    ],
+    resize_keyboard=True
+)

@@ -123,3 +123,104 @@ pending_admin_payment_review: dict = {}
 #   "created_at": float,         — زمان ایجاد
 # }
 incomplete_tasks: dict = {}
+
+# =========================================================
+# سیستم اشتراک و محدودیت استفاده رایگان
+# =========================================================
+# حداکثر استفاده رایگان برای هر بخش (تمبر و ابزار)
+MAX_FREE_USAGE = 2
+
+# مبلغ اشتراک ماهیانه (ریال)
+SUBSCRIPTION_FEE = 1_000_000
+
+# مدت اشتراک (روز)
+SUBSCRIPTION_DURATION_DAYS = 30
+
+# دیکشنری شمارنده استفاده رایگان کاربران
+# کلید: user_id (int)
+# مقدار: {"stamp": int, "tools": int}
+user_free_usage: dict = {}
+
+# دیکشنری اشتراک فعال کاربران
+# کلید: user_id (int)
+# مقدار: {
+#   "start_date": datetime,     — تاریخ شروع اشتراک
+#   "end_date": datetime,       — تاریخ پایان اشتراک
+#   "expiry_notified": bool,     — آیا اعلان انقضا ارسال شده؟
+# }
+user_subscriptions: dict = {}
+
+# دیکشنری پرداخت‌های اشتراک در انتظار تایید مدیر
+# کلید: user_id (int)
+# مقدار: {
+#   "photo_path": str,          — مسیر فایل تصویر رسید
+#   "message_id": int,          — آیدی پیام مدیر (برای ویرایش)
+#   "created_at": datetime,    — زمان ایجاد درخواست
+# }
+pending_subscription_payments: dict = {}
+
+
+def get_user_usage(user_id: int) -> dict:
+    """دریافت شمارنده استفاده کاربر. اگر وجود نداشت، صفر initializes."""
+    if user_id not in user_free_usage:
+        user_free_usage[user_id] = {"stamp": 0, "tools": 0}
+    return user_free_usage[user_id]
+
+
+def has_active_subscription(user_id: int) -> bool:
+    """بررسی آیا کاربر اشتراک فعال دارد."""
+    import datetime
+    if user_id not in user_subscriptions:
+        return False
+    sub = user_subscriptions[user_id]
+    return datetime.datetime.now() < sub["end_date"]
+
+
+def can_use_service(user_id: int, service: str) -> bool:
+    """بررسی آیا کاربر می‌تواند از خدمت استفاده کند (رایگان یا اشتراک)."""
+    if has_active_subscription(user_id):
+        return True
+    usage = get_user_usage(user_id)
+    return usage.get(service, 0) < MAX_FREE_USAGE
+
+
+def increment_usage(user_id: int, service: str):
+    """افزایش شمارنده استفاده رایگان."""
+    usage = get_user_usage(user_id)
+    usage[service] = usage.get(service, 0) + 1
+
+
+def get_remaining_free(user_id: int, service: str) -> int:
+    """دریافت تعداد دفعات باقی‌مانده رایگان."""
+    if has_active_subscription(user_id):
+        return -1  # اشتراک فعال — نامحدود
+    usage = get_user_usage(user_id)
+    return max(0, MAX_FREE_USAGE - usage.get(service, 0))
+
+
+def activate_subscription(user_id: int):
+    """فعال‌سازی اشتراک ماهیانه."""
+    import datetime
+    now = datetime.datetime.now()
+    user_subscriptions[user_id] = {
+        "start_date": now,
+        "end_date": now + datetime.timedelta(days=SUBSCRIPTION_DURATION_DAYS),
+        "expiry_notified": False,
+    }
+
+
+def get_expired_subscriptions() -> list:
+    """دریافت لیست کاربرانی که اشتراکشان منقضی شده."""
+    import datetime
+    expired = []
+    now = datetime.datetime.now()
+    for uid, sub in user_subscriptions.items():
+        if now >= sub["end_date"] and not sub["expiry_notified"]:
+            expired.append(uid)
+    return expired
+
+
+def mark_expiry_notified(user_id: int):
+    """علامت‌گذاری ارسال اعلان انقضای اشتراک."""
+    if user_id in user_subscriptions:
+        user_subscriptions[user_id]["expiry_notified"] = True

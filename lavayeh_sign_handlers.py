@@ -610,7 +610,8 @@ async def lavayeh_sign_later_no(message: Message, state: FSMContext):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# بخش اخذ امضای الکترونیک اظهارنامه (بدون تغییر — همان کد قبلی)
+# ══════════════════════════════════════════════════════════════════════════════
+# بخش اخذ امضای الکترونیک اظهارنامه (رویکرد دو فازی — اصلاح شده)
 # ══════════════════════════════════════════════════════════════════════════════
 
 # تایم‌اوت‌ها
@@ -621,9 +622,27 @@ EZHHAR_SIGN_NO_ACTION_TIMEOUT = 60 * 60  # ۶۰ دقیقه بدون اقدام
 EZHHAR_CODE_ENTRY_TIMEOUT = 6 * 60
 
 
+def _filter_ezhhar_signable_persons(persons: list) -> list:
+    """
+    فیلتر اشخاص قابل امضا بر اساس قوانین:
+      - اگر وکیل (PersonType==6) وجود داشت → فقط وکیل
+      - اگر نماینده/مدیرعامل داشت → همه آن‌ها (نماینده و مدیرعامل)
+      - در غیر این صورت → همه اشخاص قابل ارسال
+    """
+    has_lawyer = any(p.get("personType") == "وکیل" for p in persons)
+    if has_lawyer:
+        return [p for p in persons if p.get("personType") == "وکیل"]
+
+    reps = [p for p in persons if p.get("personType") in ("نماینده", "مدیرعامل")]
+    if reps:
+        return reps
+
+    return persons
+
+
 @lavayeh_sign_router.message(Form.ezhhar_sign_ready, F.text == "✅ آماده‌ام، کد امضا ارسال شود")
 async def ezhhar_sign_ready_handler(message: Message, state: FSMContext, bot: Bot):
-    """کاربر آمادگی خود را اعلام کرد — نمایش اشخاص برای انتخاب"""
+    """کاربر آمادگی خود را اعلام کرد — ناوبری به صفحه امضا و نمایش لیست اشخاص"""
     user_id = message.from_user.id
     sign_info = runtime_state.pending_ezhhar_sign.get(user_id)
     if not sign_info:
@@ -634,43 +653,26 @@ async def ezhhar_sign_ready_handler(message: Message, state: FSMContext, bot: Bo
         await state.clear()
         return
 
-    persons_awaiting = sign_info.get("persons_awaiting_sign", [])
-    all_persons = sign_info.get("sign_persons", [])
-
-    if not persons_awaiting:
-        await message.answer(
-            "✅ **امضای الکترونیک اظهارنامه با موفقیت انجام شد.**\n\n"
-            "فرآیند ثبت اظهارنامه کاملاً تکمیل گردید. 🎉",
-            reply_markup=new_lavayeh_request_kb,
-            parse_mode="Markdown"
-        )
-        runtime_state.pending_ezhhar_sign.pop(user_id, None)
-        await state.clear()
-        return
-
-    # ساخت کیبورد انتخاب شخص
-    person_buttons = []
-    for idx in persons_awaiting:
-        person = next((p for p in all_persons if p["idx"] == idx), None)
-        if person:
-            name = person.get("name", f"شخص {idx + 1}")
-            person_type = person.get("person_type", "")
-            label = f"👤 {name}"
-            if person_type:
-                label += f" ({person_type})"
-            person_buttons.append([KeyboardButton(text=label)])
-
-    person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
-
     await message.answer(
-        "📝 **انتخاب شخص جهت ارسال کد امضا:**\n\n"
-        "لطفاً شخصی که در دسترس است و آماده دریافت کد می‌باشد را انتخاب کنید:\n"
-        "_(فقط یک نفر انتخاب کنید)_",
-        reply_markup=person_select_kb,
+        "⏳ **در حال اتصال به سامانه...**",
+        reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
 
-    await state.set_state(Form.ezhhar_sign_person_select)
+    # ثبت زمان شروع برای ۶۰ دقیقه بدون اقدام
+    sign_info["total_no_action_start"] = datetime.datetime.now()
+    runtime_state.pending_ezhhar_sign[user_id] = sign_info
+
+    # ارسال تسک ناوبری به صفحه امضا (فاز ۱)
+    await runtime_state.job_queue.put({
+        "user_id": user_id,
+        "task_type": "EZHHARNAMEH_SEND_SIGN_CODE",
+        "tracking_code": sign_info["tracking_code"],
+        "phase": "navigate",  # فقط ناوبری و دریافت لیست اشخاص
+    })
+
+    # شروع تایمر ۶۰ دقیقه بدون اقدام
+    asyncio.create_task(_ezhhar_no_action_60min_watcher(bot, user_id, state))
 
 
 @lavayeh_sign_router.message(Form.ezhhar_sign_ready)
@@ -702,7 +704,7 @@ async def ezhhar_sign_person_select_handler(message: Message, state: FSMContext,
         person = next((p for p in all_persons if p["idx"] == idx), None)
         if person:
             name = person.get("name", "")
-            person_type = person.get("person_type", "")
+            person_type = person.get("personType", "")
             expected = f"👤 {name}"
             if person_type:
                 expected += f" ({person_type})"
@@ -722,7 +724,7 @@ async def ezhhar_sign_person_select_handler(message: Message, state: FSMContext,
     await message.answer(
         f"⏳ **در حال ارسال کد موقت امضا برای {person_name}...**\n\n"
         "کد تا دقایق دیگر ارسال می‌گردد.\n"
-        "⚠️ توجه داشته باشید مهلت کد کلاً **۷ دقیقه** می‌باشد.",
+        "⚠️ توجه داشته باشید مهلت کد کلاً **۶ دقیقه** می‌باشد.",
         reply_markup=ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
@@ -732,11 +734,12 @@ async def ezhhar_sign_person_select_handler(message: Message, state: FSMContext,
     sign_info["sign_codes_received"] = {}
     runtime_state.pending_ezhhar_sign[user_id] = sign_info
 
-    # ارسال تسک به صف
+    # ارسال تسک به صف (فاز ۲: ارسال کد)
     await runtime_state.job_queue.put({
         "user_id": user_id,
         "task_type": "EZHHARNAMEH_SEND_SIGN_CODE",
         "tracking_code": sign_info["tracking_code"],
+        "phase": "send_code",
         "target_row_indices": [selected_idx],
     })
 
@@ -756,7 +759,7 @@ async def ezhhar_sign_code_input_handler(message: Message, state: FSMContext, bo
         return
 
     # تبدیل اعداد فارسی/عربی
-    _FA_AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    _FA_AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧۸۹", "01234567890123456789")
     code = text.translate(_FA_AR).replace(" ", "").strip()
 
     if not code.isdigit() or not (3 <= len(code) <= 6):
@@ -788,6 +791,95 @@ async def ezhhar_sign_code_input_handler(message: Message, state: FSMContext, bo
 # کال‌بک‌های موفقیت/خطا از سمت scenarios.py برای اظهارنامه
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def on_ezhhar_sign_persons_loaded(bot: Bot, user_id: int, persons: list, state: FSMContext):
+    """
+    پس از ناوبری موفق به صفحه امضا — لیست اشخاص نمایش داده می‌شود.
+    persons: لیست اشخاص قابل امضا [{idx, name, personType, canSend, divVisible}]
+    """
+    sign_info = runtime_state.pending_ezhhar_sign.get(user_id, {})
+
+    # فیلتر اشخاص قابل ارسال
+    sendable = [p for p in persons if p.get("divVisible")]
+    sendable = _filter_ezhhar_signable_persons(sendable)
+
+    # جایگزینی نام‌های خالی با نام پیش‌فرض
+    for p in sendable:
+        if not p.get("name", "").strip():
+            fallback_name = f"شخص {p.get('idx', 0) + 1}"
+            p["name"] = fallback_name
+            logging.warning(f"[EZHHAR_SIGN] نام خالی برای ردیف {p.get('idx')} — از '{fallback_name}' استفاده شد")
+
+    # ذخیره لیست اشخاص
+    sign_info["sign_persons"] = sendable
+    sign_info["persons_awaiting_sign"] = [p["idx"] for p in sendable]
+    runtime_state.pending_ezhhar_sign[user_id] = sign_info
+
+    if not sendable:
+        await bot.send_message(
+            user_id,
+            "⚠️ **در جدول امضا اظهارنامه، شخصی برای ارسال کد موقت یافت نشد.**\n\n"
+            "احتمالاً همه اشخاص قبلاً امضا کرده‌اند.\n"
+            "لطفاً جهت ثبت امضا به شماره **09306186888** در واتساپ پیام دهید.",
+            parse_mode="Markdown",
+            reply_markup=new_lavayeh_request_kb
+        )
+        runtime_state.pending_ezhhar_sign.pop(user_id, None)
+        await state.clear()
+        return
+
+    # اگر فقط یک نفر هست، مستقیم کدش را ارسال کن
+    if len(sendable) == 1:
+        person = sendable[0]
+        person_name = person.get("name", f"شخص {person['idx'] + 1}")
+        sign_info["current_person_idx"] = person["idx"]
+        sign_info["sign_sent_time"] = datetime.datetime.now()
+        sign_info["code_sent_announce_time"] = datetime.datetime.now()
+        runtime_state.pending_ezhhar_sign[user_id] = sign_info
+
+        await bot.send_message(
+            user_id,
+            f"⏳ **در حال ارسال کد موقت امضا برای {person_name}...**\n\n"
+            "کد تا دقایق دیگر ارسال می‌گردد.\n"
+            "⚠️ توجه داشته باشید مهلت کد کلاً **۶ دقیقه** می‌باشد.",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode="Markdown"
+        )
+
+        # ارسال تسک برای ارسال کد (فاز ۲)
+        await runtime_state.job_queue.put({
+            "user_id": user_id,
+            "task_type": "EZHHARNAMEH_SEND_SIGN_CODE",
+            "tracking_code": sign_info["tracking_code"],
+            "phase": "send_code",
+            "target_row_indices": [person["idx"]],
+        })
+
+        await state.set_state(Form.ezhhar_sign_code_input)
+        asyncio.create_task(_ezhhar_code_entry_timeout_watcher(bot, user_id, state))
+    else:
+        # چند نفر هستند — نمایش لیست انتخاب
+        person_buttons = []
+        for p in sendable:
+            name = p.get("name", f"شخص {p['idx'] + 1}")
+            person_type = p.get("personType", "")
+            label = f"👤 {name}"
+            if person_type:
+                label += f" ({person_type})"
+            person_buttons.append([KeyboardButton(text=label)])
+
+        person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
+
+        await bot.send_message(
+            user_id,
+            "📝 **انتخاب شخص جهت ارسال کد امضا:**\n\n"
+            "لطفاً شخصی که در دسترس است و آماده دریافت کد می‌باشد را انتخاب کنید:\n"
+            "_(فقط یک نفر انتخاب کنید)_",
+            reply_markup=person_select_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.ezhhar_sign_person_select)
+
+
 async def on_ezhhar_sign_code_sent_success(bot: Bot, user_id: int, persons: list, state: FSMContext):
     """پس از ارسال موفق کد از سامانه — اطلاع به کاربر و انتظار کد"""
     sign_info = runtime_state.pending_ezhhar_sign.get(user_id, {})
@@ -798,7 +890,7 @@ async def on_ezhhar_sign_code_sent_success(bot: Bot, user_id: int, persons: list
         await bot.send_message(
             user_id,
             f"✅ **کد موقت امضا** برای **{name}** ارسال شد.\n\n"
-            "⏰ مهلت استفاده از این کد **۷ دقیقه** می‌باشد.\n"
+            "⏰ مهلت استفاده از این کد **۶ دقیقه** می‌باشد.\n"
             "لطفاً کد دریافتی را هرچه سریع‌تر ارسال کنید.",
             parse_mode="Markdown"
         )
@@ -861,7 +953,7 @@ async def on_ezhhar_sign_submit_success(bot: Bot, user_id: int, row_idx: int, st
             person = next((p for p in all_persons if p["idx"] == idx), None)
             if person:
                 name = person.get("name", f"شخص {idx + 1}")
-                person_type = person.get("person_type", "")
+                person_type = person.get("personType", "")
                 label = f"👤 {name}"
                 if person_type:
                     label += f" ({person_type})"
@@ -902,6 +994,22 @@ async def on_ezhhar_sign_wrong_code(bot: Bot, user_id: int, row_idx: int, state:
     asyncio.create_task(_ezhhar_wrong_code_waiter(bot, user_id, state))
 
 
+async def on_ezhhar_sign_sana_not_registered(bot: Bot, user_id: int, error_text: str, state: FSMContext):
+    """امضای شخص در سامانه ثنا ثبت نیست — ارجاع به دفاتر خدمات قضایی"""
+    await bot.send_message(
+        user_id,
+        f"⚠️ **خطا در ثبت امضا:**\n\n"
+        f"{error_text}\n\n"
+        "امضا در سامانه ثنا ثبت نیست، ابتدا به یکی از دفاتر خدمات قضائی مراجعه کنند و پس از تایید امضا "
+        "با شماره **09306186888** در واتساپ هماهنگ کنید، جهت ارسال کد مجدد.\n"
+        "باتشکر",
+        parse_mode="Markdown",
+        reply_markup=new_lavayeh_request_kb
+    )
+    runtime_state.pending_ezhhar_sign.pop(user_id, None)
+    await state.clear()
+
+
 async def on_ezhhar_sign_submit_failure(bot: Bot, user_id: int, state: FSMContext):
     """امضا ناموفق بود — سوال ارسال مجدد"""
     await bot.send_message(
@@ -933,9 +1041,8 @@ async def _ezhhar_code_entry_timeout_watcher(bot: Bot, user_id: int, state: FSMC
     try:
         await bot.send_message(
             user_id,
-            "⏰ **مهلت ارسال کد به پایان رسید.**\n\n"
-            "اگر کد دریافت کرده‌اید، لطفاً ارسال کنید.\n"
-            "در غیر این صورت مجدداً آمادگی خود را اعلام فرمایید.",
+            "⏰ **مهلت رمز موقت به پایان رسیده است.**\n\n"
+            "لطفاً **۲۰ دقیقه** دیگر امتحان کنید.",
             reply_markup=ezhhar_sign_ready_kb,
             parse_mode="Markdown"
         )
@@ -970,7 +1077,7 @@ async def _ezhhar_wrong_code_waiter(bot: Bot, user_id: int, state: FSMContext):
                 person = next((p for p in all_persons if p["idx"] == idx), None)
                 if person:
                     name = person.get("name", f"شخص {idx + 1}")
-                    person_type = person.get("person_type", "")
+                    person_type = person.get("personType", "")
                     label = f"👤 {name}"
                     if person_type:
                         label += f" ({person_type})"
@@ -1049,7 +1156,7 @@ async def ezhhar_sign_resend_yes(message: Message, state: FSMContext, bot: Bot):
         person = next((p for p in all_persons if p["idx"] == idx), None)
         if person:
             name = person.get("name", f"شخص {idx + 1}")
-            person_type = person.get("person_type", "")
+            person_type = person.get("personType", "")
             label = f"👤 {name}"
             if person_type:
                 label += f" ({person_type})"

@@ -17,8 +17,10 @@ from aiogram.types import Message, FSInputFile, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from PIL import Image
 import numpy as np
+import runtime_state
+from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME
 from states import Form
-from keyboards import flow_type_kb, file_tools_menu_kb, file_tools_back_kb
+from keyboards import flow_type_kb, file_tools_menu_kb, file_tools_back_kb, subscription_kb, restart_kb
 
 file_tools_router = Router()
 
@@ -82,14 +84,48 @@ def _split_tall_page(img: Image.Image) -> list:
     return segments if segments else [img]
 
 
+SUBSCRIPTION_FEE = runtime_state.SUBSCRIPTION_FEE
+MAX_FREE_USAGE = runtime_state.MAX_FREE_USAGE
+
+
+def _subscription_required_message_tools(user_id: int) -> tuple:
+    """ساخت پیام و کیبورد درخواست اشتراک برای بخش ابزار."""
+    msg = (
+        f"⚠️ **محدودیت استفاده رایگان تمام شد**\n\n"
+        f"شما {MAX_FREE_USAGE} بار استفاده رایگان از بخش ابزار را مصرف کرده‌اید.\n\n"
+        f"💰 جهت استفاده مجدد از بخش ابزار و محاسبه تمبر، **اشتراک ماهیانه** را فعال نمایید.\n\n"
+        f"💳 مبلغ اشتراک ماهیانه: **{SUBSCRIPTION_FEE:,} ریال**\n\n"
+        f"⏱ مدت اشتراک: **{runtime_state.SUBSCRIPTION_DURATION_DAYS} روز**"
+    )
+    return msg, subscription_kb
+
+
 async def file_tools_entry(message: Message, state: FSMContext):
     await state.clear()
+    user_id = message.from_user.id
+
+    # بررسی محدودیت استفاده
+    if not runtime_state.can_use_service(user_id, "tools"):
+        msg, kb = _subscription_required_message_tools(user_id)
+        await message.answer(msg, reply_markup=kb, parse_mode="Markdown")
+        return
+
+    # نمایش وضعیت اشتراک
+    remaining = runtime_state.get_remaining_free(user_id, "tools")
+    if runtime_state.has_active_subscription(user_id):
+        sub = runtime_state.user_subscriptions[user_id]
+        end_str = sub["end_date"].strftime("%Y/%m/%d %H:%M")
+        status = f"✅ اشتراک فعال تا {end_str}\n\n"
+    else:
+        status = f"📋 استفاده رایگان: {remaining} از {MAX_FREE_USAGE} دفعه باقی‌مانده\n\n"
+
     await message.answer(
-        "🛠 **ابزار فایل**\n\n"
-        "لطفاً یکی از ابزارهای زیر را انتخاب فرمایید:\n\n"
-        "🖼 **کاهش حجم عکس** — عکس را ارسال کنید تا حجم آن کاهش یابد.\n"
-        "📄➡️🖼 **تبدیل PDF به عکس** — فایل PDF چندصفحه‌ای را ارسال کنید تا هر صفحهٔ آن "
-        "به‌صورت یک عکس جداگانه ارسال شود.",
+        f"🛠 **ابزار فایل**\n\n"
+        f"{status}"
+        f"لطفاً یکی از ابزارهای زیر را انتخاب فرمایید:\n\n"
+        f"🖼 **کاهش حجم عکس** — عکس را ارسال کنید تا حجم آن کاهش یابد.\n"
+        f"📄➡️🖼 **تبدیل PDF به عکس** — فایل PDF چندصفحه‌ای را ارسال کنید تا هر صفحهٔ آن "
+        f"به‌صورت یک عکس جداگانه ارسال شود.",
         reply_markup=file_tools_menu_kb,
         parse_mode="Markdown"
     )
@@ -167,6 +203,9 @@ async def file_tools_receive_image(message: Message, state: FSMContext, bot: Bot
 
     file_id = message.photo[-1].file_id if is_photo else message.document.file_id
     user_id = message.from_user.id
+
+    # افزایش شمارنده استفاده
+    runtime_state.increment_usage(user_id, "tools")
     src_path = f"filetools_src_{user_id}.jpg"
     dst_path = f"filetools_compressed_{user_id}.jpg"
 
@@ -234,6 +273,9 @@ async def file_tools_receive_pdf(message: Message, state: FSMContext, bot: Bot):
     user_id = message.from_user.id
     pdf_path = f"filetools_src_{user_id}.pdf"
     page_paths: list[str] = []  # مسیر هر صفحه به‌صورت جداگانه
+
+    # افزایش شمارنده استفاده
+    runtime_state.increment_usage(user_id, "tools")
     try:
         file_info = await bot.get_file(message.document.file_id)
         await bot.download_file(file_info.file_path, pdf_path)

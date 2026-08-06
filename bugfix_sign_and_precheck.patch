@@ -1,0 +1,265 @@
+diff --git a/ezhharnameh_sign_scenario.py b/ezhharnameh_sign_scenario.py
+index 000b107..d50a0eb 100644
+--- a/ezhharnameh_sign_scenario.py
++++ b/ezhharnameh_sign_scenario.py
+@@ -115,7 +115,36 @@ async def send_ezhhar_sign_codes(
+             return false;
+         }''')
+         if not clicked_sign:
+-            await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
++            # فال‌بک: جستجوی گسترده‌تر بدون go_back مخرب
++            clicked_sign = await sana_page.evaluate('''() => {
++                const allElements = Array.from(document.querySelectorAll('h5, button, a, span, label, div'));
++                const target = allElements.find(el => {
++                    const text = (el.innerText || '').trim();
++                    return text.includes("اخذ امضاي الكترونيك") || text.includes("اخذ امضای الکترونیک");
++                });
++                if (target) {
++                    const box = target.closest('.box') || target;
++                    box.click();
++                    return true;
++                }
++                return false;
++            }''')
++            if not clicked_sign:
++                logging.warning("[EZHHAR_SIGN] کلیک 'اخذ امضاي الكترونيك' ناموفق — ریلود صفحه")
++                await sana_page.reload()
++                await resilient_sleep(sana_page, 8, bot, user_id)
++                await _close_any_popup(sana_page)
++                await resilient_sleep(sana_page, 3, bot, user_id)
++                # تلاش مجدد بعد از ریلود
++                clicked_sign = await sana_page.evaluate('''() => {
++                    const heads = Array.from(document.querySelectorAll('.box h5'));
++                    const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
++                    if (t) {
++                        const box = t.closest('.box');
++                        if (box) { box.click(); return true; }
++                    }
++                    return false;
++                }''')
+         await resilient_sleep(sana_page, 6, bot, user_id)
+ 
+         # ── ۷. بررسی مجدد اگر جدول ظاهر نشد ────────────────────────────
+@@ -299,7 +328,20 @@ async def submit_ezhhar_sign_code(
+             return false;
+         }''')
+         if not clicked_sign:
+-            await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
++            # فال‌بک: جستجوی گسترده‌تر بدون go_back مخرب
++            clicked_sign = await sana_page.evaluate('''() => {
++                const allElements = Array.from(document.querySelectorAll('h5, button, a, span, label, div'));
++                const target = allElements.find(el => {
++                    const text = (el.innerText || '').trim();
++                    return text.includes("اخذ امضاي الكترونيك") || text.includes("اخذ امضای الکترونیک");
++                });
++                if (target) {
++                    const box = target.closest('.box') || target;
++                    box.click();
++                    return true;
++                }
++                return false;
++            }''')
+         await resilient_sleep(sana_page, 6, bot, user_id)
+ 
+         # ── وارد کردن کد و کلیک امضا ──────────────────────────────────
+@@ -555,7 +597,20 @@ async def _enter_code_and_sign(
+                 return false;
+             }''')
+             if not clicked_sign:
+-                await safe_click_by_text(page, "اخذ امضاي الكترونيك", bot, user_id)
++                # فال‌بک بدون go_back
++                clicked_sign = await page.evaluate('''() => {
++                    const allElements = Array.from(document.querySelectorAll('h5, button, a, span, label, div'));
++                    const target = allElements.find(el => {
++                        const text = (el.innerText || '').trim();
++                        return text.includes("اخذ امضاي الكترونيك") || text.includes("اخذ امضای الکترونیک");
++                    });
++                    if (target) {
++                        const box = target.closest('.box') || target;
++                        box.click();
++                        return true;
++                    }
++                    return false;
++                }''')
+             await asyncio.sleep(6)
+ 
+     return False
+diff --git a/handlers.py b/handlers.py
+index 4907113..343d051 100644
+--- a/handlers.py
++++ b/handlers.py
+@@ -643,6 +643,14 @@ async def process_doc_subcategory(message: types.Message, state: FSMContext):
+ @router.message(Form.waiting_for_attachments_opt)
+ async def process_attachments_opt(message: types.Message, state: FSMContext):
+     if not message.text: return
++
++    user_id = message.from_user.id
++
++    # ── محافظ: جلوگیری از ارسال مجدد درخواست حین پردازش ──
++    if user_id in runtime_state.pending_precheck_users:
++        await message.answer("⏳ درخواست قبلی شما در حال پردازش است. لطفاً صبور باشید.")
++        return
++
+     need_attachments = "بله" in message.text
+     await state.update_data(need_attachments=need_attachments)
+     
+@@ -703,8 +711,11 @@ async def process_attachments_opt(message: types.Message, state: FSMContext):
+         else:
+             # ❌ فال‌بک به روش قبلی (صف مرورگر)
+             logger.info("[FAST-CHECK] فال‌بک به job_queue برای PRE_CHECK")
++            # ── ثبت کاربر به‌عنوان در حال پردازش + تغییر فوری استیت ──
++            runtime_state.pending_precheck_users.add(user_id)
++            await state.set_state(Form.confirm_opt)  # جلوگیری از تکرار هندلر
+             await runtime_state.job_queue.put({
+-                'user_id': message.from_user.id,
++                'user_id': user_id,
+                 'query_type': data['query_type'],
+                 'task_type': 'PRE_CHECK',
+                 'tracking_code': data['tracking_code'],
+diff --git a/lavayeh_handlers.py b/lavayeh_handlers.py
+index c8b6277..54eb0c1 100644
+--- a/lavayeh_handlers.py
++++ b/lavayeh_handlers.py
+@@ -2285,33 +2285,72 @@ async def admin_approve_lavayeh_receipt(callback: CallbackQuery, bot: Bot):
+         note=f"مبلغ: {review['expected_amount']:,} ریال"
+     )
+ 
+-    runtime_state.pending_lavayeh_sign[user_id] = {
+-        "tracking_code": pending.get("tracking_code", ""),
+-        "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
+-        "province": pending.get("lavayeh_province", ""),
+-        "row_number": pending.get("lavayeh_row_number", 1),
+-        "persons": pending.get("lavayeh_persons", []),
+-        "sign_persons": [],
+-        "persons_awaiting_sign": [],
+-        "current_person_idx": None,
+-        "sign_sent_time": None,
+-        "sign_codes_received": {},
+-        "wrong_code_time": None,
+-        "code_sent_announce_time": None,
+-        "resend_notified": False,
+-        "total_no_action_start": None,
+-    }
+     runtime_state.pending_lavayeh_payments.pop(user_id, None)
+ 
+-    await bot.send_message(
+-        user_id,
+-        "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
+-        "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+-        reply_markup=lavayeh_sign_ready_kb,
+-        parse_mode="Markdown"
+-    )
+     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
+-    await user_state.set_state(Form.lavayeh_sign_ready)
++
++    # ── تمایز بین لایحه و اظهارنامه برای فلوی امضا (تایید دستی) ──
++    if is_ezhhar:
++        # فلوی امضا اظهارنامه
++        raw_persons = pending.get("lavayeh_persons", [])
++        sign_persons = []
++        for i, p in enumerate(raw_persons):
++            sign_persons.append({
++                "idx": i,
++                "name": p.get("name", p.get("national_id", f"شخص {i+1}")),
++                "person_type": p.get("person_type", ""),
++                "national_id": p.get("national_id", ""),
++            })
++        runtime_state.pending_ezhhar_sign[user_id] = {
++            "tracking_code": pending.get("tracking_code", ""),
++            "is_ezhharnameh": True,
++            "sign_persons": sign_persons,
++            "persons_awaiting_sign": list(range(len(sign_persons))),
++            "current_person_idx": 0,
++            "sign_codes_received": {},
++            "sign_sent_time": None,
++            "wrong_code_time": None,
++            "code_sent_announce_time": None,
++            "resend_notified": False,
++            "total_no_action_start": datetime.datetime.now(),
++        }
++
++        from keyboards import ezhhar_sign_ready_kb
++        await bot.send_message(
++            user_id,
++            "🖊 **مرحله اخذ امضای الکترونیک اظهارنامه:**\n\n"
++            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
++            reply_markup=ezhhar_sign_ready_kb,
++            parse_mode="Markdown"
++        )
++        await user_state.set_state(Form.ezhhar_sign_ready)
++    else:
++        # فلوی امضا لایحه (قبلی)
++        runtime_state.pending_lavayeh_sign[user_id] = {
++            "tracking_code": pending.get("tracking_code", ""),
++            "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
++            "province": pending.get("lavayeh_province", ""),
++            "row_number": pending.get("lavayeh_row_number", 1),
++            "persons": pending.get("lavayeh_persons", []),
++            "sign_persons": [],
++            "persons_awaiting_sign": [],
++            "current_person_idx": None,
++            "sign_sent_time": None,
++            "sign_codes_received": {},
++            "wrong_code_time": None,
++            "code_sent_announce_time": None,
++            "resend_notified": False,
++            "total_no_action_start": None,
++        }
++
++        await bot.send_message(
++            user_id,
++            "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
++            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
++            reply_markup=lavayeh_sign_ready_kb,
++            parse_mode="Markdown"
++        )
++        await user_state.set_state(Form.lavayeh_sign_ready)
+ 
+     # حذف فایل رسید
+     photo_path = review.get("photo_path")
+diff --git a/runtime_state.py b/runtime_state.py
+index b2955cc..8b976ee 100644
+--- a/runtime_state.py
++++ b/runtime_state.py
+@@ -109,6 +109,12 @@ pending_ezhhar_sana_fix: dict = {}
+ # }
+ pending_admin_payment_review: dict = {}
+ 
++# =========================================================
++# کاربرانی که درخواست PRE_CHECK آن‌ها در صف مرورگر است
++# (جلوگیری از ارسال مجدد هنگام فال‌بک fast_pre_check)
++# =========================================================
++pending_precheck_users: set = set()
++
+ # =========================================================
+ # ذخیره کدرهگیری و وضعیت تسک‌های incomplete برای مدیریت
+ # =========================================================
+diff --git a/scenarios.py b/scenarios.py
+index 160ca5f..2d0b01f 100644
+--- a/scenarios.py
++++ b/scenarios.py
+@@ -475,11 +475,15 @@ async def process_task(data, bot: Bot):
+                     await sana_page.locator(".alert-danger").is_visible()
+                     or await sana_page.locator('text="اطلاعاتی یافت نشد"').is_visible()
+                 ):
++                    runtime_state.pending_precheck_users.discard(user_id)
+                     await bot.send_message(user_id, f"❌ پرونده‌ای با کد `{tracking_code}` یافت نگردید.")
+                     return
+ 
+                 # ── PRE_CHECK ─────────────────────────────────────────────
+                 if task_type == 'PRE_CHECK':
++                    # پاک‌سازی پرچم انتظار کاربر
++                    runtime_state.pending_precheck_users.discard(user_id)
++
+                     await safe_click_by_text(sana_page, "منضمات", bot, user_id)
+                     await resilient_sleep(sana_page, 5, bot, user_id)
+ 
+@@ -763,6 +767,8 @@ async def process_task(data, bot: Bot):
+             break
+ 
+         except Exception as task_err:
++            # پاک‌سازی پرچم انتظار کاربر در صورت خطا
++            runtime_state.pending_precheck_users.discard(user_id)
+             logging.error(f"تلاش {task_attempt+1} ناموفق: {task_err}")
+             if task_attempt < max_task_attempts - 1:
+                 await bot.send_message(ADMIN_ID, f"⚠️ فرآیند با خطا مواجه شد. تلاش مجدد {task_attempt+2}...")

@@ -53,6 +53,9 @@ async def main():
     from lavayeh_handlers import lavayeh_payment_reminder_loop
     asyncio.create_task(lavayeh_payment_reminder_loop(bot))
 
+    from subscription_handlers import subscription_expiry_checker
+    asyncio.create_task(subscription_expiry_checker(bot))
+
     await dp.start_polling(bot)
 
 

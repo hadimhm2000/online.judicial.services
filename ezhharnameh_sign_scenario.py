@@ -1,15 +1,26 @@
-"""
-سناریوی اخذ امضای الکترونیک اظهارنامه در سامانه ثنا.
+# -*- coding: utf-8 -*-
+"""سناریوی اخذ امضای الکترونیک اظهارنامه در سامانه ثنا.
 
-جریان کلی:
-  ۱. ناوبری به بخش «ارایه و پیگیری اظهارنامه»
-  ۲. وارد کردن کد رهگیری در #txtPetitionNo و جستجو با #btnGetJSSPetition
-  ۳. بررسی پاپ‌آپ بازیابی — اگر غیر از «بازیابی اظهارنامه با موفقیت» بود → ریلود
-  ۴. ورود به مرحله «اخذ امضای الکترونیک»
-  ۵. یافتن جدول اشخاص قابل امضا
-  ۶. فیلتر اشخاص: اگر وکیل بود فقط وکیل، اگر نماینده/مدیرعامل بود همه آن‌ها
-  ۷. ارسال کد موقت برای شخص(های) انتخاب‌شده
-  ۸. وارد کردن کد تایید و امضا (actions.getPersonDataSign)
+جریان کلی (رویکرد دو فازی مشابه لایحه):
+
+فاز ۱ (ناوبری):
+  ۱. رفتن به صفحه اصلی سامانه
+  ۲. کلیک «ارایه و پیگیری اظهارنامه» (#menu12Container)
+  ۳. بررسی صحت صفحه — مطمئن شدن #txtPetitionNo وجود دارد
+  ۴. وارد کردن کد رهگیری در #txtPetitionNo
+  ۵. کلیک جستجو #btnGetJSSPetition
+  ۶. بررسی پاپ‌آپ بازیابی — اگر غیر از «بازیابی اظهارنامه با موفقیت» بود → ریلود
+  ۷. ورود به مرحله «اخذ امضای الکترونیک»
+  ۸. صبر و بررسی جدول اشخاص قابل امضا
+
+فاز ۲ (ارسال کد):
+  ارسال کد موقت برای شخص انتخاب‌شده
+
+فاز ۳ (ثبت کد):
+  ناوبری مجدد به صفحه امضا
+  وارد کردن کد در فیلد
+  کلیک امضای ثنا
+  بررسی نتیجه
 
 نکته مهم: ناوبری بدون radio button انجام می‌شود — مستقیم فیلد و جستجو.
 """
@@ -32,202 +43,414 @@ from browser_helpers import (
 from config import ADMIN_ID
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# فاز ۱ — ناوبری به صفحه امضا و دریافت لیست اشخاص
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async def send_ezhhar_sign_codes(
+
+async def _click_ezhhar_menu(page) -> bool:
+    """
+    کلیک روی منوی «ارایه و پیگیری اظهارنامه».
+    اولویت ۱: #menu12Container (آیدی مشخص)
+    اولویت ۲: جستجوی متن دقیق اظهارنامه (نه لایحه)
+    """
+    # اولویت ۱: آیدی مشخص منوی اظهارنامه
+    clicked = await page.evaluate('''() => {
+        const menuContainer = document.querySelector('#menu12Container');
+        if (menuContainer) {
+            const link = menuContainer.querySelector('a') || menuContainer;
+            if (link) { link.click(); return "id"; }
+        }
+        return null;
+    }''')
+    if clicked:
+        logging.info(f"[EZHHAR_SIGN] منو اظهارنامه با {clicked} کلیک شد")
+        return True
+
+    # اولویت ۲: جستجوی دقیق متن — فقط اظهارنامه، نه لایحه
+    clicked = await page.evaluate('''() => {
+        const links = Array.from(document.querySelectorAll('a.list-group-item'));
+        for (const el of links) {
+            const text = (el.innerText || "").trim();
+            // باید شامل «اظهارنامه» باشد و شامل «لایحه» نباشد
+            if (text.includes("اظهارنامه") && !text.includes("لایحه")) {
+                el.click();
+                return true;
+            }
+        }
+        return false;
+    }''')
+    if clicked:
+        logging.info("[EZHHAR_SIGN] منو اظهارنامه با متن کلیک شد")
+        return True
+
+    return False
+
+
+async def _verify_ezhhar_page_loaded(page) -> bool:
+    """
+    بررسی می‌کند که آیا صفحه اظهارنامه بارگذاری شده است.
+    نشانه‌ها:
+      - #txtPetitionNo وجود دارد
+      - #btnGetJSSPetition وجود دارد
+      - #billNo (فیلد لایحه) وجود ندارد
+    """
+    result = await page.evaluate('''() => {
+        const petitionInput = document.querySelector('#txtPetitionNo');
+        const petitionBtn = document.querySelector('#btnGetJSSPetition');
+        const billInput = document.querySelector('#billNo');
+        return {
+            hasPetitionNo: !!petitionInput,
+            hasPetitionBtn: !!petitionBtn,
+            hasBillNo: !!billInput,
+            petitionVisible: petitionInput ? (petitionInput.offsetParent !== null || window.getComputedStyle(petitionInput).display !== 'none') : false,
+        };
+    }''')
+    logging.info(f"[EZHHAR_SIGN] verify page: {result}")
+    return result.get("hasPetitionNo", False) and result.get("hasPetitionBtn", False) and not result.get("hasBillNo", False)
+
+
+async def navigate_to_ezhhar_sign_page(
     bot: Bot,
     user_id: int,
     tracking_code: str,
-    target_row_indices: list = None,
-) -> dict:
+) -> bool:
     """
-    وارد سامانه می‌شود، صفحه اخذ امضا اظهارنامه را باز می‌کند و
-    برای اشخاص مشخص‌شده (target_row_indices) کد موقت ارسال می‌کند.
+    ناوبری به صفحه اخذ امضای اظهارنامه.
+    مسیر:
+      ۱. رفتن به صفحه اصلی سامانه
+      ۲. کلیک «ارایه و پیگیری اظهارنامه» (#menu12Container)
+      ۳. بررسی صحت صفحه (اطمینان از #txtPetitionNo)
+      ۴. وارد کردن کد رهگیری در #txtPetitionNo
+      ۵. کلیک جستجو #btnGetJSSPetition
+      ۶. بررسی پاپ‌آپ بازیابی — اگر غیر موفق بود → ریلود و تکرار
+      ۷. کلیک «اخذ امضای الکترونیک»
+      ۸. بررسی جدول اشخاص (با صبر و تلاش مجدد)
 
-    Returns:
-        dict: { success, persons: [{idx, name, person_type, sent}], error }
+    Returns True اگر صفحه جدول امضا ظاهر شد.
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
         logging.error("[EZHHAR_SIGN] sana_page is None")
-        return {"success": False, "persons": [], "error": "sana_page is None"}
+        return False
 
-    try:
-        # ── ۱. رفتن به صفحه اصلی ────────────────────────────────────
-        ok = await goto_url_with_retry(
-            sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
-        )
-        if not ok:
-            return {"success": False, "persons": [], "error": "خطا در بارگذاری صفحه"}
-
-        await human_delay(3.0, 5.0)
-
-        # ── ۲. کلیک روی «ارایه و پیگیری اظهارنامه» ────────────────────
-        clicked = await sana_page.evaluate('''() => {
-            const links = Array.from(document.querySelectorAll('a.list-group-item'));
-            const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری اظهارنامه"));
-            if (t) { t.click(); return true; }
-            return false;
-        }''')
-        if not clicked:
-            await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
-        await resilient_sleep(sana_page, 5, bot, user_id)
-
-        # ── ۳. وارد کردن کد رهگیری در #txtPetitionNo ───────────────
-        await _fill_input(sana_page, "#txtPetitionNo", tracking_code)
-        await resilient_sleep(sana_page, 1, bot, user_id)
-
-        # ── ۴. کلیک جستجو #btnGetJSSPetition ─────────────────────────────
-        await sana_page.evaluate('''() => {
-            const btn = document.querySelector('#btnGetJSSPetition');
-            if (btn) { btn.click(); return; }
-            const btns = Array.from(document.querySelectorAll('button'));
-            const s = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
-            if (s) s.click();
-        }''')
-
-        # صبر اولیه
-        await asyncio.sleep(3)
-
-        # منتظر لودینگ
-        await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
-
-        # بستن هر پاپ‌آپ خطایی
-        await _close_any_popup(sana_page)
-        await resilient_sleep(sana_page, 3, bot, user_id)
-
-        # ── ۵. بررسی پاپ‌آپ تأیید بازیابی ───────────────────────────────
-        recovery_ok = await _check_recovery_popup(sana_page, bot, user_id)
-        if not recovery_ok:
-            logging.warning("[EZHHAR_SIGN] پاپ‌آپ بازیابی تأیید نشد — ریلود")
-            await sana_page.reload()
-            await resilient_sleep(sana_page, 8, bot, user_id)
-            await _close_any_popup(sana_page)
-            await resilient_sleep(sana_page, 3, bot, user_id)
-
-        # ── ۶. ورود به مرحله «اخذ امضای الکترونیک» ─────────────────────
-        clicked_sign = await sana_page.evaluate('''() => {
-            const heads = Array.from(document.querySelectorAll('.box h5'));
-            const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-            if (t) {
-                const box = t.closest('.box');
-                if (box) { box.click(); return true; }
-            }
-            return false;
-        }''')
-        if not clicked_sign:
-            await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
-        await resilient_sleep(sana_page, 6, bot, user_id)
-
-        # ── ۷. بررسی مجدد اگر جدول ظاهر نشد ────────────────────────────
-        table_exists = await sana_page.evaluate('''() => {
-            const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
-            ));
-            return rows.length > 0;
-        }''')
-
-        if not table_exists:
-            await sana_page.reload()
-            await resilient_sleep(sana_page, 8, bot, user_id)
-            await _close_any_popup(sana_page)
-            await resilient_sleep(sana_page, 3, bot, user_id)
-
-            clicked_sign2 = await sana_page.evaluate('''() => {
-                const heads = Array.from(document.querySelectorAll('.box h5'));
-                const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-                if (t) {
-                    const box = t.closest('.box');
-                    if (box) { box.click(); return true; }
-                }
-                return false;
-            }''')
-            if clicked_sign2:
-                await resilient_sleep(sana_page, 6, bot, user_id)
-
-        # ── ۸. یافتن اشخاص قابل امضا ───────────────────────────────────
-        persons_info = await sana_page.evaluate('''() => {
-            const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
-            ));
-            return rows.map((tr, idx) => {
-                const nameTd = tr.querySelector(
-                    'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
-                );
-                const name = nameTd ? nameTd.innerText.trim() : "";
-
-                // نوع شخص — بررسی همه span های ng-if*="PersonType"
-                const typeSpans = tr.querySelectorAll('span[ng-if*="PersonType"]');
-                let personType = "";
-                for (const sp of typeSpans) {
-                    if (sp.getBoundingClientRect().width > 0) {
-                        personType = sp.innerText.trim();
-                    }
-                }
-
-                const sendDiv = tr.querySelector(
-                    'div[ng-if*="!(item.NationalityCode"]'
-                );
-                const divVisible = sendDiv &&
-                    window.getComputedStyle(sendDiv).display !== "none";
-                const sendBtn = tr.querySelector(
-                    'button[ng-click*="sendTempPassword"]'
-                );
-                const canSend = divVisible && sendBtn && !sendBtn.disabled;
-
-                return { idx, name, personType, canSend, divVisible };
-            });
-        }''')
-
-        logging.info(f"[EZHHAR_SIGN] persons_info: {persons_info}")
-
-        sendable = [p for p in persons_info if p.get("divVisible")]
-
-        # ── ۹. فیلتر اشخاص بر اساس قوانین ─────────────────────────────
-        # اگر وکیل وجود داشت → فقط وکیل
-        # اگر نماینده/مدیرعامل داشت → همه آن‌ها
-        sendable = _filter_signable_persons(sendable)
-
-        if not sendable:
-            await bot.send_message(
-                user_id,
-                "⚠️ **در جدول امضا اظهارنامه، شخصی برای ارسال کد موقت یافت نشد.**\n\n"
-                "احتمالاً همه اشخاص قبلاً امضا کرده‌اند.\n"
-                "لطفاً جهت ثبت امضا به شماره **09306186888** در واتساپ پیام دهید.",
-                parse_mode="Markdown"
+    for nav_attempt in range(3):
+        try:
+            # ── ۱. رفتن به صفحه اصلی ───────────────────────────────────────
+            ok = await goto_url_with_retry(
+                sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
             )
-            return {"success": False, "persons": [], "error": "no sendable persons"}
+            if not ok:
+                continue
+            await human_delay(3.0, 5.0)
 
-        # ── ۱۰. ارسال کد برای اشخاص هدف ─────────────────────────────────
-        results = []
-        rows_to_send = target_row_indices if target_row_indices else [p["idx"] for p in sendable]
+            # ── ۲. کلیک روی «ارایه و پیگیری اظهارنامه» ────────────────────────
+            clicked = await _click_ezhhar_menu(sana_page)
+            if not clicked:
+                logging.warning(f"[EZHHAR_SIGN] منو اظهارنامه پیدا نشد (تلاش {nav_attempt+1})")
+                await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+            await resilient_sleep(sana_page, 5, bot, user_id)
 
-        for target_idx in rows_to_send:
-            person = next((p for p in sendable if p["idx"] == target_idx), None)
-            if not person:
+            # ── ۳. بررسی صحت صفحه — مطمئن شدن در بخش اظهارنامه هستیم ──────
+            page_ok = await _verify_ezhhar_page_loaded(sana_page)
+            if not page_ok:
+                logging.warning(f"[EZHHAR_SIGN] صفحه اظهارنامه بارگذاری نشد — احتمالاً در بخش اشتباه هستیم (تلاش {nav_attempt+1})")
+                # تلاش مجدد: دوباره به صفحه اصلی برگردیم
+                await goto_url_with_retry(
+                    sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
+                )
+                await human_delay(2.0, 3.0)
                 continue
 
-            name = person.get("name") or f"شخص {target_idx + 1}"
-            success = await _send_temp_password_for_row(
-                sana_page, target_idx, bot, user_id, name
-            )
+            await wait_for_angular_idle(sana_page)
 
-            results.append({
-                "idx": target_idx,
-                "name": name,
-                "person_type": person.get("personType", ""),
-                "sent": success,
-            })
+            # ── ۴. وارد کردن کد رهگیری در #txtPetitionNo ───────────────
+            fill_ok = await _fill_input(sana_page, "#txtPetitionNo", tracking_code)
+            if not fill_ok:
+                logging.warning(f"[EZHHAR_SIGN] فیلد #txtPetitionNo پر نشد (تلاش {nav_attempt+1})")
+                continue
+            await resilient_sleep(sana_page, 1, bot, user_id)
 
-            # فاصله ۳۰ ثانیه بین ارسال کد هر شخص
-            if target_idx != rows_to_send[-1]:
-                await asyncio.sleep(30)
+            # ── ۵. کلیک جستجو #btnGetJSSPetition ─────────────────────────────
+            # فقط دکمه مخصوص اظهارنامه — بدون fallback به دکمه عمومی
+            search_clicked = await sana_page.evaluate('''() => {
+                const btn = document.querySelector('#btnGetJSSPetition');
+                if (btn) { btn.click(); return true; }
+                return false;
+            }''')
+            if not search_clicked:
+                logging.warning(f"[EZHHAR_SIGN] دکمه #btnGetJSSPetition پیدا نشد (تلاش {nav_attempt+1})")
+                continue
 
-        return {"success": True, "persons": results}
+            # صبر اولیه
+            await asyncio.sleep(3)
 
+            # منتظر لودینگ
+            await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
+
+            # بستن هر پاپ‌آپ خطایی
+            await _close_any_popup(sana_page)
+            await resilient_sleep(sana_page, 3, bot, user_id)
+
+            # ── ۶. بررسی پاپ‌آپ تایید بازیابی ───────────────────────────────
+            recovery_ok = await _check_recovery_popup(sana_page, bot, user_id)
+            if not recovery_ok:
+                logging.warning("[EZHHAR_SIGN] پاپ‌آپ بازیابی تایید نشد — ریلود")
+                await sana_page.reload()
+                await resilient_sleep(sana_page, 8, bot, user_id)
+                await _close_any_popup(sana_page)
+                await resilient_sleep(sana_page, 3, bot, user_id)
+
+            # ── ۷. ورود به مرحله «اخذ امضای الکترونیک» ─────────────────────
+            clicked_sign = await _click_sign_section(sana_page)
+            if not clicked_sign:
+                await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
+            await resilient_sleep(sana_page, 6, bot, user_id)
+
+            # ── ۸. بررسی جدول — اگر نبود، ریلود و تلاش مجدد ─────────────
+            table_exists = await _check_sign_table_exists(sana_page)
+
+            if not table_exists:
+                logging.warning("[EZHHAR_SIGN] جدول امضا ظاهر نشد — ریلود و تلاش مجدد")
+                await sana_page.reload()
+                await resilient_sleep(sana_page, 8, bot, user_id)
+                await _close_any_popup(sana_page)
+                await resilient_sleep(sana_page, 3, bot, user_id)
+
+                clicked_sign2 = await _click_sign_section(sana_page)
+                if clicked_sign2:
+                    await resilient_sleep(sana_page, 6, bot, user_id)
+
+                # بررسی نهایی
+                table_exists = await _check_sign_table_exists(sana_page)
+                if not table_exists:
+                    logging.error("[EZHHAR_SIGN] جدول امضا حتی بعد از ریلود ظاهر نشد")
+                    if nav_attempt < 2:
+                        continue
+                    return False
+
+            # موفقیت
+            return True
+
+        except Exception as e:
+            logging.error(f"[EZHHAR_SIGN] navigate_to_ezhhar_sign_page error (تلاش {nav_attempt+1}): {e}")
+            continue
+
+    return False
+
+
+async def get_ezhhar_signable_persons(
+    bot: Bot,
+    user_id: int,
+) -> list:
+    """
+    اشخاص قابل امضا اظهارنامه را از جدول استخراج می‌کند.
+    فرض بر این است که صفحه قبلاً از طریق navigate_to_ezhhar_sign_page باز شده است.
+
+    اگر نام‌ها خالی بودند، چند بار تلاش مجدد با صبر انجام می‌دهد.
+
+    Returns:
+        list of dicts: [{idx, name, personType, canSend, divVisible}]
+    """
+    sana_page = runtime_state.sana_page
+    if sana_page is None:
+        return []
+
+    # تلاش چندباره برای استخراج نام‌ها — ممکن است Angular هنوز داده را پر نکرده باشد
+    for extract_attempt in range(5):
+        try:
+            persons_info = await _extract_persons_from_table(sana_page)
+
+            if not persons_info:
+                logging.warning(f"[EZHHAR_SIGN] لیست اشخاص خالی بود (تلاش {extract_attempt+1})")
+                await asyncio.sleep(5)
+                continue
+
+            # بررسی آیا حداقل یک نام پر شده
+            has_any_name = any(p.get("name", "") for p in persons_info)
+            if has_any_name:
+                logging.info(f"[EZHHAR_SIGN] persons_info: {persons_info}")
+                return persons_info
+
+            # نام‌ها خالی هستند — صبر کن و دوباره تلاش کن
+            logging.warning(f"[EZHHAR_SIGN] نام اشخاص خالی بود (تلاش {extract_attempt+1}) — صبر ۵ ثانیه")
+            await asyncio.sleep(5)
+
+            # شاید نیاز به کلیک مجدد روی اخذ امضا باشد
+            if extract_attempt == 2:
+                clicked = await _click_sign_section(sana_page)
+                if clicked:
+                    await resilient_sleep(sana_page, 6, bot, user_id)
+
+        except Exception as e:
+            logging.error(f"[EZHHAR_SIGN] get_ezhhar_signable_persons error (تلاش {extract_attempt+1}): {e}")
+            await asyncio.sleep(3)
+
+    # آخرین تلاش
+    try:
+        persons_info = await _extract_persons_from_table(sana_page)
+        logging.info(f"[EZHHAR_SIGN] persons_info (آخرین تلاش): {persons_info}")
+        return persons_info or []
     except Exception as e:
-        logging.error(f"[EZHHAR_SIGN] send_ezhhar_sign_codes error: {e}")
-        return {"success": False, "persons": [], "error": str(e)}
+        logging.error(f"[EZHHAR_SIGN] get_ezhhar_signable_persons final error: {e}")
+        return []
 
+
+async def _extract_persons_from_table(page) -> list:
+    """
+    استخراج اشخاص از جدول امضا.
+    از چند انتخاب‌گر CSS مختلف برای استخراج نام استفاده می‌کند.
+    """
+    return await page.evaluate('''() => {
+        const rows = Array.from(document.querySelectorAll(
+            'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+        ));
+        if (rows.length === 0) return [];
+
+        return rows.map((tr, idx) => {
+            // ── استخراج نام — چند روش مختلف ──
+            let name = "";
+
+            // روش ۱: سلول با کلاس‌های خاص
+            const nameTd1 = tr.querySelector(
+                'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
+            );
+            if (nameTd1) name = nameTd1.innerText.trim();
+
+            // روش ۲: سلول با کلاس font-yekan (کمتر سخت‌گیرانه)
+            if (!name) {
+                const nameTd2 = tr.querySelector('td.font-yekan');
+                if (nameTd2) name = nameTd2.innerText.trim();
+            }
+
+            // روش ۳: از طریق مدل Angular — خواندن مستقیم از scope
+            if (!name) {
+                try {
+                    const scope = angular.element(tr).scope();
+                    if (scope && scope.item) {
+                        name = (scope.item.Name || scope.item.name ||
+                                scope.item.FullName || scope.item.fullName ||
+                                scope.item.PersonName || "").trim();
+                    }
+                } catch(e) {}
+            }
+
+            // روش ۴: هر td که متن فارسی دارد (آخرین راه)
+            if (!name) {
+                const tds = tr.querySelectorAll('td');
+                for (const td of tds) {
+                    const text = td.innerText.trim();
+                    // متن فارسی — حداقل ۲ حرف و بدون اعداد خالص
+                    if (text.length >= 2 && !/^[0-9۰-۹]+$/.test(text)
+                        && !text.includes("ارسال") && !text.includes("ثبت")
+                        && !text.includes("درج") && !text.includes("حذف")
+                        && !text.includes("نوع")) {
+                        name = text;
+                        break;
+                    }
+                }
+            }
+
+            // ── نوع شخص ──
+            let personType = "";
+            const typeSpans = tr.querySelectorAll('span[ng-if*="PersonType"]');
+            for (const sp of typeSpans) {
+                if (sp.getBoundingClientRect().width > 0) {
+                    personType = sp.innerText.trim();
+                }
+            }
+
+            // از scope هم نوع شخص را بخوان
+            if (!personType) {
+                try {
+                    const scope = angular.element(tr).scope();
+                    if (scope && scope.item) {
+                        const pt = scope.item.PersonType || scope.item.JSSPersonType;
+                        if (pt === 6) personType = "وکیل";
+                        else if (pt === 3) personType = "نماینده";
+                        else if (pt === 4) personType = "مدیرعامل";
+                    }
+                } catch(e) {}
+            }
+
+            // ── آیا div ارسال کد نمایش دارد؟ ──
+            const sendDiv = tr.querySelector(
+                'div[ng-if*="!(item.NationalityCode"]'
+            );
+            const divVisible = sendDiv &&
+                window.getComputedStyle(sendDiv).display !== "none";
+
+            // ── آیا دکمه ارسال کد فعال هست؟ ──
+            const sendBtn = tr.querySelector(
+                'button[ng-click*="sendTempPassword"]'
+            );
+            const canSend = divVisible && sendBtn && !sendBtn.disabled;
+
+            return { idx, name, personType, canSend, divVisible };
+        });
+    }''')
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# فاز ۲ — ارسال کد موقت برای یک شخص
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async def send_ezhhar_sign_code_for_person(
+    bot: Bot,
+    user_id: int,
+    row_idx: int,
+    person_name: str,
+) -> bool:
+    """
+    ارسال کد موقت برای یک ردیف مشخص از جدول امضای اظهارنامه.
+    حداکثر ۳ بار تلاش می‌کند.
+
+    Returns True اگر کد ارسال شد (یا قبلاً ارسال شده بود).
+    """
+    sana_page = runtime_state.sana_page
+    if sana_page is None:
+        return False
+
+    for attempt in range(3):
+        clicked = await sana_page.evaluate(f'''(idx) => {{
+            const rows = Array.from(document.querySelectorAll(
+                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            ));
+            if (rows.length <= idx) return false;
+            const btn = rows[idx].querySelector('button[ng-click*="sendTempPassword"]');
+            if (btn && !btn.disabled) {{ btn.click(); return true; }}
+            return false;
+        }}''', row_idx)
+
+        if not clicked:
+            logging.warning(f"[EZHHAR_SIGN] دکمه ارسال کد برای ردیف {row_idx} پیدا نشد (تلاش {attempt+1})")
+            await asyncio.sleep(5)
+            continue
+
+        popup_result = await _wait_for_popup_result(sana_page, timeout_sec=55)
+
+        if popup_result == "success":
+            await _close_any_popup(sana_page)
+            logging.info(f"[EZHHAR_SIGN] کد موقت برای ردیف {row_idx} ({person_name}) ارسال شد.")
+            return True
+
+        elif popup_result == "already_sent":
+            await _close_any_popup(sana_page)
+            logging.info(f"[EZHHAR_SIGN] کد قبلاً ارسال شده برای ردیف {row_idx}")
+            return True
+
+        else:
+            await _close_any_popup(sana_page)
+            logging.warning(f"[EZHHAR_SIGN] خطا در ارسال کد ردیف {row_idx} (تلاش {attempt+1})")
+            await asyncio.sleep(5)
+            continue
+
+    return False
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# فاز ۳ — ثبت کد امضا
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async def submit_ezhhar_sign_code(
     bot: Bot,
@@ -238,9 +461,11 @@ async def submit_ezhhar_sign_code(
 ) -> dict:
     """
     کد دریافت‌شده از کاربر را در سامانه وارد و امضا می‌کند.
+    ناوبری مجدد به صفحه امضا، وارد کردن کد، کلیک امضای ثنا.
 
     Returns:
-        dict: { success: bool, error: str }
+        dict: {"success": bool, "error": str}
+        error values: "wrong_code", "sana_not_registered", "timeout", "error", "max_attempts"
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
@@ -256,27 +481,33 @@ async def submit_ezhhar_sign_code(
 
         await human_delay(3.0, 5.0)
 
-        clicked = await sana_page.evaluate('''() => {
-            const links = Array.from(document.querySelectorAll('a.list-group-item'));
-            const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری اظهارنامه"));
-            if (t) { t.click(); return true; }
-            return false;
-        }''')
+        # کلیک منوی اظهارنامه — با تابع اصلاح‌شده
+        clicked = await _click_ezhhar_menu(sana_page)
         if not clicked:
             await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
         await resilient_sleep(sana_page, 5, bot, user_id)
+
+        # بررسی صحت صفحه
+        page_ok = await _verify_ezhhar_page_loaded(sana_page)
+        if not page_ok:
+            logging.error("[EZHHAR_SIGN] در فاز ۳، صفحه اظهارنامه بارگذاری نشد")
+            return {"success": False, "error": "خطا در بارگذاری صفحه اظهارنامه"}
+
+        await wait_for_angular_idle(sana_page)
 
         # مستقیم فیلد و جستجو — بدون radio
         await _fill_input(sana_page, "#txtPetitionNo", tracking_code)
         await resilient_sleep(sana_page, 1, bot, user_id)
 
-        await sana_page.evaluate('''() => {
+        # فقط دکمه مخصوص اظهارنامه
+        search_clicked = await sana_page.evaluate('''() => {
             const btn = document.querySelector('#btnGetJSSPetition');
-            if (btn) { btn.click(); return; }
-            const btns = Array.from(document.querySelectorAll('button'));
-            const s = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
-            if (s) s.click();
+            if (btn) { btn.click(); return true; }
+            return false;
         }''')
+        if not search_clicked:
+            logging.error("[EZHHAR_SIGN] دکمه #btnGetJSSPetition در فاز ۳ پیدا نشد")
+            return {"success": False, "error": "دکمه جستجو یافت نشد"}
 
         await asyncio.sleep(3)
         await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
@@ -289,22 +520,14 @@ async def submit_ezhhar_sign_code(
             await _close_any_popup(sana_page)
             await resilient_sleep(sana_page, 3, bot, user_id)
 
-        clicked_sign = await sana_page.evaluate('''() => {
-            const heads = Array.from(document.querySelectorAll('.box h5'));
-            const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-            if (t) {
-                const box = t.closest('.box');
-                if (box) { box.click(); return true; }
-            }
-            return false;
-        }''')
+        clicked_sign = await _click_sign_section(sana_page)
         if not clicked_sign:
             await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
         await resilient_sleep(sana_page, 6, bot, user_id)
 
         # ── وارد کردن کد و کلیک امضا ──────────────────────────────────
-        success = await _enter_code_and_sign(sana_page, row_idx, code, bot, user_id)
-        return {"success": success}
+        result = await _enter_code_and_sign(sana_page, row_idx, code, bot, user_id)
+        return result
 
     except Exception as e:
         logging.error(f"[EZHHAR_SIGN] submit_ezhhar_sign_code error: {e}")
@@ -315,35 +538,42 @@ async def submit_ezhhar_sign_code(
 # توابع کمکی داخلی
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _filter_signable_persons(persons: list) -> list:
-    """
-    فیلتر اشخاص قابل امضا بر اساس قوانین:
-      - اگر وکیل (PersonType==6) وجود داشت → فقط وکیل
-      - اگر نماینده/مدیرعامل داشت → همه آن‌ها (نماینده و مدیرعامل)
-      - در غیر این صورت → همه اشخاص قابل ارسال
-    """
-    has_lawyer = any(p.get("personType") == "وکیل" for p in persons)
-    if has_lawyer:
-        # فقط وکیل
-        return [p for p in persons if p.get("personType") == "وکیل"]
-
-    # نماینده و مدیرعامل
-    reps = [p for p in persons if p.get("personType") in ("نماینده", "مدیرعامل")]
-    if reps:
-        return reps
-
-    return persons
-
-
-async def _fill_input(page, selector: str, value: str):
+async def _fill_input(page, selector: str, value: str) -> bool:
+    """پر کردن فیلد ورودی — برمی‌گرداند موفق بود یا خیر"""
     try:
         elem = page.locator(selector).first
+        await elem.wait_for(state="visible", timeout=10000)
         await elem.click()
         await elem.fill("")
         await elem.fill(value)
         await elem.blur()
+        return True
     except Exception as e:
         logging.warning(f"[EZHHAR_SIGN] _fill_input({selector}) failed: {e}")
+        return False
+
+
+async def _click_sign_section(page) -> bool:
+    """کلیک روی بخش «اخذ امضای الکترونیک»"""
+    return await page.evaluate('''() => {
+        const heads = Array.from(document.querySelectorAll('.box h5'));
+        const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
+        if (t) {
+            const box = t.closest('.box');
+            if (box) { box.click(); return true; }
+        }
+        return false;
+    }''')
+
+
+async def _check_sign_table_exists(page) -> bool:
+    """بررسی وجود جدول امضا"""
+    return await page.evaluate('''() => {
+        const rows = Array.from(document.querySelectorAll(
+            'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+        ));
+        return rows.length > 0;
+    }''')
 
 
 async def _close_any_popup(page) -> bool:
@@ -399,46 +629,6 @@ async def _check_recovery_popup(page, bot: Bot, user_id: int) -> bool:
     return True
 
 
-async def _send_temp_password_for_row(
-    page, row_idx: int, bot: Bot, user_id: int, person_name: str
-) -> bool:
-    for attempt in range(3):
-        clicked = await page.evaluate(f'''(idx) => {{
-            const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
-            ));
-            if (rows.length <= idx) return false;
-            const btn = rows[idx].querySelector('button[ng-click*="sendTempPassword"]');
-            if (btn && !btn.disabled) {{ btn.click(); return true; }}
-            return false;
-        }}''', row_idx)
-
-        if not clicked:
-            logging.warning(f"[EZHHAR_SIGN] دکمه ارسال کد برای ردیف {row_idx} پیدا نشد (تلاش {attempt+1})")
-            await asyncio.sleep(5)
-            continue
-
-        popup_result = await _wait_for_popup_result(page, timeout_sec=55)
-
-        if popup_result == "success":
-            await _close_any_popup(page)
-            logging.info(f"[EZHHAR_SIGN] کد موقت برای ردیف {row_idx} ({person_name}) ارسال شد.")
-            return True
-
-        elif popup_result == "already_sent":
-            await _close_any_popup(page)
-            logging.info(f"[EZHHAR_SIGN] کد قبلاً ارسال شده برای ردیف {row_idx}")
-            return True
-
-        else:
-            await _close_any_popup(page)
-            logging.warning(f"[EZHHAR_SIGN] خطا در ارسال کد ردیف {row_idx} (تلاش {attempt+1})")
-            await asyncio.sleep(5)
-            continue
-
-    return False
-
-
 async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
@@ -474,7 +664,14 @@ async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
 
 async def _enter_code_and_sign(
     page, row_idx: int, code: str, bot: Bot, user_id: int
-) -> bool:
+) -> dict:
+    """
+    کد را در فیلد وارد کرده و دکمه امضای ثنا را می‌زند.
+
+    Returns:
+        dict: {"success": bool, "error": str}
+        error values: "wrong_code", "sana_not_registered", "timeout", "error", "max_attempts"
+    """
     for attempt in range(3):
         filled = await page.evaluate(f'''(args) => {{
             const idx = args.idx;
@@ -536,40 +733,37 @@ async def _enter_code_and_sign(
         if popup_result == "success":
             await _close_any_popup(page)
             logging.info(f"[EZHHAR_SIGN] امضای ردیف {row_idx} موفق.")
-            return True
+            return {"success": True}
         elif popup_result == "wrong_code":
             await _close_any_popup(page)
             logging.info(f"[EZHHAR_SIGN] رمز موقت نادرست — ردیف {row_idx}")
-            return False
+            return {"success": False, "error": "wrong_code"}
+        elif popup_result == "sana_not_registered":
+            await _close_any_popup(page)
+            logging.info(f"[EZHHAR_SIGN] امضا در ثنا ثبت نیست — ردیف {row_idx}")
+            return {"success": False, "error": "sana_not_registered"}
         else:
             await _close_any_popup(page)
             logging.warning(f"[EZHHAR_SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
 
-            clicked_sign = await page.evaluate('''() => {
-                const heads = Array.from(document.querySelectorAll('.box h5'));
-                const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-                if (t) {
-                    const box = t.closest('.box');
-                    if (box) { box.click(); return true; }
-                }
-                return false;
-            }''')
+            clicked_sign = await _click_sign_section(page)
             if not clicked_sign:
                 await safe_click_by_text(page, "اخذ امضاي الكترونيك", bot, user_id)
             await asyncio.sleep(6)
 
-    return False
+    return {"success": False, "error": "max_attempts"}
 
 
 async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
     """
     منتظر پاپ‌آپ نتیجه امضا.
-    Returns: "success" | "wrong_code" | "error" | "timeout"
+    Returns: "success" | "wrong_code" | "sana_not_registered" | "error" | "timeout"
 
     پیام‌های مورد انتظار:
       - موفق (آیکون سبز): "امضاء با موفقیت در صفحه چاپ درج گردید"
       - موفق (آیکون زرد/هشدار): "امضاء « name » در صفحه ی چاپ درج شده است"
       - خطا (آیکون قرمز): "خطای سرویس ثنا   : رمز موقت نادرست است"
+      - خطا: "امضای شخص فلان در سامانه ثنا درج نشده است"
     """
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
@@ -595,6 +789,10 @@ async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
             if (isErrorVisible) {
                 if (text.includes("رمز موقت نادرست") || text.includes("نادرست")) {
                     return "wrong_code";
+                }
+                // تشخیص خطای "امضای شخص ... در سامانه ثنا درج نشده است"
+                if (text.includes("در سامانه ثنا درج نشده")) {
+                    return "sana_not_registered";
                 }
                 return "error";
             }
