@@ -64,6 +64,25 @@ pending_lavayeh_payments: dict = {}
 pending_lavayeh_sign: dict = {}
 
 # =========================================================
+# اطلاعات فرآیند اخذ امضای الکترونیک اظهارنامه
+# =========================================================
+# کلید: user_id (int)
+# مقدار: {
+#   "tracking_code": str,              — کد رهگیری اظهارنامه
+#   "is_ezhharnameh": bool,            — always True for this dict
+#   "sign_persons": list,              — لیست اشخاص قابل امضا از جدول [{idx, name, person_type}]
+#   "persons_awaiting_sign": list,     — لیست idx اشخاص در انتظار کد
+#   "current_person_idx": int,         — idx شخصی که فعلاً کدش ارسال شده
+#   "sign_codes_received": dict,       — {idx: code} کدهای دریافت‌شده
+#   "sign_sent_time": datetime,        — زمان ارسال آخرین کد
+#   "wrong_code_time": datetime,       — زمان آخرین کد اشتباه (برای ۲۰ دقیقه)
+#   "code_sent_announce_time": datetime, — زمان اعلام آمادگی به کاربر (برای ۶ دقیقه تایم‌اوت)
+#   "resend_notified": bool,           — آیا نوتیف ارسال مجدد داده شده؟
+#   "total_no_action_start": datetime, — شروع ۶۰ دقیقه بدون اقدام
+# }
+pending_ezhhar_sign: dict = {}
+
+# =========================================================
 # اطلاعات درخواست‌های اظهارنامه در انتظار ویرایش شناسه ملی
 # =========================================================
 # کلید: user_id (int)

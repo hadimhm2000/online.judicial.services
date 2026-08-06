@@ -90,6 +90,16 @@ async def process_task(data, bot: Bot):
         await _process_lavayeh_submit_sign(data, bot)
         return
 
+    # ── سناریوی ارسال کد امضا اظهارنامه ────────────────────────────────────
+    if task_type == "EZHHARNAMEH_SEND_SIGN_CODE":
+        await _process_ezhharnameh_send_sign_code(data, bot)
+        return
+
+    # ── سناریوی ثبت کد امضا اظهارنامه ────────────────────────────────────
+    if task_type == "EZHHARNAMEH_SUBMIT_SIGN":
+        await _process_ezhharnameh_submit_sign(data, bot)
+        return
+
     max_task_attempts = 3
     for task_attempt in range(max_task_attempts):
         try:
@@ -836,6 +846,73 @@ async def _process_lavayeh_submit_sign(data: dict, bot: Bot):
     except Exception as e:
         logging.error(f"[SIGN] خطا در _process_lavayeh_submit_sign: {e}")
         await on_sign_submit_failure(bot, user_id, user_state)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# پردازش ارسال کد امضا اظهارنامه
+# ══════════════════════════════════════════════════════════════════════════════
+async def _process_ezhharnameh_send_sign_code(data: dict, bot: Bot):
+    user_id = data["user_id"]
+    tracking_code = data.get("tracking_code", "")
+    target_row_indices = data.get("target_row_indices", [])
+
+    from ezhharnameh_sign_scenario import send_ezhhar_sign_codes
+    from lavayeh_sign_handlers import on_ezhhar_sign_code_sent_success, on_ezhhar_sign_code_sent_failure
+
+    user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
+
+    try:
+        await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ارسال کد امضا اظهارنامه برای کاربر {user_id}")
+        result = await send_ezhhar_sign_codes(
+            bot, user_id, tracking_code, target_row_indices
+        )
+
+        if result["success"]:
+            await on_ezhhar_sign_code_sent_success(
+                bot, user_id, result["persons"], user_state
+            )
+            await bot.send_message(ADMIN_ID, f"✅ [EZHHAR_SIGN] کد امضا اظهارنامه برای کاربر {user_id} ارسال شد.")
+        else:
+            await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
+            await bot.send_message(ADMIN_ID, f"❌ [EZHHAR_SIGN] ارسال کد امضا اظهارنامه برای کاربر {user_id} ناموفق.")
+
+    except Exception as e:
+        logging.error(f"[EZHHAR_SIGN] خطا در _process_ezhharnameh_send_sign_code: {e}")
+        await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# پردازش ثبت کد امضا اظهارنامه
+# ══════════════════════════════════════════════════════════════════════════════
+async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
+    user_id = data["user_id"]
+    tracking_code = data.get("tracking_code", "")
+    row_idx = data.get("row_idx", 0)
+    code = data.get("code", "")
+
+    from ezhharnameh_sign_scenario import submit_ezhhar_sign_code
+    from lavayeh_sign_handlers import on_ezhhar_sign_submit_success, on_ezhhar_sign_submit_failure, on_ezhhar_sign_wrong_code
+
+    user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
+
+    try:
+        await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ثبت امضا اظهارنامه برای کاربر {user_id}")
+        result = await submit_ezhhar_sign_code(
+            bot, user_id, tracking_code, row_idx, code
+        )
+
+        if result["success"]:
+            await on_ezhhar_sign_submit_success(bot, user_id, row_idx, user_state)
+        else:
+            error = result.get("error", "")
+            if "نادرست" in error or "wrong_code" in str(result):
+                await on_ezhhar_sign_wrong_code(bot, user_id, row_idx, user_state)
+            else:
+                await on_ezhhar_sign_submit_failure(bot, user_id, user_state)
+
+    except Exception as e:
+        logging.error(f"[EZHHAR_SIGN] خطا در _process_ezhharnameh_submit_sign: {e}")
+        await on_ezhhar_sign_submit_failure(bot, user_id, user_state)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

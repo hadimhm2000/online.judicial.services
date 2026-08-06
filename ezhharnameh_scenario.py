@@ -606,7 +606,8 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             cost_info = await _calculate_cost(sana_page, bot, user_id)
             final_total = cost_info.get("final_total", 0)
             cost_sum_rounded = cost_info.get("cost_sum_rounded", 0)
-            logging.info(f"[EZHHAR] cost_info={cost_info}, final_total={final_total}")
+            cost_error = cost_info.get("cost_error", False)
+            logging.info(f"[EZHHAR] cost_info={cost_info}, final_total={final_total}, cost_error={cost_error}")
 
             await _click_goto_main(sana_page, bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
@@ -619,20 +620,41 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             nat_ids = ", ".join([
                 p.get("national_id", "") for p in declarants if p.get("national_id")
             ])
-            await send_lavayeh_result(
-                bot, user_id, pdf_path, final_total,
-                tracking_code=bill_no,
-                national_ids=nat_ids,
-                lavayeh_title=f"اظهارنامه — {subject}",
-                lavayeh_province="",
-                lavayeh_row_number=1,
-                lavayeh_persons=declarants,
-            )
 
-            await bot.send_message(
-                ADMIN_ID,
-                f"✅ [EZHHAR] ثبت اظهارنامه کاربر {user_id} موفق. هزینه: {final_total:,} ریال"
-            )
+            if cost_error:
+                # جدول هزینه نمایش داده نشد — ارسال PDF + پیام خطا
+                await bot.send_message(
+                    user_id,
+                    f"⚠️ **بخش هزینه سامانه دادگاه اختلال دارد.**\n\n"
+                    f"📄 اظهارنامه شما با کد رهگیری `{bill_no}` ثبت و چاپ شد.\n"
+                    f"لطفاً برای محاسبه هزینه به مدیریت به شماره **09306186888** در واتساپ پیام دهید.",
+                    parse_mode="Markdown"
+                )
+                # ارسال PDF بدون مبلغ هزینه
+                if pdf_path and os.path.exists(pdf_path):
+                    from aiogram.types import FSInputFile
+                    await bot.send_document(user_id, FSInputFile(pdf_path))
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"⚠️ [EZHHAR] جدول هزینه نمایش داده نشد. کاربر {user_id} | کد: {bill_no}"
+                )
+            else:
+                await send_lavayeh_result(
+                    bot, user_id, pdf_path, final_total,
+                    tracking_code=bill_no,
+                    national_ids=nat_ids,
+                    lavayeh_title=f"اظهارنامه — {subject}",
+                    lavayeh_province="",
+                    lavayeh_row_number=1,
+                    lavayeh_persons=declarants,
+                    skip_fee_calc=True,  # هزینه اظهارنامه قبلاً با فرمول جدید محاسبه شده
+                    is_ezhharnameh=True,  # برای تمایز لایحه/اظهارنامه در جریان امضا
+                )
+
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"✅ [EZHHAR] ثبت اظهارنامه کاربر {user_id} موفق. هزینه: {final_total:,} ریال"
+                )
             return
 
         except EzhharSanaQueryError as e:
@@ -1454,17 +1476,26 @@ async def _click_preparation(page, bot: Bot, user_id: int, max_retries: int = 3)
 
 
 async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) -> dict:
-    """محاسبه هزینه دادرسی — پارس جدول هزینه‌ها و محاسبه مبلغ کل.
+    """محاسبه هزینه اظهارنامه — پارس جدول هزینه‌ها و محاسبه مبلغ نهایی.
 
-    جدول هزینه شامل چند ردیف با ستون مبلغ است. ردیف آخر مبلغ «جمع کل هزینه»
-    (با پس‌زمینه سبز) نیز نمایش داده می‌شود.
+    جدول هزینه شامل چند ردیف با ستون مبلغ است.
+    دو مبلغ کل وجود دارد:
+      - costSum: مبلغ جمع کل (td سبز) — همان مبالغ ردیف‌ها جمع شده
+      - mainTotal: مبلغ اصلی (div با jud-currency) — مبلغ کل واقعی
 
     منطق محاسبه:
-      1. استخراج مبلغ جمع کل (costSum) و رند بالا
-      2. استخراج ردیف‌های فرد (۱,۳,۴,۵) جمع و رند بالا
-      3. جمع دو مبلغ بالا = مبلغ نهایی اعلامی به کاربر
+      1. استخراج costSum از td سبز و mainTotal از div با jud-currency
+      2. یافتن ۳ ردیف خاص و جمع مبالغ آن‌ها:
+         - هزینه تطبیق اوراق با اصل (ردیف ۱)
+         - هزینه خدمات الکترونیک قضایی (ردیف ۷)
+         - هزینه پیامک اطلاع‌رسانی (ردیف ۸)
+      3. فرمول:
+         net = mainTotal − excluded_sum
+         rounded = round_up_10k(net)
+         intermediate = rounded + 450,000
+         final = round_up_10k(intermediate + mainTotal)
 
-    اگر جدول نمایش داده نشد، تا ۲ بار با فاصله ۴۰ ثانیه دکمه محاسبه را می‌زند.
+    اگر جدول نمایش داده نشد، بعد از تلاش‌ها "cost_error" برمی‌گرداند.
     """
     for attempt in range(max_retries):
         await _close_popup(page)
@@ -1544,8 +1575,32 @@ async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) ->
                 }
             }
 
+            // استخراج مبلغ اصلی از div با jud-currency (مبلغ کل واقعی)
+            let mainTotal = 0;
+            const judDivs = document.querySelectorAll('div[jud-currency]');
+            for (const div of judDivs) {
+                const priceDiv = div.querySelector('div[ng-model="viewModel.costSum"]');
+                if (priceDiv) {
+                    const text = div.innerText.trim().replace(/,/g, '').replace(/،/g, '').replace(/\\s/g, '');
+                    if (/^[0-9]+$/.test(text) && parseInt(text) > 0) {
+                        mainTotal = parseInt(text);
+                    }
+                }
+            }
+            // fallback: اگر با ng-model پیدا نشد، اولین div[jud-currency] با عدد
+            if (mainTotal === 0) {
+                for (const div of judDivs) {
+                    const text = div.innerText.trim().replace(/,/g, '').replace(/،/g, '').replace(/\\s/g, '');
+                    if (/^[0-9]+$/.test(text) && parseInt(text) > 0) {
+                        mainTotal = parseInt(text);
+                        break;
+                    }
+                }
+            }
+
             return {
                 costSum: costSum,
+                mainTotal: mainTotal,
                 rowAmounts: rowAmounts,
                 labels: labels
             };
@@ -1553,56 +1608,70 @@ async def _calculate_cost(page, bot: Bot, user_id: int, max_retries: int = 3) ->
 
         if cost_data and cost_data.get("costSum", 0) > 0:
             cost_sum = cost_data["costSum"]
-            row_amounts = cost_data.get("rowAmounts", [])
+            main_total = cost_data.get("mainTotal", cost_sum)
+            labels = cost_data.get("labels", [])
 
-            logging.info(f"[EZHHAR] costSum={cost_sum}, rows={row_amounts}")
+            logging.info(f"[EZHHAR] costSum={cost_sum}, mainTotal={main_total}, labels={labels}")
 
-            # رند بالا costSum به نزدیک‌ترین عدد معقول (مثلاً 1,184,449 -> 1,190,000)
-            def round_up_reasonable(amount: int) -> int:
-                """رند بالا به نزدیک‌ترین ۱۰,۰۰۰ ریال"""
-                remainder = amount % 10000
-                if remainder == 0:
-                    return amount
-                return amount + (10000 - remainder)
+            # رند بالا به نزدیک‌ترین ۱۰,۰۰۰ ریال
+            def round_up_to_ten_thousand(amount: int) -> int:
+                if amount <= 0:
+                    return 0
+                return ((amount + 9999) // 10000) * 10000
 
-            cost_sum_rounded = round_up_reasonable(cost_sum)
+            # یافتن مبالغ ۳ ردیف خاص از جدول بر اساس نام
+            # ۱. هزینه تطبیق اوراق با اصل
+            # ۲. هزینه خدمات الکترونیک قضایی
+            # ۳. هزینه پیامک اطلاع رسانی
+            EXCLUDED_LABELS = [
+                "تطبيق اوراق",       # هزینه تطبیق اوراق با اصل
+                "الكترونيك قضايي",  # هزینه خدمات الکترونیک قضایی
+                "پيامك",             # هزینه پیامک اطلاع رسانی
+            ]
 
-            # جمع ۴ ردیف (ردیف ۱,۲,۳,۵ — ردیف ۴ یعنی هزينه خدمات الكترونيك قضايي حذف می‌شود)
-            # ردیف ۴: 94,450 (هزينه خدمات الكترونيك قضايي) — حذف می‌شود
-            sum_selected_rows = 0
-            if len(row_amounts) >= 5:
-                # ردیف ۱ (idx 0) + ردیف ۲ (idx 1) + ردیف ۳ (idx 2) + ردیف ۵ (idx 4)
-                sum_selected_rows = row_amounts[0] + row_amounts[1] + row_amounts[2] + row_amounts[4]
-            elif len(row_amounts) >= 4:
-                # اگر ۴ ردیف داریم: ۱,۲,۳
-                sum_selected_rows = row_amounts[0] + row_amounts[1] + row_amounts[2]
-            else:
-                # fallback: جمع همه ردیف‌ها
-                sum_selected_rows = sum(row_amounts)
+            excluded_sum = 0
+            for item in labels:
+                label_text = item.get("label", "")
+                for excl in EXCLUDED_LABELS:
+                    if excl in label_text:
+                        excluded_sum += item.get("amount", 0)
+                        break
 
-            sum_selected_rounded = round_up_reasonable(sum_selected_rows)
-
-            # مبلغ نهایی = costSum رند شده + (sum_selected_rows رند شده + 400,000)
-            final_total = cost_sum_rounded + (sum_selected_rounded + 400_000)
+            # فرمول محاسبه هزینه اظهارنامه:
+            # قدم ۱: مبلغ اصلی منهای ۳ هزینه کسرشونده
+            net_amount = main_total - excluded_sum
+            # قدم ۲: رند به بالا به نزدیک‌ترین ۱۰,۰۰۰
+            rounded_net = round_up_to_ten_thousand(net_amount)
+            # قدم ۳: اضافه کردن ۴۵۰,۰۰۰ ریال
+            intermediate = rounded_net + 450_000
+            # قدم ۴: جمع با مبلغ اصلی
+            total_with_original = intermediate + main_total
+            # قدم ۵: رند نهایی به بالا به نزدیک‌ترین ۱۰,۰۰۰
+            final_total = round_up_to_ten_thousand(total_with_original)
 
             logging.info(
-                f"[EZHHAR] محاسبه هزینه: costSum={cost_sum} -> {cost_sum_rounded}, "
-                f"selected_rows_sum={sum_selected_rows} -> {sum_selected_rounded}, "
-                f"final_total={final_total}"
+                f"[EZHHAR] محاسبه هزینه: mainTotal={main_total}, "
+                f"excluded_sum={excluded_sum}, net={net_amount}, "
+                f"rounded_net={rounded_net}, intermediate={intermediate}, "
+                f"total_with_original={total_with_original}, final_total={final_total}"
             )
 
             return {
                 "cost_sum": cost_sum,
-                "cost_sum_rounded": cost_sum_rounded,
-                "row_amounts": row_amounts,
-                "sum_selected_rows": sum_selected_rows,
-                "sum_selected_rounded": sum_selected_rounded,
+                "main_total": main_total,
+                "excluded_sum": excluded_sum,
+                "net_amount": net_amount,
+                "rounded_net": rounded_net,
+                "intermediate": intermediate,
+                "total_with_original": total_with_original,
                 "final_total": final_total,
+                "labels": labels,
             }
 
         await asyncio.sleep(10)
 
-    return {"cost_sum": 0, "final_total": 0}
+    # جدول هزینه پس از تلاش‌ها نمایش داده نشد
+    return {"cost_sum": 0, "final_total": 0, "cost_error": True}
 
 
 async def _print_ezhharnameh(page, browser_context, bill_no: str, bot: Bot, user_id: int) -> str:

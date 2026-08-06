@@ -283,6 +283,39 @@ lavayeh_sign_later_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+
+# =========================================================
+# کیبوردهای بخش اخذ امضای الکترونیک اظهارنامه
+# =========================================================
+
+ezhhar_sign_ready_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ آماده‌ام، کد امضا ارسال شود")]
+    ],
+    resize_keyboard=True
+)
+
+ezhhar_sign_resend_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="بله"), KeyboardButton(text="خیر")]
+    ],
+    resize_keyboard=True
+)
+
+ezhhar_sign_later_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="بله"), KeyboardButton(text="خیر")]
+    ],
+    resize_keyboard=True
+)
+
+ezhhar_sign_try_again_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="بله، کد جدید ارسال شود"), KeyboardButton(text="خیر")]
+    ],
+    resize_keyboard=True
+)
+
 # =========================================================
 # کیبوردهای بخش اعلام وکالت
 # =========================================================

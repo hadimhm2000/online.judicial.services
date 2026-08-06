@@ -2036,6 +2036,7 @@ async def send_lavayeh_result(
     lavayeh_row_number: int = 1,
     lavayeh_persons: list = None,
     skip_fee_calc: bool = False,
+    is_ezhharnameh: bool = False,
 ):
     from aiogram.types import FSInputFile
 
@@ -2093,6 +2094,7 @@ async def send_lavayeh_result(
         "lavayeh_province": lavayeh_province,
         "lavayeh_row_number": lavayeh_row_number,
         "lavayeh_persons": lavayeh_persons,
+        "is_ezhharnameh": is_ezhharnameh,
     }
 
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
@@ -2134,26 +2136,56 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
         )
 
         user_id = message.from_user.id
-        runtime_state.pending_lavayeh_sign[user_id] = {
-            "tracking_code": pending.get("tracking_code", ""),
-            "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
-            "province": pending.get("lavayeh_province", ""),
-            "row_number": pending.get("lavayeh_row_number", 1),
-            "persons": pending.get("lavayeh_persons", []),
-            "sign_sent_time": None,
-            "sign_codes_received": {},
-            "resend_notified": False,
-        }
-        runtime_state.pending_lavayeh_payments.pop(user_id, None)
 
-        await bot.send_message(
-            user_id,
-            "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
-            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
-            reply_markup=lavayeh_sign_ready_kb,
-            parse_mode="Markdown"
-        )
-        await state.set_state(Form.lavayeh_sign_ready)
+        # ── تمایز بین لایحه و اظهارنامه برای فلوی امضا ──
+        if pending.get("is_ezhharnameh", False):
+            # فلوی امضا اظهارنامه
+            runtime_state.pending_ezhhar_sign[user_id] = {
+                "tracking_code": pending.get("tracking_code", ""),
+                "is_ezhharnameh": True,
+                "sign_persons": pending.get("lavayeh_persons", []),
+                "persons_awaiting_sign": list(range(len(pending.get("lavayeh_persons", [])))),
+                "current_person_idx": 0,
+                "sign_codes_received": {},
+                "sign_sent_time": None,
+                "wrong_code_time": None,
+                "code_sent_announce_time": None,
+                "resend_notified": False,
+                "total_no_action_start": datetime.datetime.now(),
+            }
+            runtime_state.pending_lavayeh_payments.pop(user_id, None)
+
+            from keyboards import ezhhar_sign_ready_kb
+            await bot.send_message(
+                user_id,
+                "🖊 **مرحله اخذ امضای الکترونیک اظهارنامه:**\n\n"
+                "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+                reply_markup=ezhhar_sign_ready_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.ezhhar_sign_ready)
+        else:
+            # فلوی امضا لایحه (قبلی)
+            runtime_state.pending_lavayeh_sign[user_id] = {
+                "tracking_code": pending.get("tracking_code", ""),
+                "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
+                "province": pending.get("lavayeh_province", ""),
+                "row_number": pending.get("lavayeh_row_number", 1),
+                "persons": pending.get("lavayeh_persons", []),
+                "sign_sent_time": None,
+                "sign_codes_received": {},
+                "resend_notified": False,
+            }
+            runtime_state.pending_lavayeh_payments.pop(user_id, None)
+
+            await bot.send_message(
+                user_id,
+                "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
+                "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+                reply_markup=lavayeh_sign_ready_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.lavayeh_sign_ready)
 
     elif ocr_msg == "NEEDS_MANUAL_REVIEW":
         # ── ارسال رسید به مدیر برای تایید دستی ──

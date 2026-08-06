@@ -48,6 +48,17 @@ class Form(StatesGroup):
     lavayeh_sign_later_prompt = State()
 
     # =========================================================
+    # State های بخش اخذ امضای الکترونیک اظهارنامه
+    # =========================================================
+    ezhhar_sign_ready = State()               # آمادگی برای ارسال کد
+    ezhhar_sign_person_select = State()       # انتخاب شخص برای ارسال کد
+    ezhhar_sign_code_input = State()          # دریافت کد از کاربر
+    ezhhar_sign_resend_prompt = State()       # سوال ارسال مجدد کد
+    ezhhar_sign_later_prompt = State()        # سوال اقدام بعدی
+    ezhhar_sign_wrong_code_wait = State()     # منتظر ۲۰ دقیقه بعد از کد اشتباه
+    ezhhar_sign_no_action_timeout = State()  # ۶۰ دقیقه بدون اقدام
+
+    # =========================================================
     # State های بخش اعلام وکالت
     # =========================================================
     ealam_vakalaht_national_id = State()
