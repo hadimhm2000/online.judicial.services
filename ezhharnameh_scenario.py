@@ -549,7 +549,7 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                                 const btn = document.querySelector('#newAttachmentType');
                                 if (btn && !btn.disabled) { btn.click(); return true; }
                                 return false;
-                            }'''')
+                            }''')
                             if clicked:
                                 logging.info(f"[EZHHAR] کلیک «پیوست جدید» قبل از گروه {idx+1}")
                                 await asyncio.sleep(3)
@@ -799,6 +799,41 @@ async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int,
     company_id = person.get("company_id", "")
     national_id = person.get("national_id", "")
     rep_type = person.get("representative_type", "نماینده")
+
+    # اگر کدملی نماینده وجود ندارد، فقط شناسه ملی شرکت را ثبت می‌کنیم
+    if not national_id:
+        logging.info(f"[EZHHAR] شخص حقوقی بدون کدملی نماینده — فقط ثبت شناسه ملی شرکت")
+        # انتخاب رادیوباتن «شخص حقوقی» (value=3)
+        await page.evaluate('''() => {
+            const rdb = document.querySelector('#rdb3, input[value="3"][name="personType"]');
+            if (rdb) rdb.click();
+        }''')
+        await asyncio.sleep(2)
+
+        # انتخاب «غیردولتی / خصوصی» (value=4)
+        await page.evaluate('''() => {
+            const rdb = document.querySelector('#rdbPrivate, input[value="4"][name="LegalPersonType"]');
+            if (rdb) rdb.click();
+        }''')
+        await asyncio.sleep(2)
+
+        # وارد کردن شناسه ملی شرکت
+        await page.evaluate(f'''() => {{
+            const inp = document.querySelector('#txtLegalIrNationalityCode');
+            if (inp) {{
+                inp.value = "{company_id}";
+                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+            }}
+        }}''')
+        await asyncio.sleep(1)
+
+        # استعلام شرکت
+        await _query_sana(page, "actions.callLegalNationalityCode", bot, user_id, is_legal=True,
+                          current_national_id=company_id, person_role=person_role, person_index=person_index)
+        return
+
+    # ── ادامه فرآیند عادی با کدملی نماینده ──
 
     # انتخاب رادیوباتن «شخص حقوقی» (value=3)
     await page.evaluate('''() => {

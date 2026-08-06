@@ -2035,6 +2035,7 @@ async def send_lavayeh_result(
     lavayeh_province: str = "",
     lavayeh_row_number: int = 1,
     lavayeh_persons: list = None,
+    skip_fee_calc: bool = False,
 ):
     from aiogram.types import FSInputFile
 
@@ -2054,8 +2055,13 @@ async def send_lavayeh_result(
         )
         os.remove(pdf_path)
 
-    fee_text = format_lavayeh_fee_explanation(court_total)
-    final_fee = calculate_lavayeh_fee(court_total)
+    if skip_fee_calc:
+        # مبلغ نهایی از قبل محاسبه شده (مثلاً در اعلام وکالت)
+        final_fee = court_total
+        fee_text = f"💳 **مبلغ نهایی قابل پرداخت: {final_fee:,} ریال**"
+    else:
+        fee_text = format_lavayeh_fee_explanation(court_total)
+        final_fee = calculate_lavayeh_fee(court_total)
 
     await bot.send_message(user_id, fee_text, parse_mode="Markdown")
 

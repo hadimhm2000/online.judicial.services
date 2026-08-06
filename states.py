@@ -86,6 +86,7 @@ class Form(StatesGroup):
     # مرحله ۲: نوع شخصیت مخاطب
     ezhhar_addressee_person_type = State()
     ezhhar_addressee_company_id = State()
+    ezhhar_addressee_company_id_no_rep = State()  # مخاطب حقوقی بدون پرسیدن کدملی نماینده
     ezhhar_addressee_representative_type = State()
     ezhhar_addressee_national_id = State()
     ezhhar_addressee_more_persons = State()

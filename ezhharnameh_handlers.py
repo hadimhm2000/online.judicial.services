@@ -329,7 +329,7 @@ async def ezhhar_addressee_person_type_handler(message: Message, state: FSMConte
             reply_markup=back_only_kb,
             parse_mode="Markdown"
         )
-        await state.set_state(Form.ezhhar_addressee_company_id)
+        await state.set_state(Form.ezhhar_addressee_company_id_no_rep)
     else:
         await message.answer(
             "🔢 لطفاً **کد ملی مخاطب** را وارد کنید:\n_(۱۰ رقمی)_",
@@ -339,8 +339,9 @@ async def ezhhar_addressee_person_type_handler(message: Message, state: FSMConte
         await state.set_state(Form.ezhhar_addressee_national_id)
 
 
-@ezhharnameh_router.message(Form.ezhhar_addressee_company_id)
-async def ezhhar_addressee_company_id_handler(message: Message, state: FSMContext):
+@ezhharnameh_router.message(Form.ezhhar_addressee_company_id_no_rep)
+async def ezhhar_addressee_company_id_no_rep_handler(message: Message, state: FSMContext):
+    """دریافت شناسه ملی شرکت مخاطب حقوقی — بدون پرسیدن سمت و کدملی نماینده."""
     if not message.text:
         return
     if message.text == "🔙 بازگشت":
@@ -362,30 +363,22 @@ async def ezhhar_addressee_company_id_handler(message: Message, state: FSMContex
     data = await state.get_data()
     current = data.get("_ezhhar_current_addressee", {})
     current["company_id"] = company_id
-    await state.update_data(_ezhhar_current_addressee=current)
+    current["representative_type"] = ""
+    current["national_id"] = ""
+    addressees = data.get("ezhhar_addressees", [])
+    addressees.append(current)
+    await state.update_data(ezhhar_addressees=addressees, _ezhhar_current_addressee={})
 
-    await message.answer("👔 نماینده شرکت مخاطب چه سمتی دارد؟", reply_markup=representative_type_kb)
-    await state.set_state(Form.ezhhar_addressee_representative_type)
-
-
-@ezhharnameh_router.message(Form.ezhhar_addressee_representative_type)
-async def ezhhar_addressee_representative_type_handler(message: Message, state: FSMContext):
-    text = message.text or ""
-    if text not in ["مدیرعامل", "نماینده"]:
-        await message.answer("⚠️ لطفاً یکی از گزینه‌ها را انتخاب کنید:", reply_markup=representative_type_kb)
-        return
-
-    data = await state.get_data()
-    current = data.get("_ezhhar_current_addressee", {})
-    current["representative_type"] = text
-    await state.update_data(_ezhhar_current_addressee=current)
+    person_type = current.get("person_type", "")
 
     await message.answer(
-        f"🔢 لطفاً **کد ملی {text}** شرکت مخاطب را وارد کنید:\n_(۱۰ رقمی)_",
-        reply_markup=back_only_kb,
+        f"✅ **مخاطب ({person_type})** با شناسه ملی `{company_id}` ثبت شد.\n\n"
+        f"آیا مخاطب دیگری نیز وجود دارد؟\n\n"
+        f"📌 اگر کدملی مخاطب بعدی را ندارید، می‌توانید «استعلام شماره تماس» را انتخاب کنید.",
+        reply_markup=create_ezhhar_addressee_person_type_kb(show_finish=True),
         parse_mode="Markdown"
     )
-    await state.set_state(Form.ezhhar_addressee_national_id)
+    await state.set_state(Form.ezhhar_addressee_person_type)
 
 
 @ezhharnameh_router.message(Form.ezhhar_addressee_national_id)

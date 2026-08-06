@@ -336,6 +336,7 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
                 lavayeh_province=province,
                 lavayeh_row_number=row_number,
                 lavayeh_persons=[{"person_type": "وکیل", "national_id": l} for l in lawyers],
+                skip_fee_calc=True,
             )
 
             await bot.send_message(
@@ -1038,36 +1039,153 @@ async def _click_preparation_with_retry(page, bot: Bot, user_id: int, max_retrie
 
 
 async def _calculate_cost_with_retry(page, bot: Bot, user_id: int, max_retries: int = 3) -> int:
+    """محاسبه هزینه اعلام وکالت — پارس جدول هزینه‌ها و محاسبه مبلغ کل.
+
+    جدول هزینه شامل ردیف‌هایی با ستون مبلغ و یک ردیف «جمع کل هزینه»
+    (با پس‌زمینه سبز) است.
+
+    منطق محاسبه:
+      1. استخراج مبلغ جمع کل (costSum) از td.color-green
+      2. استخراج مبالغ ردیف‌ها از td.color-red
+      3. کم کردن ردیف ۷ (تمبر مالیاتی ماده 103) و ردیف ۸ (تمبر سهم صندوق) از جمع کل
+      4. رند بالا به نزدیک‌ترین ۱۰,۰۰۰ ریال
+      5. اعمال فرمول کسر بر اساس بازه مبلغ:
+         - تا ۲,۰۰۰,۰۰۰ ریال → کسر ۱۰۰,۰۰۰ ریال
+         - ۲,۰۰۰,۰۰۱ تا ۳,۰۰۰,۰۰۰ → کسر ۲۸۰,۰۰۰ ریال
+         - بالای ۳,۰۰۰,۰۰۱ → کسر ۴۰۰,۰۰۰ ریال
+      6. مبلغ نهایی = مبلغ_رند + (مبلغ_رند − کسر)
+
+    اگر جدول بعد از ۳۰ ثانیه نمایش داده نشد، دکمه
+    «محاسبه هزینه دادرسی و تعرفه خدمات» کلیک می‌شود.
+    """
     for attempt in range(max_retries):
         await _close_error_popup(page)
         await asyncio.sleep(2)
-        await page.evaluate('''() => {
-            const btn = document.querySelector('#btnCalculateCash');
-            if (btn && !btn.disabled) btn.click();
+
+        # بررسی آیا جدول هزینه قبلاً نمایش داده شده
+        table_visible = await page.evaluate('''() => {
+            const tds = Array.from(document.querySelectorAll('table td.color-green, table td.color-red'));
+            return tds.length > 0;
         }''')
-        await asyncio.sleep(40)
+
+        if not table_visible:
+            # کلیک دکمه «محاسبه هزینه دادرسی و تعرفه خدمات»
+            await page.evaluate('''() => {
+                const btn = document.querySelector('#btnCalculateCash');
+                if (btn && !btn.disabled) { btn.click(); return true; }
+                const btns = Array.from(document.querySelectorAll('button[ng-click*="paymentCost"]'));
+                if (btns.length > 0) { btns[0].click(); return true; }
+                const all = Array.from(document.querySelectorAll('button'));
+                const tb = all.find(b => b.innerText && b.innerText.includes("محاسبه هزینه دادرسی") && !b.disabled);
+                if (tb) { tb.click(); return true; }
+                return false;
+            }''')
+            await asyncio.sleep(40)
+
+            # بررسی مجدد — اگر هنوز جدول نیست، صبر بیشتر
+            if attempt < 2:
+                table_visible = await page.evaluate('''() => {
+                    const tds = Array.from(document.querySelectorAll('table td.color-green, table td.color-red'));
+                    return tds.length > 0;
+                }''')
+                if not table_visible:
+                    logging.warning(f"[EALAM] جدول هزینه نمایش داده نشد — تلاش مجدد با فاصله ۴۰ ثانیه")
+                    await asyncio.sleep(40)
+                    await page.evaluate('''() => {
+                        const btn = document.querySelector('#btnCalculateCash');
+                        if (btn && !btn.disabled) btn.click();
+                    }''')
+                    await asyncio.sleep(10)
+
         await _close_error_popup(page)
 
-        raw = await page.evaluate('''() => {
-            const tds = Array.from(document.querySelectorAll('table td'));
-            for (let td of tds) {
-                const text = td.innerText.trim().replace(/,/g, '').replace(/،/g, '');
-                if (/^[0-9]+$/.test(text) && parseInt(text) > 10000 && parseInt(text) < 100000000000) {
-                    return text;
+        # استخراج تمام مبالغ و نام ردیف‌ها از جدول
+        cost_data = await page.evaluate('''() => {
+            // استخراج مبلغ جمع کل (td.color-green — سلول سبز رنگ)
+            const greenTds = Array.from(document.querySelectorAll('table td.color-green'));
+            let costSum = 0;
+            for (const td of greenTds) {
+                const text = td.innerText.trim().replace(/,/g, '').replace(/،/g, '').replace(/\\s/g, '');
+                if (/^[0-9]+$/.test(text) && parseInt(text) > 0) {
+                    costSum = parseInt(text);
                 }
             }
-            return null;
+
+            // استخراج مبالغ و نام ردیف‌ها
+            const labels = [];
+            const rows = Array.from(document.querySelectorAll('table tr'));
+            for (const row of rows) {
+                const tds = Array.from(row.querySelectorAll('td'));
+                if (tds.length >= 3) {
+                    const label = tds[1].innerText.trim();
+                    const amountText = tds[2].innerText.trim().replace(/,/g, '').replace(/،/g, '').replace(/\\s/g, '');
+                    if (label && /^[0-9]+$/.test(amountText)) {
+                        labels.push({label: label, amount: parseInt(amountText), rowIndex: labels.length + 1});
+                    }
+                }
+            }
+
+            return {
+                costSum: costSum,
+                labels: labels
+            };
         }''')
 
-        if raw:
-            try:
-                amount = int(raw.replace(",", "").strip())
-                if amount > 100_000_000:
-                    amount = amount // 10
-                return amount
-            except Exception:
-                pass
+        if cost_data and cost_data.get("costSum", 0) > 0:
+            cost_sum = cost_data["costSum"]
+            labels = cost_data.get("labels", [])
+
+            logging.info(f"[EALAM] costSum={cost_sum}, labels={labels}")
+
+            # پیدا کردن مبلغ ردیف ۷ (تمبر مالیاتی ماده 103) و ردیف ۸ (تمبر سهم صندوق)
+            stamp_tax = 0       # ردیف ۷: هزینه تمبر مالیاتی طبق ماده 103 م.م
+            stamp_fund = 0      # ردیف ۸: هزینه تمبر سهم صندوق حمایت از وکلا و کارشناسان
+
+            for item in labels:
+                lbl = item.get("label", "")
+                amt = item.get("amount", 0)
+                if "تمبر مالياتي" in lbl or "تمبر مالیاتی" in lbl or "ماده 103" in lbl:
+                    stamp_tax = amt
+                elif "صندوق حمايت" in lbl or "صندوق حمایت" in lbl or "صندوق حمايت از وكلا" in lbl:
+                    stamp_fund = amt
+
+            # کم کردن ردیف ۷ و ۸ از جمع کل
+            adjusted = cost_sum - stamp_tax - stamp_fund
+            if adjusted < 0:
+                adjusted = 0
+
+            logging.info(
+                f"[EALAM] محاسبه: costSum={cost_sum:,} - stamp_tax={stamp_tax:,} - stamp_fund={stamp_fund:,} = {adjusted:,}"
+            )
+
+            # رند بالا به نزدیک‌ترین ۱۰,۰۰۰ ریال
+            remainder = adjusted % 10000
+            if remainder == 0:
+                rounded = adjusted
+            else:
+                rounded = adjusted + (10000 - remainder)
+
+            # اعمال فرمول کسر
+            if rounded <= 2_000_000:
+                deduction = 100_000
+            elif rounded <= 3_000_000:
+                deduction = 280_000
+            else:
+                deduction = 400_000
+
+            net = rounded - deduction
+            final_total = rounded + net  # = 2 * rounded - deduction
+
+            logging.info(
+                f"[EALAM] محاسبه هزینه: adjusted={adjusted:,} -> rounded={rounded:,}, "
+                f"deduction={deduction:,}, net={net:,}, final_total={final_total:,}"
+            )
+
+            return final_total
+
         await asyncio.sleep(10)
+
+    logging.error(f"[EALAM] استخراج مبلغ پس از {max_retries} تلاش ناموفق (user={user_id})")
     return 0
 
 
