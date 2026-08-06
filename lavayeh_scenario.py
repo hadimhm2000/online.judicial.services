@@ -463,20 +463,25 @@ async def process_lavayeh_task(data: dict, bot: Bot):
 
             from lavayeh_handlers import send_lavayeh_result
             national_ids = ", ".join([p.get("national_id", "") for p in persons if p.get("national_id")])
-            combined_tracking = (
-                f"{tracking_code} | کد لایحه: {lavayeh_bill_no}"
-                if lavayeh_bill_no else tracking_code
-            )
             # ── ارسال نتیجه به همراه اطلاعات لازم برای مرحله امضا ──────
+            # نکته مهم: باید فقط «کد رهگیری» خام (tracking_code) به مرحله امضا
+            # برود، نه رشته ترکیبی — چون همین مقدار بعداً عیناً در فیلد
+            # #billNo برای استعلام لایحه تایپ می‌شود. اطلاع از «کد لایحه» فقط
+            # برای مدیر لاگ می‌شود، نه برای مرحله امضا.
             await send_lavayeh_result(
                 bot, user_id, pdf_path, court_total,
-                tracking_code=combined_tracking,
+                tracking_code=tracking_code,
                 national_ids=national_ids,
                 lavayeh_title=title,
                 lavayeh_province=province,
                 lavayeh_row_number=row_number,
                 lavayeh_persons=persons,
             )
+            if lavayeh_bill_no:
+                await bot.send_message(
+                    ADMIN_ID,
+                    f"ℹ️ [LAVAYEH] کد لایحه داخلی سامانه برای کاربر {user_id}: {lavayeh_bill_no}"
+                )
 
             await bot.send_message(
                 ADMIN_ID,

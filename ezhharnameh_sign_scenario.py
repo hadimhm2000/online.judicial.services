@@ -51,23 +51,16 @@ from config import ADMIN_ID
 async def _click_ezhhar_menu(page) -> bool:
     """
     کلیک روی منوی «ارایه و پیگیری اظهارنامه».
-    اولویت ۱: #menu12Container (آیدی مشخص)
-    اولویت ۲: جستجوی متن دقیق اظهارنامه (نه لایحه)
-    """
-    # اولویت ۱: آیدی مشخص منوی اظهارنامه
-    clicked = await page.evaluate('''() => {
-        const menuContainer = document.querySelector('#menu12Container');
-        if (menuContainer) {
-            const link = menuContainer.querySelector('a') || menuContainer;
-            if (link) { link.click(); return "id"; }
-        }
-        return null;
-    }''')
-    if clicked:
-        logging.info(f"[EZHHAR_SIGN] منو اظهارنامه با {clicked} کلیک شد")
-        return True
 
-    # اولویت ۲: جستجوی دقیق متن — فقط اظهارنامه، نه لایحه
+    اولویت ۱: جستجوی متن دقیق اظهارنامه (نه لایحه) — همان روش قابل‌اعتماد
+              که در ناوبری لایحه استفاده می‌شود.
+    اولویت ۲ (fallback): #menu12Container — این آیدی به‌صورت پویا بر اساس
+              ترتیب آیتم‌های منو در هر حساب دفتر خدمات تعیین می‌شود و ممکن
+              است در حساب‌های مختلف به آیتم دیگری (مثلاً لایحه) اشاره کند.
+              به همین دلیل پیش از کلیک، متن داخل آن حتماً بررسی می‌شود تا
+              مطمئن شویم واقعاً «اظهارنامه» است.
+    """
+    # اولویت ۱: جستجوی دقیق متن — فقط اظهارنامه، نه لایحه
     clicked = await page.evaluate('''() => {
         const links = Array.from(document.querySelectorAll('a.list-group-item'));
         for (const el of links) {
@@ -82,6 +75,24 @@ async def _click_ezhhar_menu(page) -> bool:
     }''')
     if clicked:
         logging.info("[EZHHAR_SIGN] منو اظهارنامه با متن کلیک شد")
+        return True
+
+    # اولویت ۲ (fallback ایمن): #menu12Container — فقط اگر متن داخلش
+    # واقعاً «اظهارنامه» باشد و «لایحه» نباشد؛ در غیر این صورت کلیک نمی‌شود
+    # تا به‌اشتباه وارد بخش دیگری (مثل لایحه) نشویم.
+    clicked = await page.evaluate('''() => {
+        const menuContainer = document.querySelector('#menu12Container');
+        if (menuContainer) {
+            const text = (menuContainer.innerText || "").trim();
+            if (text.includes("اظهارنامه") && !text.includes("لایحه")) {
+                const link = menuContainer.querySelector('a') || menuContainer;
+                if (link) { link.click(); return true; }
+            }
+        }
+        return false;
+    }''')
+    if clicked:
+        logging.info("[EZHHAR_SIGN] منو اظهارنامه با id (تایید‌شده با متن) کلیک شد")
         return True
 
     return False
@@ -311,16 +322,33 @@ async def _extract_persons_from_table(page) -> list:
             // ── استخراج نام — چند روش مختلف ──
             let name = "";
 
-            // روش ۱: سلول با کلاس‌های خاص
+            // روش ۱: سلول با کلاس‌های خاص + ng-binding
+            // توجه: ستون «نوع اخذ امضاء» («از طریق ثنا / از طریق دستگاه پد امضاء»)
+            // دقیقاً همین کلاس‌ها را دارد و در DOM جلوتر از ستون نام است — بدون
+            // شرط ng-binding، آن ستون به‌جای نام واقعی گرفته می‌شود.
             const nameTd1 = tr.querySelector(
-                'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
+                'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle.ng-binding'
             );
             if (nameTd1) name = nameTd1.innerText.trim();
 
-            // روش ۲: سلول با کلاس font-yekan (کمتر سخت‌گیرانه)
+            // روش ۱ب: همان کلاس‌ها بدون ng-binding، ولی رد کردن ستون نوع امضا
             if (!name) {
-                const nameTd2 = tr.querySelector('td.font-yekan');
-                if (nameTd2) name = nameTd2.innerText.trim();
+                const candidates = tr.querySelectorAll(
+                    'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
+                );
+                for (const c of candidates) {
+                    const t = c.innerText.trim();
+                    if (t && !t.includes("از طریق")) { name = t; break; }
+                }
+            }
+
+            // روش ۲: سلول با کلاس font-yekan (کمتر سخت‌گیرانه) — باز هم رد کردن نوع امضا
+            if (!name) {
+                const tds2 = tr.querySelectorAll('td.font-yekan');
+                for (const td of tds2) {
+                    const t = td.innerText.trim();
+                    if (t && !t.includes("از طریق")) { name = t; break; }
+                }
             }
 
             // روش ۳: از طریق مدل Angular — خواندن مستقیم از scope
@@ -344,7 +372,7 @@ async def _extract_persons_from_table(page) -> list:
                     if (text.length >= 2 && !/^[0-9۰-۹]+$/.test(text)
                         && !text.includes("ارسال") && !text.includes("ثبت")
                         && !text.includes("درج") && !text.includes("حذف")
-                        && !text.includes("نوع")) {
+                        && !text.includes("نوع") && !text.includes("از طریق")) {
                         name = text;
                         break;
                     }
@@ -400,16 +428,39 @@ async def send_ezhhar_sign_code_for_person(
     user_id: int,
     row_idx: int,
     person_name: str,
+    tracking_code: str = "",
 ) -> bool:
     """
     ارسال کد موقت برای یک ردیف مشخص از جدول امضای اظهارنامه.
     حداکثر ۳ بار تلاش می‌کند.
+
+    نکته مهم: چون یک صفحه مرورگر مشترک بین همه کاربران است، ممکن است بین
+    فاز ناوبری (فاز ۱) و این فاز، تسک‌های کاربران دیگر صفحه را عوض کرده
+    باشند — به همین دلیل ابتدا وجود جدول را بررسی و در صورت نیاز مجدداً
+    ناوبری می‌کنیم.
 
     Returns True اگر کد ارسال شد (یا قبلاً ارسال شده بود).
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
         return False
+
+    # ── بررسی اینکه آیا صفحه هنوز روی جدول صحیح اظهارنامه است ──
+    # (صفحه مرورگر مشترک است و ممکن است تسک کاربر دیگری آن را عوض کرده باشد)
+    table_ok = await _check_sign_table_exists(sana_page)
+    if table_ok:
+        # بررسی اینکه واقعاً در بخش اظهارنامه هستیم، نه لایحه
+        page_ok = await _verify_ezhhar_page_loaded(sana_page)
+        table_ok = table_ok and page_ok
+
+    if not table_ok and tracking_code:
+        logging.warning(
+            f"[EZHHAR_SIGN] صفحه قبل از ارسال کد، به‌روز نیست — ناوبری مجدد برای کاربر {user_id}"
+        )
+        nav_ok = await navigate_to_ezhhar_sign_page(bot, user_id, tracking_code)
+        if not nav_ok:
+            logging.error(f"[EZHHAR_SIGN] ناوبری مجدد قبل از ارسال کد ناموفق — کاربر {user_id}")
+            return False
 
     for attempt in range(3):
         clicked = await sana_page.evaluate(f'''(idx) => {{

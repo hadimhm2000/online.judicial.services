@@ -119,9 +119,7 @@ async def lavayeh_sign_person_select_handler(message: Message, state: FSMContext
         if person:
             name = person.get("name", "")
             person_type = person.get("personType", "")
-            expected = f"👤 {name}"
-            if person_type:
-                expected += f" ({person_type})"
+            expected = f"ارسال کد برای {name}"
             if text == expected or name in text:
                 selected_idx = idx
                 break
@@ -136,7 +134,7 @@ async def lavayeh_sign_person_select_handler(message: Message, state: FSMContext
     person_name = person.get("name", f"شخص {selected_idx + 1}")
 
     await message.answer(
-        f"⏳ **در حال ارسال کد موقت امضا برای {person_name}...**\n\n"
+        "⏳ **در حال ارسال رمز موقت امضا...**\n\n"
         "کد تا دقایق دیگر ارسال می‌گردد.\n"
         "⚠️ توجه داشته باشید مهلت کد کلاً **۶ دقیقه** می‌باشد.",
         reply_markup=ReplyKeyboardRemove(),
@@ -247,7 +245,7 @@ async def on_lavayeh_sign_persons_loaded(bot: Bot, user_id: int, persons: list, 
 
         await bot.send_message(
             user_id,
-            f"⏳ **در حال ارسال کد موقت امضا برای {person_name}...**\n\n"
+            "⏳ **در حال ارسال رمز موقت امضا...**\n\n"
             "کد تا دقایق دیگر ارسال می‌گردد.\n"
             "⚠️ توجه داشته باشید مهلت کد کلاً **۶ دقیقه** می‌باشد.",
             reply_markup=ReplyKeyboardRemove(),
@@ -272,9 +270,7 @@ async def on_lavayeh_sign_persons_loaded(bot: Bot, user_id: int, persons: list, 
         for p in sendable:
             name = p.get("name", f"شخص {p['idx'] + 1}")
             person_type = p.get("personType", "")
-            label = f"👤 {name}"
-            if person_type:
-                label += f" ({person_type})"
+            label = f"ارسال کد برای {name}"
             person_buttons.append([KeyboardButton(text=label)])
 
         person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -301,7 +297,7 @@ async def on_lavayeh_sign_code_sent_success(bot: Bot, user_id: int, persons: lis
         name = person.get("name", "نامشخص")
         await bot.send_message(
             user_id,
-            f"✅ **کد موقت امضا** برای **{name}** ارسال شد.\n\n"
+            "✅ **رمز موقت امضا ارسال شد.**\n\n"
             "⏰ مهلت استفاده از این کد **۶ دقیقه** می‌باشد.\n"
             "لطفاً کد دریافتی را هرچه سریع‌تر ارسال کنید.",
             parse_mode="Markdown"
@@ -371,9 +367,7 @@ async def on_lavayeh_sign_submit_success(bot: Bot, user_id: int, row_idx: int, s
             if person:
                 name = person.get("name", f"شخص {idx + 1}")
                 person_type = person.get("personType", "")
-                label = f"👤 {name}"
-                if person_type:
-                    label += f" ({person_type})"
+                label = f"ارسال کد برای {name}"
                 person_buttons.append([KeyboardButton(text=label)])
 
         person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -481,9 +475,7 @@ async def _lavayeh_wrong_code_waiter(bot: Bot, user_id: int, state: FSMContext):
                 if person:
                     name = person.get("name", f"شخص {idx + 1}")
                     person_type = person.get("personType", "")
-                    label = f"👤 {name}"
-                    if person_type:
-                        label += f" ({person_type})"
+                    label = f"ارسال کد برای {name}"
                     person_buttons.append([KeyboardButton(text=label)])
 
             person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -491,7 +483,7 @@ async def _lavayeh_wrong_code_waiter(bot: Bot, user_id: int, state: FSMContext):
             await bot.send_message(
                 user_id,
                 f"⏰ **۲۰ دقیقه گذشت.**\n\n"
-                f"اگر {person_name} در دسترس است، لطفاً مجدداً انتخاب کنید تا کد جدید ارسال شود:",
+                "اگر در دسترس می‌باشید، لطفاً گزینه زیر را مجدداً انتخاب کنید تا کد جدید ارسال شود:",
                 reply_markup=person_select_kb,
                 parse_mode="Markdown"
             )
@@ -560,9 +552,7 @@ async def lavayeh_sign_resend_yes(message: Message, state: FSMContext, bot: Bot)
         if person:
             name = person.get("name", f"شخص {idx + 1}")
             person_type = person.get("personType", "")
-            label = f"👤 {name}"
-            if person_type:
-                label += f" ({person_type})"
+            label = f"ارسال کد برای {name}"
             person_buttons.append([KeyboardButton(text=label)])
 
     person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -705,9 +695,7 @@ async def ezhhar_sign_person_select_handler(message: Message, state: FSMContext,
         if person:
             name = person.get("name", "")
             person_type = person.get("personType", "")
-            expected = f"👤 {name}"
-            if person_type:
-                expected += f" ({person_type})"
+            expected = f"ارسال کد برای {name}"
             if text == expected or name in text:
                 selected_idx = idx
                 break
@@ -722,7 +710,7 @@ async def ezhhar_sign_person_select_handler(message: Message, state: FSMContext,
     person_name = person.get("name", f"شخص {selected_idx + 1}")
 
     await message.answer(
-        f"⏳ **در حال ارسال کد موقت امضا برای {person_name}...**\n\n"
+        "⏳ **در حال ارسال رمز موقت امضا...**\n\n"
         "کد تا دقایق دیگر ارسال می‌گردد.\n"
         "⚠️ توجه داشته باشید مهلت کد کلاً **۶ دقیقه** می‌باشد.",
         reply_markup=ReplyKeyboardRemove(),
@@ -838,7 +826,7 @@ async def on_ezhhar_sign_persons_loaded(bot: Bot, user_id: int, persons: list, s
 
         await bot.send_message(
             user_id,
-            f"⏳ **در حال ارسال کد موقت امضا برای {person_name}...**\n\n"
+            "⏳ **در حال ارسال رمز موقت امضا...**\n\n"
             "کد تا دقایق دیگر ارسال می‌گردد.\n"
             "⚠️ توجه داشته باشید مهلت کد کلاً **۶ دقیقه** می‌باشد.",
             reply_markup=ReplyKeyboardRemove(),
@@ -862,9 +850,7 @@ async def on_ezhhar_sign_persons_loaded(bot: Bot, user_id: int, persons: list, s
         for p in sendable:
             name = p.get("name", f"شخص {p['idx'] + 1}")
             person_type = p.get("personType", "")
-            label = f"👤 {name}"
-            if person_type:
-                label += f" ({person_type})"
+            label = f"ارسال کد برای {name}"
             person_buttons.append([KeyboardButton(text=label)])
 
         person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -889,7 +875,7 @@ async def on_ezhhar_sign_code_sent_success(bot: Bot, user_id: int, persons: list
         name = person.get("name", "نامشخص")
         await bot.send_message(
             user_id,
-            f"✅ **کد موقت امضا** برای **{name}** ارسال شد.\n\n"
+            "✅ **رمز موقت امضا ارسال شد.**\n\n"
             "⏰ مهلت استفاده از این کد **۶ دقیقه** می‌باشد.\n"
             "لطفاً کد دریافتی را هرچه سریع‌تر ارسال کنید.",
             parse_mode="Markdown"
@@ -954,9 +940,7 @@ async def on_ezhhar_sign_submit_success(bot: Bot, user_id: int, row_idx: int, st
             if person:
                 name = person.get("name", f"شخص {idx + 1}")
                 person_type = person.get("personType", "")
-                label = f"👤 {name}"
-                if person_type:
-                    label += f" ({person_type})"
+                label = f"ارسال کد برای {name}"
                 person_buttons.append([KeyboardButton(text=label)])
 
         person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -1078,9 +1062,7 @@ async def _ezhhar_wrong_code_waiter(bot: Bot, user_id: int, state: FSMContext):
                 if person:
                     name = person.get("name", f"شخص {idx + 1}")
                     person_type = person.get("personType", "")
-                    label = f"👤 {name}"
-                    if person_type:
-                        label += f" ({person_type})"
+                    label = f"ارسال کد برای {name}"
                     person_buttons.append([KeyboardButton(text=label)])
 
             person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)
@@ -1088,7 +1070,7 @@ async def _ezhhar_wrong_code_waiter(bot: Bot, user_id: int, state: FSMContext):
             await bot.send_message(
                 user_id,
                 f"⏰ **۲۰ دقیقه گذشت.**\n\n"
-                f"اگر {person_name} در دسترس است، لطفاً مجدداً انتخاب کنید تا کد جدید ارسال شود:",
+                "اگر در دسترس می‌باشید، لطفاً گزینه زیر را مجدداً انتخاب کنید تا کد جدید ارسال شود:",
                 reply_markup=person_select_kb,
                 parse_mode="Markdown"
             )
@@ -1157,9 +1139,7 @@ async def ezhhar_sign_resend_yes(message: Message, state: FSMContext, bot: Bot):
         if person:
             name = person.get("name", f"شخص {idx + 1}")
             person_type = person.get("personType", "")
-            label = f"👤 {name}"
-            if person_type:
-                label += f" ({person_type})"
+            label = f"ارسال کد برای {name}"
             person_buttons.append([KeyboardButton(text=label)])
 
     person_select_kb = ReplyKeyboardMarkup(keyboard=person_buttons, resize_keyboard=True)

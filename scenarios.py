@@ -1008,7 +1008,7 @@ async def _process_lavayeh_send_sign_code(data: dict, bot: Bot):
             for row_idx in target_row_indices:
                 person = next((p for p in all_persons if p["idx"] == row_idx), None)
                 person_name = person.get("name", f"شخص {row_idx + 1}") if person else f"شخص {row_idx + 1}"
-                success = await send_sign_code_for_person(bot, user_id, row_idx, person_name)
+                success = await send_sign_code_for_person(bot, user_id, row_idx, person_name, tracking_code)
                 results.append({
                     "idx": row_idx,
                     "name": person_name,
@@ -1126,7 +1126,7 @@ async def _process_ezhharnameh_send_sign_code(data: dict, bot: Bot):
                 if not person_name:
                     person_name = f"شخص {row_idx + 1}"
                     logging.warning(f"[EZHHAR_SIGN] نام خالی برای ردیف {row_idx} — از '{person_name}' استفاده می‌شود")
-                success = await send_ezhhar_sign_code_for_person(bot, user_id, row_idx, person_name)
+                success = await send_ezhhar_sign_code_for_person(bot, user_id, row_idx, person_name, tracking_code)
                 results.append({"idx": row_idx, "name": person_name, "person_type": person.get("personType", "") if person else "", "sent": success})
                 if row_idx != target_row_indices[-1]:
                     await asyncio.sleep(30)

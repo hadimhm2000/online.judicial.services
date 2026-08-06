@@ -183,10 +183,22 @@ async def get_signable_persons(
                 'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
             ));
             return rows.map((tr, idx) => {
-                // نام شخص
-                const nameTd = tr.querySelector(
-                    'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
+                // نام شخص — توجه: ستون «نوع اخذ امضاء» هم همین کلاس‌ها را دارد
+                // و در DOM جلوتر از ستون نام قرار می‌گیرد، پس حتماً باید
+                // ng-binding را هم شرط بگذاریم تا با آن اشتباه گرفته نشود.
+                let nameTd = tr.querySelector(
+                    'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle.ng-binding'
                 );
+                if (!nameTd) {
+                    // fallback: همان کلاس‌ها ولی متنی که شامل «از طریق» نباشد
+                    const candidates = tr.querySelectorAll(
+                        'td.font-yekan.font-size-12.text-right.line-height-20.vertical-align-middle'
+                    );
+                    for (const c of candidates) {
+                        const t = c.innerText.trim();
+                        if (t && !t.includes("از طریق")) { nameTd = c; break; }
+                    }
+                }
                 const name = nameTd ? nameTd.innerText.trim() : "";
 
                 // نوع شخص (وکیل، نماینده، مدیرعامل، ...)
@@ -223,21 +235,48 @@ async def get_signable_persons(
         return []
 
 
+async def _check_lavayeh_sign_table_exists(page) -> bool:
+    """بررسی وجود جدول امضا برای لایحه در صفحه فعلی"""
+    return await page.evaluate('''() => {
+        const rows = Array.from(document.querySelectorAll(
+            'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+        ));
+        return rows.length > 0;
+    }''')
+
+
 async def send_sign_code_for_person(
     bot: Bot,
     user_id: int,
     row_idx: int,
     person_name: str,
+    tracking_code: str = "",
 ) -> bool:
     """
     ارسال کد موقت برای یک ردیف مشخص از جدول امضا.
     حداکثر ۳ بار تلاش می‌کند.
+
+    نکته مهم: چون یک صفحه مرورگر مشترک بین همه کاربران است، ممکن است بین
+    فاز ناوبری و این فاز، تسک‌های کاربران دیگر صفحه را عوض کرده باشند —
+    به همین دلیل ابتدا وجود جدول را بررسی و در صورت نیاز مجدداً ناوبری
+    می‌کنیم.
 
     Returns True اگر کد ارسال شد (یا قبلاً ارسال شده بود).
     """
     sana_page = runtime_state.sana_page
     if sana_page is None:
         return False
+
+    # ── بررسی اینکه آیا صفحه هنوز روی جدول صحیح لایحه است ──
+    table_ok = await _check_lavayeh_sign_table_exists(sana_page)
+    if not table_ok and tracking_code:
+        logging.warning(
+            f"[SIGN] صفحه قبل از ارسال کد، به‌روز نیست — ناوبری مجدد برای کاربر {user_id}"
+        )
+        nav_ok = await navigate_to_sign_page(bot, user_id, tracking_code)
+        if not nav_ok:
+            logging.error(f"[SIGN] ناوبری مجدد قبل از ارسال کد ناموفق — کاربر {user_id}")
+            return False
 
     for attempt in range(3):
         clicked = await sana_page.evaluate(f'''(idx) => {{
