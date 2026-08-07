@@ -213,10 +213,27 @@ async def navigate_to_ezhhar_sign_page(
                 await resilient_sleep(sana_page, 3, bot, user_id)
 
             # ── ۷. ورود به مرحله «اخذ امضای الکترونیک» ─────────────────────
-            clicked_sign = await _click_sign_section(sana_page)
-            if not clicked_sign:
-                await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
-            await resilient_sleep(sana_page, 6, bot, user_id)
+            # نکته مهم: اگر این کد رهگیری قبلاً در همین نشست به مرحله امضا
+            # رفته باشد، سامانه معمولاً دیگر باکس «اخذ امضای الکترونیک» را
+            # نشان نمی‌دهد و مستقیم جدول امضا نمایان است. در این حالت باید
+            # این مرحله را رد کنیم؛ در غیر این صورت safe_click_by_text با
+            # NavigationResetError کل تلاش را باطل می‌کند.
+            table_already_visible = await _check_sign_table_exists(sana_page)
+            if not table_already_visible:
+                clicked_sign = await _click_sign_section(sana_page)
+                if not clicked_sign:
+                    try:
+                        await safe_click_by_text(sana_page, "اخذ امضا", bot, user_id)
+                    except Exception as click_err:
+                        # ممکن است در همین لحظه جدول ظاهر شده باشد؛ قبل از
+                        # اینکه خطا را قطعی بدانیم، یک‌بار دیگر چک می‌کنیم.
+                        if not await _check_sign_table_exists(sana_page):
+                            raise click_err
+                        logging.info(
+                            "[EZHHAR_SIGN] باکس «اخذ امضای الکترونیک» پیدا نشد، "
+                            "ولی جدول امضا از قبل موجود بود — ادامه می‌دهیم."
+                        )
+                await resilient_sleep(sana_page, 6, bot, user_id)
 
             # ── ۸. بررسی جدول — اگر نبود، ریلود و تلاش مجدد ─────────────
             table_exists = await _check_sign_table_exists(sana_page)
@@ -572,8 +589,16 @@ async def submit_ezhhar_sign_code(
             await resilient_sleep(sana_page, 3, bot, user_id)
 
         clicked_sign = await _click_sign_section(sana_page)
-        if not clicked_sign:
-            await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
+        if not clicked_sign and not await _check_sign_table_exists(sana_page):
+            try:
+                await safe_click_by_text(sana_page, "اخذ امضا", bot, user_id)
+            except Exception as click_err:
+                if not await _check_sign_table_exists(sana_page):
+                    raise click_err
+                logging.info(
+                    "[EZHHAR_SIGN] فاز ۳: باکس «اخذ امضای الکترونیک» پیدا نشد، "
+                    "ولی جدول امضا از قبل موجود بود — ادامه می‌دهیم."
+                )
         await resilient_sleep(sana_page, 6, bot, user_id)
 
         # ── وارد کردن کد و کلیک امضا ──────────────────────────────────
@@ -798,8 +823,16 @@ async def _enter_code_and_sign(
             logging.warning(f"[EZHHAR_SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
 
             clicked_sign = await _click_sign_section(page)
-            if not clicked_sign:
-                await safe_click_by_text(page, "اخذ امضاي الكترونيك", bot, user_id)
+            if not clicked_sign and not await _check_sign_table_exists(page):
+                try:
+                    await safe_click_by_text(page, "اخذ امضا", bot, user_id)
+                except Exception as click_err:
+                    if not await _check_sign_table_exists(page):
+                        raise click_err
+                    logging.info(
+                        "[EZHHAR_SIGN] retry: باکس «اخذ امضای الکترونیک» پیدا نشد، "
+                        "ولی جدول امضا از قبل موجود بود — ادامه می‌دهیم."
+                    )
             await asyncio.sleep(6)
 
     return {"success": False, "error": "max_attempts"}

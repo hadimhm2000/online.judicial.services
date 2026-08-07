@@ -113,18 +113,33 @@ async def navigate_to_sign_page(
         await resilient_sleep(sana_page, 2, bot, user_id)
 
         # ── ۷. کلیک «اخذ امضای الکترونیک» ──────────────────────────────
-        clicked_sign = await sana_page.evaluate('''() => {
-            const heads = Array.from(document.querySelectorAll('.box h5'));
-            const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
-            if (t) {
-                const box = t.closest('.box');
-                if (box) { box.click(); return true; }
-            }
-            return false;
-        }''')
-        if not clicked_sign:
-            await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
-        await resilient_sleep(sana_page, 6, bot, user_id)
+        # نکته مهم: اگر این کد رهگیری قبلاً در همین نشست به مرحله امضا رفته
+        # باشد، سامانه معمولاً دیگر باکس «اخذ امضای الکترونیک» را نشان
+        # نمی‌دهد و مستقیم جدول امضا نمایان است. در این حالت نباید سعی کنیم
+        # آن را کلیک کنیم، وگرنه safe_click_by_text با NavigationResetError
+        # کل تلاش را باطل می‌کند.
+        table_already_visible = await _check_lavayeh_sign_table_exists(sana_page)
+        if not table_already_visible:
+            clicked_sign = await sana_page.evaluate('''() => {
+                const heads = Array.from(document.querySelectorAll('.box h5'));
+                const t = heads.find(el => el.innerText && el.innerText.includes("اخذ امضا"));
+                if (t) {
+                    const box = t.closest('.box');
+                    if (box) { box.click(); return true; }
+                }
+                return false;
+            }''')
+            if not clicked_sign:
+                try:
+                    await safe_click_by_text(sana_page, "اخذ امضا", bot, user_id)
+                except Exception as click_err:
+                    if not await _check_lavayeh_sign_table_exists(sana_page):
+                        raise click_err
+                    logging.info(
+                        "[SIGN] باکس «اخذ امضای الکترونیک» پیدا نشد، "
+                        "ولی جدول امضا از قبل موجود بود — ادامه می‌دهیم."
+                    )
+            await resilient_sleep(sana_page, 6, bot, user_id)
 
         # ── ۸. بررسی جدول امضا — اگر نبود، ریلود و تلاش مجدد ─────────
         table_exists = await sana_page.evaluate('''() => {
@@ -418,8 +433,16 @@ async def submit_sign_code_for_person(
                 }
                 return false;
             }''')
-            if not clicked_sign:
-                await safe_click_by_text(sana_page, "اخذ امضاي الكترونيك", bot, user_id)
+            if not clicked_sign and not await _check_lavayeh_sign_table_exists(sana_page):
+                try:
+                    await safe_click_by_text(sana_page, "اخذ امضا", bot, user_id)
+                except Exception as click_err:
+                    if not await _check_lavayeh_sign_table_exists(sana_page):
+                        raise click_err
+                    logging.info(
+                        "[SIGN] retry: باکس «اخذ امضای الکترونیک» پیدا نشد، "
+                        "ولی جدول امضا از قبل موجود بود — ادامه می‌دهیم."
+                    )
             await asyncio.sleep(6)
 
     return {"success": False, "error": "max_attempts"}

@@ -9,6 +9,7 @@ logging.basicConfig(
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
