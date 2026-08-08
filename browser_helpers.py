@@ -13,6 +13,15 @@ import runtime_state
 from config import ADMIN_ID
 from keyboards import admin_login_kb
 
+# آدرسی که سامانه‌ی ثنا هنگام انقضای نشست کاربر را به آن ریدایرکت می‌کند.
+# (SSO — صفحه‌ی جدید لاگین که با فرم قدیمی #txtUsername متفاوت است)
+SESSION_LOGIN_REDIRECT_PREFIX = "https://iehraz2.adliran.ir/Login/Authenticate"
+
+
+def is_login_redirect_url(url: str) -> bool:
+    """آیا URL فعلی صفحه، ریدایرکت انقضای نشست به آدرس لاگین ثناست؟"""
+    return bool(url) and url.startswith(SESSION_LOGIN_REDIRECT_PREFIX)
+
 
 class NavigationResetError(Exception):
     """
@@ -196,12 +205,22 @@ async def handle_session_expired(bot: Bot, user_id: int, page=None):
     finally:
         await login_page.close()
 
-    # ── بستن پاپ‌آپ خطا روی صفحه‌ی اصلی تا همان مرحله بدون ریست ادامه پیدا کند ──
+    # ── بازگرداندن صفحه‌ی اصلی به سامانه ─────────────────────────────────────
     if page is not None:
-        try:
-            await dismiss_expiry_popup(page)
-        except Exception as e:
-            logging.warning(f"handle_session_expired: could not dismiss popup on main page: {e}")
+        if is_login_redirect_url(page.url):
+            # صفحه به آدرس لاگین (iehraz2) ریدایرکت شده بود؛ باید صریحاً
+            # به سامانه برگردد چون پاپ‌آپی برای بستن وجود ندارد.
+            try:
+                await page.goto("https://sakha2.adliran.ir/Offices/Index", timeout=30000)
+                await asyncio.sleep(2)
+            except Exception as e:
+                logging.warning(f"handle_session_expired: could not navigate main page back after iehraz2 redirect: {e}")
+        else:
+            # ── بستن پاپ‌آپ خطا روی صفحه‌ی اصلی تا همان مرحله بدون ریست ادامه پیدا کند ──
+            try:
+                await dismiss_expiry_popup(page)
+            except Exception as e:
+                logging.warning(f"handle_session_expired: could not dismiss popup on main page: {e}")
 
     await bot.send_message(ADMIN_ID, "✅ **نشست با موفقیت تمدید شد.** ادامه‌ی فرآیند از همان مرحله...")
     await asyncio.sleep(2)
@@ -255,6 +274,12 @@ async def check_and_handle_expiry(page, bot: Bot, user_id: int):
         except:
             pass
         raise NavigationResetError("GetLegalPersonType redirect occurred. Navigated to Offices/Index and restarting task...")
+
+    # ── ریدایرکت به صفحه‌ی لاگین جدید ثنا (iehraz2) ────────────────────────
+    if is_login_redirect_url(page.url):
+        logging.warning(f"⚠️ ریدایرکت به صفحه لاگین ثنا (iehraz2) شناسایی شد! URL: {page.url}")
+        await handle_session_expired(bot, user_id, page=page)
+        return True
 
     is_expired = await page.evaluate('''() => {
         // ── ۱. بررسی مدال تمدید نشست: «X از ساعت ورود شما می‌گذرد» ──

@@ -510,7 +510,14 @@ async def _select_province(page, province: str, bot: Bot, user_id: int):
         if (btn) btn.click();
     }''')
     await asyncio.sleep(2)
-    await page.evaluate('''(prov) => {
+
+    is_tehran_excl = "تهران" in province and (
+        "به‌جز" in province or "به جز" in province or "بجز" in province
+    )
+    is_tehran_city_only = "تهران" in province and not is_tehran_excl
+
+    await page.evaluate('''(args) => {
+        const { prov, isTehranExcl, isTehranCityOnly } = args;
         const normalize = (s) => (s || '')
             .replace(/\\u064A/g, '\\u06CC')
             .replace(/\\u0643/g, '\\u06A9')
@@ -518,11 +525,24 @@ async def _select_province(page, province: str, bot: Bot, user_id: int):
             .trim();
         const normProv = normalize(prov);
         const items = Array.from(document.querySelectorAll('.ui-select-choices-row-inner, .ui-select-choices div'));
+
+        if (isTehranExcl) {
+            const target = items.find(el => el.innerText &&
+                normalize(el.innerText).includes("تهران") &&
+                (normalize(el.innerText).includes("به جز") || normalize(el.innerText).includes("بجز")));
+            if (target) { target.click(); return; }
+        } else if (isTehranCityOnly) {
+            const target = items.find(el => el.innerText &&
+                normalize(el.innerText).includes("تهران") &&
+                !normalize(el.innerText).includes("به جز") && !normalize(el.innerText).includes("بجز"));
+            if (target) { target.click(); return; }
+        }
+
         const exact = items.find(el => el.innerText && normalize(el.innerText) === normProv);
         if (exact) { exact.click(); return; }
         const fallback = items.find(el => el.innerText && normalize(el.innerText).includes(normProv));
         if (fallback) fallback.click();
-    }''', province)
+    }''', {"prov": province, "isTehranExcl": is_tehran_excl, "isTehranCityOnly": is_tehran_city_only})
 
 
 async def _click_validate(page, bot: Bot, user_id: int):

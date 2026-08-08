@@ -18,7 +18,7 @@ from browser_helpers import (
     handle_session_expired, wait_for_angular_idle, check_and_handle_expiry,
     check_and_handle_load_error, resilient_sleep, goto_url_with_retry,
     safe_click_by_text, safe_type, NavigationResetError,
-    wait_for_horizontal_loading_bar,
+    wait_for_horizontal_loading_bar, is_login_redirect_url,
 )
 from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
 
@@ -27,11 +27,15 @@ from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
 # PRE_CHECK — استعلام تعداد پیوست در تب جدید (بدون دستکاری sana_page)
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _process_pre_check_on_new_page(data: dict, bot: Bot):
+async def _process_pre_check_on_new_page(data: dict, bot: Bot, _retry: bool = False):
     """
     استعلام تعداد پیوست‌ها در یک تب جدید — بدون دستکاری sana_page.
     همان روند استعلام کد رهگیری را در تب جدید پیاده‌سازی می‌کند
     تا روند ثبت پرونده در sana_page مختل نشود.
+
+    اگر نشست منقضی باشد، به مدیر اطلاع داده و منتظر لاگین مجدد او می‌ماند،
+    سپس همین تسک را یک‌بار به‌صورت خودکار از نو تلاش می‌کند (_retry جلوی
+    حلقه‌ی بی‌نهایت را می‌گیرد).
     """
     browser_context = runtime_state.browser_context
     user_id = data['user_id']
@@ -48,11 +52,26 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot):
         await page.goto("https://sakha2.adliran.ir/Offices/Index", timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
-        # بررسی انقضا نشست
+        # بررسی انقضا نشست (فرم قدیمی یا ریدایرکت جدید به iehraz2)
         is_login = await page.query_selector('#txtUsername')
-        if is_login:
-            await bot.send_message(user_id, "⚠️ نشست سامانه منقضی شده. لطفاً دوباره تلاش کنید.")
-            return
+        if is_login or is_login_redirect_url(page.url):
+            if _retry:
+                # قبلاً یک‌بار مدیر لاگین کرده و باز هم منقضی است؛ برای جلوگیری
+                # از حلقه‌ی بی‌نهایت، دیگر تلاش خودکار نمی‌کنیم.
+                await bot.send_message(user_id, "⚠️ نشست سامانه همچنان منقضی است. لطفاً کمی بعد دوباره تلاش کنید.")
+                return
+
+            logging.warning(f"[PRE_CHECK] نشست منقضی — اطلاع به مدیر و انتظار لاگین مجدد (کد: {tracking_code})")
+            await handle_session_expired(bot, user_id, page=page)
+
+            try:
+                await page.close()
+            except Exception:
+                pass
+            page = None
+
+            # ── تلاش مجدد خودکار همین تسک، بعد از لاگین مدیر ─────────
+            return await _process_pre_check_on_new_page(data, bot, _retry=True)
 
         # ── ۲. ناوبری به بخش مورد نظر ─────────────────────────────
         nav_map = {
@@ -117,6 +136,23 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot):
         # ── ۵. بستن پاپ‌آپ خطا (اگر بود) ─────────────────────────────
         await _precheck_dismiss_error(page)
 
+        # ── بررسی خطای «کد رهگیری معتبر نیست» ────────────────────────
+        invalid_code_popup = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (popup) {
+                const t = popup.innerText || "";
+                if (t.includes("معتبر نیست")) return true;
+            }
+            return false;
+        }''')
+        if invalid_code_popup:
+            try:
+                await page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
+            except Exception:
+                pass
+            await bot.send_message(user_id, "❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
+            return
+
         # ── ۶. بررسی عدم یافتن پرونده ─────────────────────────────
         not_found = await page.evaluate('''() => {
             const alert = document.querySelector('.alert-danger');
@@ -127,6 +163,21 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot):
         if not_found:
             await bot.send_message(user_id, f"❌ پرونده‌ای با کد `{tracking_code}` یافت نگردید.")
             return
+
+        # بررسی مجدد انقضای نشست (ممکن است حین جستجو رخ داده باشد)
+        is_login = await page.query_selector('#txtUsername')
+        if is_login or is_login_redirect_url(page.url):
+            if _retry:
+                await bot.send_message(user_id, "⚠️ نشست سامانه همچنان منقضی است. لطفاً کمی بعد دوباره تلاش کنید.")
+                return
+            logging.warning(f"[PRE_CHECK] نشست منقضی حین جستجو — اطلاع به مدیر (کد: {tracking_code})")
+            await handle_session_expired(bot, user_id, page=page)
+            try:
+                await page.close()
+            except Exception:
+                pass
+            page = None
+            return await _process_pre_check_on_new_page(data, bot, _retry=True)
 
         # ── ۷. کلیک «منضمات» و شمارش ────────────────────────────
         await force_click_by_text(page, "منضمات")
@@ -259,16 +310,37 @@ async def _precheck_dismiss_error(page):
             pass
 
 
-async def _wait_for_mobile_search_table(page, timeout_sec: int = 30) -> bool:
+async def _wait_for_mobile_search_table(page, timeout_sec: int = 30):
+    """
+    منتظر آماده شدن نتیجه‌ی جستجوی شماره همراه می‌ماند.
+    خروجی: (ready: bool, has_results: bool)
+    - ready=True, has_results=True   → جدول با حداقل یک ردیف نتیجه آماده است.
+    - ready=True, has_results=False  → سامانه جستجو را کامل کرده ولی «تعداد کل اشخاص یافت شده» صفر بوده (نتیجه‌ای نیست).
+    - ready=False                    → هیچ‌کدام از حالت‌های بالا در بازه‌ی زمانی داده‌شده رخ نداد (تاخیر سامانه).
+    """
     for _ in range(timeout_sec):
-        has_table = await page.evaluate('''() => {
+        result = await page.evaluate('''() => {
             const tbody = document.querySelector('tbody');
-            return tbody !== null && tbody.querySelectorAll('tr').length > 0;
+            const hasRows = tbody !== null && tbody.querySelectorAll('tr').length > 0;
+            if (hasRows) return {ready: true, hasResults: true};
+
+            const bodyText = document.body.innerText || "";
+            const match = bodyText.match(/تعداد کل اشخاص یافت شده\\s*:?\\s*([0-9۰-۹]+)/);
+            if (match) {
+                const faDigits = "۰۱۲۳۴۵۶۷۸۹";
+                const toEng = (s) => s.split('').map(ch => {
+                    const idx = faDigits.indexOf(ch);
+                    return idx >= 0 ? String(idx) : ch;
+                }).join('');
+                const count = parseInt(toEng(match[1]), 10);
+                return {ready: true, hasResults: count > 0};
+            }
+            return {ready: false, hasResults: false};
         }''')
-        if has_table:
-            return True
+        if result['ready']:
+            return True, result['hasResults']
         await asyncio.sleep(1)
-    return False
+    return False, False
 
 
 async def wait_for_manual_login(bot: Bot):
@@ -435,7 +507,12 @@ async def process_task(data, bot: Bot):
                     await bot.send_message(ADMIN_ID, f"⚠️ [PHONE_SEARCH] خطای ثنا برای {phone_number} (کاربر {user_id}): {alert_message}")
                     return
 
-                table_ready = await _wait_for_mobile_search_table(sana_page, timeout_sec=30)
+                table_ready, has_results = await _wait_for_mobile_search_table(sana_page, timeout_sec=30)
+                if table_ready and not has_results:
+                    await safe_click_by_text(sana_page, "بستن", bot, user_id)
+                    await bot.send_message(user_id, f"❌ براساس شماره {phone_number}، موردی یافت نشد.")
+                    return
+
                 if not table_ready:
                     retry_clicked = await sana_page.evaluate('''() => {
                         const buttons = Array.from(document.querySelectorAll('button'));
@@ -448,7 +525,11 @@ async def process_task(data, bot: Bot):
                     # منتظر ناپدید شدن لودینگ
                     await asyncio.sleep(2)
                     await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=30)
-                    table_ready = await _wait_for_mobile_search_table(sana_page, timeout_sec=30)
+                    table_ready, has_results = await _wait_for_mobile_search_table(sana_page, timeout_sec=30)
+                    if table_ready and not has_results:
+                        await safe_click_by_text(sana_page, "بستن", bot, user_id)
+                        await bot.send_message(user_id, f"❌ براساس شماره {phone_number}، موردی یافت نشد.")
+                        return
 
                 if not table_ready:
                     await bot.send_message(
@@ -489,7 +570,7 @@ async def process_task(data, bot: Bot):
                 await safe_click_by_text(sana_page, "بستن", bot, user_id)
                 await resilient_sleep(sana_page, 2, bot, user_id)
                 if not persons:
-                    await bot.send_message(user_id, f"❌ برای شماره تماس {phone_number} هیچ شخصی یافت نشد.")
+                    await bot.send_message(user_id, f"❌ براساس شماره {phone_number}، موردی یافت نشد.")
                     return
 
                 await bot.send_message(ADMIN_ID, f"✅ تعداد {len(persons)} شخص یافت شد.")
@@ -688,6 +769,25 @@ async def process_task(data, bot: Bot):
                 # منتظر ناپدید شدن لودینگ افقی بالای صفحه
                 await asyncio.sleep(3)
                 await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
+
+                # ── بررسی خطای «کد رهگیری معتبر نیست» ────────────────────
+                # این چک باید قبل از بستن خودکار پاپ‌آپ‌ها (پایین‌تر) انجام شود،
+                # چون در غیر این صورت متن خطا قبل از خواندن، بسته می‌شود.
+                invalid_code_popup = await sana_page.evaluate('''() => {
+                    const popup = document.querySelector('.sweet-alert.showSweetAlert');
+                    if (popup) {
+                        const t = popup.innerText || "";
+                        if (t.includes("معتبر نیست")) return true;
+                    }
+                    return false;
+                }''')
+                if invalid_code_popup:
+                    try:
+                        await sana_page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
+                    except Exception:
+                        pass
+                    await bot.send_message(user_id, "❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
+                    return
 
                 if (
                     await sana_page.locator('text="لطفا اطلاعات خواسته شده را به درستی وارد نمایید"').is_visible()

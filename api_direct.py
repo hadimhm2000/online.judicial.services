@@ -23,7 +23,7 @@ import aiohttp
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import runtime_state
-from browser_helpers import force_click_by_text
+from browser_helpers import force_click_by_text, is_login_redirect_url
 from config import FEES
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,10 @@ class SessionExpiredError(FastCheckError):
 
 
 class PetitionNotFoundError(FastCheckError):
+    pass
+
+
+class InvalidTrackingCodeError(FastCheckError):
     pass
 
 
@@ -81,6 +85,8 @@ async def fast_pre_check(
         except SessionExpiredError:
             raise
         except PetitionNotFoundError:
+            raise
+        except InvalidTrackingCodeError:
             raise
         except Exception as e:
             logger.error(f"[FAST-CHECK] Page failed: {e}")
@@ -232,7 +238,7 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
         await page.goto(SAFE_URL, timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(2)
         is_login = await page.query_selector('#txtUsername')
-        if is_login:
+        if is_login or is_login_redirect_url(page.url):
             raise SessionExpiredError("نشست منقضی")
 
         # ── ناوبری به بخش مورد نظر ──────────────────────────────
@@ -291,6 +297,22 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
         await _wait_for_loading(page, timeout=45)
         await _dismiss_error_and_retry(page)
 
+        # ── بررسی خطای «کد رهگیری معتبر نیست» ────────────────────
+        invalid_code_popup = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (popup) {
+                const t = popup.innerText || "";
+                if (t.includes("معتبر نیست")) return true;
+            }
+            return false;
+        }''')
+        if invalid_code_popup:
+            try:
+                await page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
+            except Exception:
+                pass
+            raise InvalidTrackingCodeError("کد رهگیری یا نوع خدمت نامعتبر است")
+
         # ── بررسی یافتن پرونده ───────────────────────────────────
         not_found = await page.evaluate('''() => {
             const alert = document.querySelector('.alert-danger');
@@ -302,7 +324,7 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
             raise PetitionNotFoundError(f"پرونده‌ای با کد {tracking_code} یافت نشد")
 
         is_login = await page.query_selector('#txtUsername')
-        if is_login:
+        if is_login or is_login_redirect_url(page.url):
             raise SessionExpiredError("نشست منقضی")
 
         # ── کلیک منضمات و شمارش ─────────────────────────────────

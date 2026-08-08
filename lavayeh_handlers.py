@@ -2285,33 +2285,71 @@ async def admin_approve_lavayeh_receipt(callback: CallbackQuery, bot: Bot):
         note=f"مبلغ: {review['expected_amount']:,} ریال"
     )
 
-    runtime_state.pending_lavayeh_sign[user_id] = {
-        "tracking_code": pending.get("tracking_code", ""),
-        "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
-        "province": pending.get("lavayeh_province", ""),
-        "row_number": pending.get("lavayeh_row_number", 1),
-        "persons": pending.get("lavayeh_persons", []),
-        "sign_persons": [],
-        "persons_awaiting_sign": [],
-        "current_person_idx": None,
-        "sign_sent_time": None,
-        "sign_codes_received": {},
-        "wrong_code_time": None,
-        "code_sent_announce_time": None,
-        "resend_notified": False,
-        "total_no_action_start": None,
-    }
-    runtime_state.pending_lavayeh_payments.pop(user_id, None)
-
-    await bot.send_message(
-        user_id,
-        "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
-        "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
-        reply_markup=lavayeh_sign_ready_kb,
-        parse_mode="Markdown"
-    )
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
-    await user_state.set_state(Form.lavayeh_sign_ready)
+
+    # ── تمایز بین لایحه و اظهارنامه برای فلوی امضا (تایید دستی مدیر) ──
+    if is_ezhhar:
+        raw_persons = pending.get("lavayeh_persons", [])
+        sign_persons = []
+        for i, p in enumerate(raw_persons):
+            sign_persons.append({
+                "idx": i,
+                "name": p.get("name", p.get("national_id", f"شخص {i+1}")),
+                "person_type": p.get("person_type", ""),
+                "national_id": p.get("national_id", ""),
+            })
+        runtime_state.pending_ezhhar_sign[user_id] = {
+            "tracking_code": pending.get("tracking_code", ""),
+            "is_ezhharnameh": True,
+            "sign_persons": sign_persons,
+            "persons_awaiting_sign": list(range(len(sign_persons))),
+            "current_person_idx": 0,
+            "sign_codes_received": {},
+            "sign_sent_time": None,
+            "wrong_code_time": None,
+            "code_sent_announce_time": None,
+            "resend_notified": False,
+            "total_no_action_start": datetime.datetime.now(),
+        }
+        runtime_state.pending_lavayeh_payments.pop(user_id, None)
+
+        from keyboards import ezhhar_sign_ready_kb
+        await bot.send_message(
+            user_id,
+            "🖊 **مرحله اخذ امضای الکترونیک اظهارنامه:**\n\n"
+            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+            reply_markup=ezhhar_sign_ready_kb,
+            parse_mode="Markdown"
+        )
+        await user_state.set_state(Form.ezhhar_sign_ready)
+    else:
+        runtime_state.pending_lavayeh_sign[user_id] = {
+            "tracking_code": pending.get("tracking_code", ""),
+            "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
+            "province": pending.get("lavayeh_province", ""),
+            "row_number": pending.get("lavayeh_row_number", 1),
+            "persons": pending.get("lavayeh_persons", []),
+            "sign_persons": [],
+            "persons_awaiting_sign": [],
+            "current_person_idx": None,
+            "sign_sent_time": None,
+            "sign_codes_received": {},
+            "wrong_code_time": None,
+            "code_sent_announce_time": None,
+            "resend_notified": False,
+            "total_no_action_start": None,
+        }
+        runtime_state.pending_lavayeh_payments.pop(user_id, None)
+
+        await bot.send_message(
+            user_id,
+            "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
+            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+            reply_markup=lavayeh_sign_ready_kb,
+            parse_mode="Markdown"
+        )
+        await user_state.set_state(Form.lavayeh_sign_ready)
+
 
     # حذف فایل رسید
     photo_path = review.get("photo_path")

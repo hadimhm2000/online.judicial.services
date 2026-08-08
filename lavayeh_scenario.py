@@ -849,8 +849,10 @@ async def _select_province(page, province: str, bot: Bot, user_id: int):
     }''')
     await asyncio.sleep(2)
 
-    is_tehran_excl = ("به‌جز" in province or "به جز" in province) and "تهران" in province
-    is_tehran_city_only = (not is_tehran_excl) and province.strip() == "شهر تهران"
+    is_tehran_excl = "تهران" in province and (
+        "به‌جز" in province or "به جز" in province or "بجز" in province
+    )
+    is_tehran_city_only = "تهران" in province and not is_tehran_excl
 
     clicked = await page.evaluate('''(args) => {
         const { province, isTehranExcl, isTehranCityOnly } = args;

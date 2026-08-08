@@ -21,17 +21,34 @@ from ocr import verify_payment_receipt
 from api_direct import (
     fast_pre_check, FastCheckError, SessionExpiredError as FastSessionExpiredError,
     PetitionNotFoundError as FastPetitionNotFoundError,
+    InvalidTrackingCodeError as FastInvalidTrackingCodeError,
 )
 from keyboards import (
     restart_kb, accept_rules_kb, flow_type_kb, main_menu_kb, doc_category_kb,
     attachments_kb, cart_kb, pay_kb, confirm_single_kb, confirm_cart_kb,
-    admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb
+    admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb,
+    payment_cancel_kb,
 )
 from lavayeh_handlers import lavayeh_router
 from stamp_calc_handlers import stamp_calc_router
 from ezhharnameh_handlers import ezhharnameh_router
 from file_tools_handlers import file_tools_router, file_tools_entry
 from subscription_handlers import subscription_router, subscription_expiry_checker
+
+logger = logging.getLogger(__name__)
+
+# بازه‌ی سال‌های معتبر برای ۷ رقم ابتدایی کد رهگیری (۱۳۹۴ تا ۱۴۰۶)
+TRACKING_CODE_PREFIX_MIN = 1394220
+TRACKING_CODE_PREFIX_MAX = 1406220
+TRACKING_CODE_LENGTH = 16
+
+
+def _is_valid_tracking_code(code: str) -> bool:
+    """کد رهگیری باید ۱۶ رقمی باشد و ۷ رقم ابتدایی آن در بازه‌ی معتبر باشد."""
+    if len(code) != TRACKING_CODE_LENGTH or not code.isdigit():
+        return False
+    prefix = int(code[:7])
+    return TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX
 
 router = Router()
 
@@ -223,7 +240,19 @@ async def admin_reject_cart(callback: CallbackQuery, bot: Bot):
 # callback تایید دستی محاسبه تمبر
 
 @router.message(Form.waiting_for_payment_receipt)
-async def process_payment_receipt_text_only(message: types.Message):
+async def process_payment_receipt_text_only(message: types.Message, state: FSMContext):
+    if message.text and "انصراف" in message.text:
+        data = await state.get_data()
+        cart = data.get("cart", [])
+        await log_event(
+            "کنسل", "پرداخت", message.from_user.full_name, message.from_user.id,
+            tracking_code=None, doc_name=f"{len(cart)} مورد" if cart else None,
+            payment_status="کنسل شده توسط کاربر (مرحله فیش پرداخت)"
+        )
+        await state.clear()
+        await message.answer("لغو گردید. لطفاً مجدداً شروع کنید:", reply_markup=main_menu_kb)
+        await state.set_state(Form.main_menu)
+        return
     await message.answer("⚠️ لطفاً تصویر فیش واریزی خود را به صورت **عکس (Photo)** ارسال فرمایید:")
 
 
@@ -518,7 +547,7 @@ async def process_main_menu(message: types.Message, state: FSMContext):
             f"👤 بنام: **{ACCOUNT_NAME}**\n\n"
             f"👇 پس از واریز، **عکس فیش** را ارسال فرمایید."
         )
-        await message.answer(payment_msg, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+        await message.answer(payment_msg, reply_markup=payment_cancel_kb, parse_mode="Markdown")
         await state.set_state(Form.waiting_for_payment_receipt)
         return
         
@@ -547,6 +576,13 @@ async def process_tracking_code(message: types.Message, state: FSMContext):
     if not re.match(r'^[0-9]+$', clean_code):
         await message.answer("⚠️ فرمت نامعتبر است. فقط عدد ارسال کنید:")
         return
+    if not _is_valid_tracking_code(clean_code):
+        await message.answer(
+            "⚠️ کد رهگیری نامعتبر است.\n"
+            "کد رهگیری باید ۱۶ رقم باشد و با یکی از سال‌های ۱۳۹۴ تا ۱۴۰۶ (یعنی اعداد ۱۳۹۴۲۲۰ الی ۱۴۰۶۲۲۰) شروع شود.\n"
+            "لطفاً کد را دوباره بررسی و ارسال فرمایید:"
+        )
+        return
     await state.update_data(query_type="کد رهگیری", tracking_code=clean_code)
     await message.answer("مربوط به کدام دسته است؟", reply_markup=doc_category_kb)
     await state.set_state(Form.waiting_for_doc_category)
@@ -554,8 +590,8 @@ async def process_tracking_code(message: types.Message, state: FSMContext):
 @router.message(Form.waiting_for_doc_category)
 async def process_doc_category(message: types.Message, state: FSMContext):
     category = message.text
-    if category == "🔙 بازگشت به منوی قبل":
-        await message.answer("کد رهگیری را ارسال کنید:", reply_markup=ReplyKeyboardRemove())
+    if category == "🔙 بازگشت به منوی قبل" or category == "🔙 بازگشت":
+        await message.answer("کد رهگیری را ارسال کنید:", reply_markup=back_only_kb)
         await state.set_state(Form.waiting_for_tracking_code)
         return
     await state.update_data(doc_category=category)
@@ -580,6 +616,16 @@ async def process_doc_subcategory(message: types.Message, state: FSMContext):
 @router.message(Form.waiting_for_attachments_opt)
 async def process_attachments_opt(message: types.Message, state: FSMContext):
     if not message.text: return
+    if message.text == "🔙 بازگشت":
+        data = await state.get_data()
+        category = data.get('doc_category', '')
+        if category in SUB_MENUS:
+            await message.answer(f"نوع دقیق «{category}» را مشخص کنید:", reply_markup=create_submenu_kb(category))
+            await state.set_state(Form.waiting_for_doc_subcategory)
+        else:
+            await message.answer("مربوط به کدام دسته است؟", reply_markup=doc_category_kb)
+            await state.set_state(Form.waiting_for_doc_category)
+        return
     need_attachments = "بله" in message.text
     await state.update_data(need_attachments=need_attachments)
     
@@ -605,6 +651,9 @@ async def process_attachments_opt(message: types.Message, state: FSMContext):
             fast_success = True
         except FastPetitionNotFoundError:
             await message.answer(f"❌ پرونده‌ای با کد `{data['tracking_code']}` یافت نگردید.")
+            return
+        except FastInvalidTrackingCodeError:
+            await message.answer("❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
             return
         except FastSessionExpiredError:
             logger.warning("[FAST-CHECK] نشست منقضی — فال‌بک به صف مرورگر")
@@ -755,7 +804,7 @@ async def confirm_opt_process(message: types.Message, state: FSMContext, bot: Bo
             f"👤 بنام: **{ACCOUNT_NAME}**\n\n"
             f"👇 پس از واریز، **عکس فیش** را ارسال فرمایید."
         )
-        await message.answer(payment_msg, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+        await message.answer(payment_msg, reply_markup=payment_cancel_kb, parse_mode="Markdown")
         await state.set_state(Form.waiting_for_payment_receipt)
         
     elif "افزودن به سبد خرید" in message.text:

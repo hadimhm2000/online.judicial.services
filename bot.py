@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import socket
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,7 +12,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
-from config import BOT_TOKEN, PROXY_URL
+from config import BOT_TOKEN, TELEGRAM_API_BASE
 from handlers import router
 from scenarios import browser_worker
 import runtime_state
@@ -24,27 +23,12 @@ runtime_state.dp = dp
 
 
 async def main():
-    # بررسی پویای دسترسی پروکسی
-    proxy_active = False
-    if PROXY_URL:
-        try:
-            clean_url = PROXY_URL.replace("http://", "").replace("https://", "")
-            if "@" in clean_url:
-                clean_url = clean_url.split("@")[-1]
-            host, port = clean_url.split(":")
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.5)
-                s.connect((host, int(port)))
-                proxy_active = True
-        except Exception:
-            logging.warning(f"⚠️ پروکسی ({PROXY_URL}) در دسترس نیست. اتصال مستقیم...")
-
-    if proxy_active:
-        logging.info(f"🔌 اتصال از طریق پروکسی: {PROXY_URL}")
-        session = AiohttpSession(proxy=PROXY_URL)
-    else:
-        logging.info("🔌 اتصال مستقیم به سرورهای تلگرام...")
-        session = AiohttpSession()
+    # سرور ایرانی مستقیم به api.telegram.org دسترسی ندارد، برای همین
+    # همه‌ی درخواست‌ها از طریق Cloudflare Worker (که خودش با تلگرام حرف می‌زند)
+    # رد می‌شوند. TELEGRAM_API_BASE در config.py تنظیم شده است.
+    logging.info(f"🔌 اتصال از طریق Cloudflare Worker: {TELEGRAM_API_BASE}")
+    custom_api_server = TelegramAPIServer.from_base(TELEGRAM_API_BASE)
+    session = AiohttpSession(api=custom_api_server)
 
     bot = Bot(token=BOT_TOKEN, session=session)
     await bot.set_my_commands([BotCommand(command="start", description="شروع مجدد ربات / ثبت استعلام جدید")])

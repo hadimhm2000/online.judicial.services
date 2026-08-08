@@ -29,7 +29,18 @@ if not _admin_id_raw:
     )
 ADMIN_ID = int(_admin_id_raw)
 
-PROXY_URL = os.environ.get("PROXY_URL", "http://127.0.0.1:10808")
+# سرور ایرانی مستقیم به api.telegram.org دسترسی ندارد، برای همین از یک
+# Cloudflare Worker به‌عنوان واسطه (reverse-proxy) استفاده می‌کنیم.
+# اگر لازم شد آدرس عوض شود، کافیست متغیر محیطی TELEGRAM_API_BASE ست شود
+# (نیازی به تغییر کد نیست).
+TELEGRAM_API_BASE = os.environ.get(
+    "TELEGRAM_API_BASE",
+    "https://judicial-proxy.hadimhm79.workers.dev"
+)
+
+# اگر روزی به یک پروکسی واقعی (HTTP/SOCKS) نیاز شد، می‌توانی این متغیر را
+# در .env ست کنی. در حالت فعلی (استفاده از Cloudflare Worker) خالی می‌ماند.
+PROXY_URL = os.environ.get("PROXY_URL", "")
 
 # ================= تنظیمات مالی ربات =================
 CARD_NUMBER = "6219861936929354"

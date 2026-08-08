@@ -43,13 +43,15 @@ doc_category_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="شکواییه"), KeyboardButton(text="دادخواست بدوی")],
         [KeyboardButton(text="دعاوی دادگاههای صلح")],
         [KeyboardButton(text="دعاوی اعتراضی"), KeyboardButton(text="دعاوی طاری")],
-        [KeyboardButton(text="شورای حل اختلاف"), KeyboardButton(text="دیوان عدالت اداری")]
+        [KeyboardButton(text="شورای حل اختلاف"), KeyboardButton(text="دیوان عدالت اداری")],
+        [KeyboardButton(text="🔙 بازگشت")]
     ], resize_keyboard=True)
 
 attachments_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📎 بله، پیوست‌ها هم ارسال شوند")],
-        [KeyboardButton(text="📄 خیر، فقط چاپ اصلی کافی است")]
+        [KeyboardButton(text="📄 خیر، فقط چاپ اصلی کافی است")],
+        [KeyboardButton(text="🔙 بازگشت")]
     ], resize_keyboard=True)
 
 cart_kb = ReplyKeyboardMarkup(
@@ -155,6 +157,9 @@ lavayeh_branch_input_method_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# گزینه‌ی «تهران» قبلاً مبهم بود و باعث می‌شد ربات به‌جای «شهر تهران»
+# به‌اشتباه «استان تهران به جز شهر تهران» را در سامانه انتخاب کند.
+# طبق دو مقدار دقیق سامانه، اکنون دو گزینه‌ی جدا و صریح داریم:
 TEHRAN_CITY_LABEL = "واحدهای قضایی مستقر در شهر تهران"
 TEHRAN_PROVINCE_EXCL_LABEL = "واحدهای قضایی مستقر در استان تهران به جز شهر تهران"
 
@@ -176,6 +181,7 @@ def create_province_kb():
     while i < len(PROVINCES):
         item = PROVINCES[i]
         if item == TEHRAN_CITY_LABEL:
+            # دو گزینه‌ی تهران همیشه کنار هم و در یک ردیف نمایش داده شوند
             keyboard.append([
                 KeyboardButton(text=TEHRAN_CITY_LABEL),
                 KeyboardButton(text=TEHRAN_PROVINCE_EXCL_LABEL),

@@ -1,0 +1,479 @@
+--- orig/handlers.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/handlers.py	2026-08-07 18:35:54.627306405 +0000
+@@ -21,11 +21,13 @@
+ from api_direct import (
+     fast_pre_check, FastCheckError, SessionExpiredError as FastSessionExpiredError,
+     PetitionNotFoundError as FastPetitionNotFoundError,
++    InvalidTrackingCodeError as FastInvalidTrackingCodeError,
+ )
+ from keyboards import (
+     restart_kb, accept_rules_kb, flow_type_kb, main_menu_kb, doc_category_kb,
+     attachments_kb, cart_kb, pay_kb, confirm_single_kb, confirm_cart_kb,
+-    admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb
++    admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb,
++    payment_cancel_kb,
+ )
+ from lavayeh_handlers import lavayeh_router
+ from stamp_calc_handlers import stamp_calc_router
+@@ -33,6 +35,21 @@
+ from file_tools_handlers import file_tools_router, file_tools_entry
+ from subscription_handlers import subscription_router, subscription_expiry_checker
+ 
++logger = logging.getLogger(__name__)
++
++# بازه‌ی سال‌های معتبر برای ۷ رقم ابتدایی کد رهگیری (۱۳۹۴ تا ۱۴۰۶)
++TRACKING_CODE_PREFIX_MIN = 1394220
++TRACKING_CODE_PREFIX_MAX = 1406220
++TRACKING_CODE_LENGTH = 16
++
++
++def _is_valid_tracking_code(code: str) -> bool:
++    """کد رهگیری باید ۱۶ رقمی باشد و ۷ رقم ابتدایی آن در بازه‌ی معتبر باشد."""
++    if len(code) != TRACKING_CODE_LENGTH or not code.isdigit():
++        return False
++    prefix = int(code[:7])
++    return TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX
++
+ router = Router()
+ 
+ # ── include کردن روترها ───────────────────────────────────────────────────────
+@@ -223,7 +240,19 @@
+ # callback تایید دستی محاسبه تمبر
+ 
+ @router.message(Form.waiting_for_payment_receipt)
+-async def process_payment_receipt_text_only(message: types.Message):
++async def process_payment_receipt_text_only(message: types.Message, state: FSMContext):
++    if message.text and "انصراف" in message.text:
++        data = await state.get_data()
++        cart = data.get("cart", [])
++        await log_event(
++            "کنسل", "پرداخت", message.from_user.full_name, message.from_user.id,
++            tracking_code=None, doc_name=f"{len(cart)} مورد" if cart else None,
++            payment_status="کنسل شده توسط کاربر (مرحله فیش پرداخت)"
++        )
++        await state.clear()
++        await message.answer("لغو گردید. لطفاً مجدداً شروع کنید:", reply_markup=main_menu_kb)
++        await state.set_state(Form.main_menu)
++        return
+     await message.answer("⚠️ لطفاً تصویر فیش واریزی خود را به صورت **عکس (Photo)** ارسال فرمایید:")
+ 
+ 
+@@ -518,7 +547,7 @@
+             f"👤 بنام: **{ACCOUNT_NAME}**\n\n"
+             f"👇 پس از واریز، **عکس فیش** را ارسال فرمایید."
+         )
+-        await message.answer(payment_msg, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
++        await message.answer(payment_msg, reply_markup=payment_cancel_kb, parse_mode="Markdown")
+         await state.set_state(Form.waiting_for_payment_receipt)
+         return
+         
+@@ -547,6 +576,13 @@
+     if not re.match(r'^[0-9]+$', clean_code):
+         await message.answer("⚠️ فرمت نامعتبر است. فقط عدد ارسال کنید:")
+         return
++    if not _is_valid_tracking_code(clean_code):
++        await message.answer(
++            "⚠️ کد رهگیری نامعتبر است.\n"
++            "کد رهگیری باید ۱۶ رقم باشد و با یکی از سال‌های ۱۳۹۴ تا ۱۴۰۶ (یعنی اعداد ۱۳۹۴۲۲۰ الی ۱۴۰۶۲۲۰) شروع شود.\n"
++            "لطفاً کد را دوباره بررسی و ارسال فرمایید:"
++        )
++        return
+     await state.update_data(query_type="کد رهگیری", tracking_code=clean_code)
+     await message.answer("مربوط به کدام دسته است؟", reply_markup=doc_category_kb)
+     await state.set_state(Form.waiting_for_doc_category)
+@@ -616,6 +652,9 @@
+         except FastPetitionNotFoundError:
+             await message.answer(f"❌ پرونده‌ای با کد `{data['tracking_code']}` یافت نگردید.")
+             return
++        except FastInvalidTrackingCodeError:
++            await message.answer("❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
++            return
+         except FastSessionExpiredError:
+             logger.warning("[FAST-CHECK] نشست منقضی — فال‌بک به صف مرورگر")
+         except FastCheckError as e:
+@@ -765,7 +804,7 @@
+             f"👤 بنام: **{ACCOUNT_NAME}**\n\n"
+             f"👇 پس از واریز، **عکس فیش** را ارسال فرمایید."
+         )
+-        await message.answer(payment_msg, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
++        await message.answer(payment_msg, reply_markup=payment_cancel_kb, parse_mode="Markdown")
+         await state.set_state(Form.waiting_for_payment_receipt)
+         
+     elif "افزودن به سبد خرید" in message.text:
+--- orig/browser_helpers.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/browser_helpers.py	2026-08-07 18:28:52.669964463 +0000
+@@ -13,6 +13,15 @@
+ from config import ADMIN_ID
+ from keyboards import admin_login_kb
+ 
++# آدرسی که سامانه‌ی ثنا هنگام انقضای نشست کاربر را به آن ریدایرکت می‌کند.
++# (SSO — صفحه‌ی جدید لاگین که با فرم قدیمی #txtUsername متفاوت است)
++SESSION_LOGIN_REDIRECT_PREFIX = "https://iehraz2.adliran.ir/Login/Authenticate"
++
++
++def is_login_redirect_url(url: str) -> bool:
++    """آیا URL فعلی صفحه، ریدایرکت انقضای نشست به آدرس لاگین ثناست؟"""
++    return bool(url) and url.startswith(SESSION_LOGIN_REDIRECT_PREFIX)
++
+ 
+ class NavigationResetError(Exception):
+     """
+@@ -196,12 +205,22 @@
+     finally:
+         await login_page.close()
+ 
+-    # ── بستن پاپ‌آپ خطا روی صفحه‌ی اصلی تا همان مرحله بدون ریست ادامه پیدا کند ──
++    # ── بازگرداندن صفحه‌ی اصلی به سامانه ─────────────────────────────────────
+     if page is not None:
+-        try:
+-            await dismiss_expiry_popup(page)
+-        except Exception as e:
+-            logging.warning(f"handle_session_expired: could not dismiss popup on main page: {e}")
++        if is_login_redirect_url(page.url):
++            # صفحه به آدرس لاگین (iehraz2) ریدایرکت شده بود؛ باید صریحاً
++            # به سامانه برگردد چون پاپ‌آپی برای بستن وجود ندارد.
++            try:
++                await page.goto("https://sakha2.adliran.ir/Offices/Index", timeout=30000)
++                await asyncio.sleep(2)
++            except Exception as e:
++                logging.warning(f"handle_session_expired: could not navigate main page back after iehraz2 redirect: {e}")
++        else:
++            # ── بستن پاپ‌آپ خطا روی صفحه‌ی اصلی تا همان مرحله بدون ریست ادامه پیدا کند ──
++            try:
++                await dismiss_expiry_popup(page)
++            except Exception as e:
++                logging.warning(f"handle_session_expired: could not dismiss popup on main page: {e}")
+ 
+     await bot.send_message(ADMIN_ID, "✅ **نشست با موفقیت تمدید شد.** ادامه‌ی فرآیند از همان مرحله...")
+     await asyncio.sleep(2)
+@@ -256,6 +275,12 @@
+             pass
+         raise NavigationResetError("GetLegalPersonType redirect occurred. Navigated to Offices/Index and restarting task...")
+ 
++    # ── ریدایرکت به صفحه‌ی لاگین جدید ثنا (iehraz2) ────────────────────────
++    if is_login_redirect_url(page.url):
++        logging.warning(f"⚠️ ریدایرکت به صفحه لاگین ثنا (iehraz2) شناسایی شد! URL: {page.url}")
++        await handle_session_expired(bot, user_id, page=page)
++        return True
++
+     is_expired = await page.evaluate('''() => {
+         // ── ۱. بررسی مدال تمدید نشست: «X از ساعت ورود شما می‌گذرد» ──
+         const modal = document.querySelector('.modal-dialog, .modal.fade.in, .modal-content');
+--- orig/scenarios.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/scenarios.py	2026-08-07 18:34:25.722853606 +0000
+@@ -18,7 +18,7 @@
+     handle_session_expired, wait_for_angular_idle, check_and_handle_expiry,
+     check_and_handle_load_error, resilient_sleep, goto_url_with_retry,
+     safe_click_by_text, safe_type, NavigationResetError,
+-    wait_for_horizontal_loading_bar,
++    wait_for_horizontal_loading_bar, is_login_redirect_url,
+ )
+ from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
+ 
+@@ -27,11 +27,15 @@
+ # PRE_CHECK — استعلام تعداد پیوست در تب جدید (بدون دستکاری sana_page)
+ # ══════════════════════════════════════════════════════════════════════════════
+ 
+-async def _process_pre_check_on_new_page(data: dict, bot: Bot):
++async def _process_pre_check_on_new_page(data: dict, bot: Bot, _retry: bool = False):
+     """
+     استعلام تعداد پیوست‌ها در یک تب جدید — بدون دستکاری sana_page.
+     همان روند استعلام کد رهگیری را در تب جدید پیاده‌سازی می‌کند
+     تا روند ثبت پرونده در sana_page مختل نشود.
++
++    اگر نشست منقضی باشد، به مدیر اطلاع داده و منتظر لاگین مجدد او می‌ماند،
++    سپس همین تسک را یک‌بار به‌صورت خودکار از نو تلاش می‌کند (_retry جلوی
++    حلقه‌ی بی‌نهایت را می‌گیرد).
+     """
+     browser_context = runtime_state.browser_context
+     user_id = data['user_id']
+@@ -48,11 +52,26 @@
+         await page.goto("https://sakha2.adliran.ir/Offices/Index", timeout=30000, wait_until="domcontentloaded")
+         await asyncio.sleep(2)
+ 
+-        # بررسی انقضا نشست
++        # بررسی انقضا نشست (فرم قدیمی یا ریدایرکت جدید به iehraz2)
+         is_login = await page.query_selector('#txtUsername')
+-        if is_login:
+-            await bot.send_message(user_id, "⚠️ نشست سامانه منقضی شده. لطفاً دوباره تلاش کنید.")
+-            return
++        if is_login or is_login_redirect_url(page.url):
++            if _retry:
++                # قبلاً یک‌بار مدیر لاگین کرده و باز هم منقضی است؛ برای جلوگیری
++                # از حلقه‌ی بی‌نهایت، دیگر تلاش خودکار نمی‌کنیم.
++                await bot.send_message(user_id, "⚠️ نشست سامانه همچنان منقضی است. لطفاً کمی بعد دوباره تلاش کنید.")
++                return
++
++            logging.warning(f"[PRE_CHECK] نشست منقضی — اطلاع به مدیر و انتظار لاگین مجدد (کد: {tracking_code})")
++            await handle_session_expired(bot, user_id, page=page)
++
++            try:
++                await page.close()
++            except Exception:
++                pass
++            page = None
++
++            # ── تلاش مجدد خودکار همین تسک، بعد از لاگین مدیر ─────────
++            return await _process_pre_check_on_new_page(data, bot, _retry=True)
+ 
+         # ── ۲. ناوبری به بخش مورد نظر ─────────────────────────────
+         nav_map = {
+@@ -117,6 +136,23 @@
+         # ── ۵. بستن پاپ‌آپ خطا (اگر بود) ─────────────────────────────
+         await _precheck_dismiss_error(page)
+ 
++        # ── بررسی خطای «کد رهگیری معتبر نیست» ────────────────────────
++        invalid_code_popup = await page.evaluate('''() => {
++            const popup = document.querySelector('.sweet-alert.showSweetAlert');
++            if (popup) {
++                const t = popup.innerText || "";
++                if (t.includes("معتبر نیست")) return true;
++            }
++            return false;
++        }''')
++        if invalid_code_popup:
++            try:
++                await page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
++            except Exception:
++                pass
++            await bot.send_message(user_id, "❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
++            return
++
+         # ── ۶. بررسی عدم یافتن پرونده ─────────────────────────────
+         not_found = await page.evaluate('''() => {
+             const alert = document.querySelector('.alert-danger');
+@@ -128,6 +164,21 @@
+             await bot.send_message(user_id, f"❌ پرونده‌ای با کد `{tracking_code}` یافت نگردید.")
+             return
+ 
++        # بررسی مجدد انقضای نشست (ممکن است حین جستجو رخ داده باشد)
++        is_login = await page.query_selector('#txtUsername')
++        if is_login or is_login_redirect_url(page.url):
++            if _retry:
++                await bot.send_message(user_id, "⚠️ نشست سامانه همچنان منقضی است. لطفاً کمی بعد دوباره تلاش کنید.")
++                return
++            logging.warning(f"[PRE_CHECK] نشست منقضی حین جستجو — اطلاع به مدیر (کد: {tracking_code})")
++            await handle_session_expired(bot, user_id, page=page)
++            try:
++                await page.close()
++            except Exception:
++                pass
++            page = None
++            return await _process_pre_check_on_new_page(data, bot, _retry=True)
++
+         # ── ۷. کلیک «منضمات» و شمارش ────────────────────────────
+         await force_click_by_text(page, "منضمات")
+         await asyncio.sleep(5)
+@@ -689,6 +740,25 @@
+                 await asyncio.sleep(3)
+                 await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
+ 
++                # ── بررسی خطای «کد رهگیری معتبر نیست» ────────────────────
++                # این چک باید قبل از بستن خودکار پاپ‌آپ‌ها (پایین‌تر) انجام شود،
++                # چون در غیر این صورت متن خطا قبل از خواندن، بسته می‌شود.
++                invalid_code_popup = await sana_page.evaluate('''() => {
++                    const popup = document.querySelector('.sweet-alert.showSweetAlert');
++                    if (popup) {
++                        const t = popup.innerText || "";
++                        if (t.includes("معتبر نیست")) return true;
++                    }
++                    return false;
++                }''')
++                if invalid_code_popup:
++                    try:
++                        await sana_page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
++                    except Exception:
++                        pass
++                    await bot.send_message(user_id, "❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
++                    return
++
+                 if (
+                     await sana_page.locator('text="لطفا اطلاعات خواسته شده را به درستی وارد نمایید"').is_visible()
+                     or await sana_page.locator('button:has-text("بستن")').is_visible()
+--- orig/api_direct.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/api_direct.py	2026-08-07 18:34:57.653243258 +0000
+@@ -23,7 +23,7 @@
+ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+ 
+ import runtime_state
+-from browser_helpers import force_click_by_text
++from browser_helpers import force_click_by_text, is_login_redirect_url
+ from config import FEES
+ 
+ logger = logging.getLogger(__name__)
+@@ -49,6 +49,10 @@
+     pass
+ 
+ 
++class InvalidTrackingCodeError(FastCheckError):
++    pass
++
++
+ class EndpointsNotDiscovered(FastCheckError):
+     pass
+ 
+@@ -82,6 +86,8 @@
+             raise
+         except PetitionNotFoundError:
+             raise
++        except InvalidTrackingCodeError:
++            raise
+         except Exception as e:
+             logger.error(f"[FAST-CHECK] Page failed: {e}")
+             raise FastCheckError(str(e))
+@@ -232,7 +238,7 @@
+         await page.goto(SAFE_URL, timeout=30000, wait_until="domcontentloaded")
+         await asyncio.sleep(2)
+         is_login = await page.query_selector('#txtUsername')
+-        if is_login:
++        if is_login or is_login_redirect_url(page.url):
+             raise SessionExpiredError("نشست منقضی")
+ 
+         # ── ناوبری به بخش مورد نظر ──────────────────────────────
+@@ -291,6 +297,22 @@
+         await _wait_for_loading(page, timeout=45)
+         await _dismiss_error_and_retry(page)
+ 
++        # ── بررسی خطای «کد رهگیری معتبر نیست» ────────────────────
++        invalid_code_popup = await page.evaluate('''() => {
++            const popup = document.querySelector('.sweet-alert.showSweetAlert');
++            if (popup) {
++                const t = popup.innerText || "";
++                if (t.includes("معتبر نیست")) return true;
++            }
++            return false;
++        }''')
++        if invalid_code_popup:
++            try:
++                await page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
++            except Exception:
++                pass
++            raise InvalidTrackingCodeError("کد رهگیری یا نوع خدمت نامعتبر است")
++
+         # ── بررسی یافتن پرونده ───────────────────────────────────
+         not_found = await page.evaluate('''() => {
+             const alert = document.querySelector('.alert-danger');
+@@ -302,7 +324,7 @@
+             raise PetitionNotFoundError(f"پرونده‌ای با کد {tracking_code} یافت نشد")
+ 
+         is_login = await page.query_selector('#txtUsername')
+-        if is_login:
++        if is_login or is_login_redirect_url(page.url):
+             raise SessionExpiredError("نشست منقضی")
+ 
+         # ── کلیک منضمات و شمارش ─────────────────────────────────
+--- orig/keyboards.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/keyboards.py	2026-08-07 18:43:20.892942302 +0000
+@@ -92,6 +92,7 @@
+ 
+ confirm_single_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ تایید و دریافت فاکتور پرداخت"), KeyboardButton(text="❌ انصراف و اصلاح اطلاعات")]], resize_keyboard=True)
+ confirm_cart_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ افزودن به سبد خرید"), KeyboardButton(text="❌ انصراف و اصلاح اطلاعات")]], resize_keyboard=True)
++payment_cancel_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ انصراف")]], resize_keyboard=True)
+ admin_login_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ ورودم تکمیل شد")]], resize_keyboard=True)
+ 
+ def create_submenu_kb(category_name):
+@@ -156,9 +157,16 @@
+     resize_keyboard=True
+ )
+ 
++# گزینه‌ی «تهران» قبلاً مبهم بود و باعث می‌شد ربات به‌جای «شهر تهران»
++# به‌اشتباه «استان تهران به جز شهر تهران» را در سامانه انتخاب کند.
++# طبق دو مقدار دقیق سامانه، اکنون دو گزینه‌ی جدا و صریح داریم:
++TEHRAN_CITY_LABEL = "واحدهای قضایی مستقر در شهر تهران"
++TEHRAN_PROVINCE_EXCL_LABEL = "واحدهای قضایی مستقر در استان تهران به جز شهر تهران"
++
+ PROVINCES = [
+     "آذربایجان شرقی", "آذربایجان غربی", "اردبیل", "اصفهان",
+-    "البرز", "ایلام", "بوشهر", "تهران",
++    "البرز", "ایلام", "بوشهر",
++    TEHRAN_CITY_LABEL, TEHRAN_PROVINCE_EXCL_LABEL,
+     "چهارمحال و بختیاری", "خراسان جنوبی", "خراسان رضوی", "خراسان شمالی",
+     "خوزستان", "زنجان", "سمنان", "سیستان و بلوچستان",
+     "فارس", "قزوین", "قم", "کردستان",
+@@ -169,11 +177,23 @@
+ 
+ def create_province_kb():
+     keyboard = []
+-    for i in range(0, len(PROVINCES), 2):
+-        row = [KeyboardButton(text=PROVINCES[i])]
++    i = 0
++    while i < len(PROVINCES):
++        item = PROVINCES[i]
++        if item == TEHRAN_CITY_LABEL:
++            # دو گزینه‌ی تهران همیشه کنار هم و در یک ردیف نمایش داده شوند
++            keyboard.append([
++                KeyboardButton(text=TEHRAN_CITY_LABEL),
++                KeyboardButton(text=TEHRAN_PROVINCE_EXCL_LABEL),
++            ])
++            i += 2
++            continue
+         if i + 1 < len(PROVINCES):
+-            row.append(KeyboardButton(text=PROVINCES[i + 1]))
+-        keyboard.append(row)
++            keyboard.append([KeyboardButton(text=item), KeyboardButton(text=PROVINCES[i + 1])])
++            i += 2
++        else:
++            keyboard.append([KeyboardButton(text=item)])
++            i += 1
+     keyboard.append([KeyboardButton(text="🔙 بازگشت")])
+     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+ 
+--- orig/lavayeh_scenario.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/lavayeh_scenario.py	2026-08-07 18:43:24.904853538 +0000
+@@ -849,8 +849,10 @@
+     }''')
+     await asyncio.sleep(2)
+ 
+-    is_tehran_excl = ("به‌جز" in province or "به جز" in province) and "تهران" in province
+-    is_tehran_city_only = (not is_tehran_excl) and province.strip() == "شهر تهران"
++    is_tehran_excl = "تهران" in province and (
++        "به‌جز" in province or "به جز" in province or "بجز" in province
++    )
++    is_tehran_city_only = "تهران" in province and not is_tehran_excl
+ 
+     clicked = await page.evaluate('''(args) => {
+         const { province, isTehranExcl, isTehranCityOnly } = args;
+--- orig/ealam_vakalaht_scenario.py	2026-08-07 18:23:28.000000000 +0000
++++ proj/ealam_vakalaht_scenario.py	2026-08-07 18:43:36.584961644 +0000
+@@ -510,7 +510,14 @@
+         if (btn) btn.click();
+     }''')
+     await asyncio.sleep(2)
+-    await page.evaluate('''(prov) => {
++
++    is_tehran_excl = "تهران" in province and (
++        "به‌جز" in province or "به جز" in province or "بجز" in province
++    )
++    is_tehran_city_only = "تهران" in province and not is_tehran_excl
++
++    await page.evaluate('''(args) => {
++        const { prov, isTehranExcl, isTehranCityOnly } = args;
+         const normalize = (s) => (s || '')
+             .replace(/\\u064A/g, '\\u06CC')
+             .replace(/\\u0643/g, '\\u06A9')
+@@ -518,11 +525,24 @@
+             .trim();
+         const normProv = normalize(prov);
+         const items = Array.from(document.querySelectorAll('.ui-select-choices-row-inner, .ui-select-choices div'));
++
++        if (isTehranExcl) {
++            const target = items.find(el => el.innerText &&
++                normalize(el.innerText).includes("تهران") &&
++                (normalize(el.innerText).includes("به جز") || normalize(el.innerText).includes("بجز")));
++            if (target) { target.click(); return; }
++        } else if (isTehranCityOnly) {
++            const target = items.find(el => el.innerText &&
++                normalize(el.innerText).includes("تهران") &&
++                !normalize(el.innerText).includes("به جز") && !normalize(el.innerText).includes("بجز"));
++            if (target) { target.click(); return; }
++        }
++
+         const exact = items.find(el => el.innerText && normalize(el.innerText) === normProv);
+         if (exact) { exact.click(); return; }
+         const fallback = items.find(el => el.innerText && normalize(el.innerText).includes(normProv));
+         if (fallback) fallback.click();
+-    }''', province)
++    }''', {"prov": province, "isTehranExcl": is_tehran_excl, "isTehranCityOnly": is_tehran_city_only})
+ 
+ 
+ async def _click_validate(page, bot: Bot, user_id: int):
