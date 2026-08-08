@@ -354,7 +354,7 @@ async def _ask_lavayeh_text(message: Message, state: FSMContext):
 # مرحله ۵ — متن لایحه + شروع بخش پیوست‌ها
 # ══════════════════════════════════════════════════════════════════════════════
 @ealam_router.message(Form.ealam_vakalaht_text)
-async def ealam_get_text(message: Message, state: FSMContext):
+async def ealam_get_text(message: Message, state: FSMContext, bot: Bot):
     text = message.text or ""
 
     # دکمه «ادامه مراحل» برای دعوی غیر مالی
@@ -366,8 +366,28 @@ async def ealam_get_text(message: Message, state: FSMContext):
         await message.answer("⚠️ لطفاً متن لایحه را به صورت متن ارسال فرمایید.")
         return
 
-    await state.update_data(ealam_lavayeh_text=text, ealam_attachments=[])
-    await _ask_attachment(message, state, is_first=True)
+    from text_collector import collect_text_part
+
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    async def _on_ealam_text_complete(final_text, st, b, cid, was_editing):
+        await st.update_data(ealam_lavayeh_text=final_text, ealam_attachments=[])
+        await b.send_message(
+            cid,
+            f"✅ متن اعلام وکالت دریافت شد ({len(final_text)} کاراکتر).",
+        )
+        await _ask_attachment(message, st, is_first=True)
+
+    await collect_text_part(
+        user_id=user_id,
+        chat_id=chat_id,
+        text=text,
+        state=state,
+        bot=bot,
+        on_complete=_on_ealam_text_complete,
+        first_part_reply="⏳ در حال دریافت متن اعلام وکالت...",
+    )
 
 
 async def _ask_attachment(message: Message, state: FSMContext, is_first: bool):
@@ -419,8 +439,21 @@ async def ealam_get_attachment_title(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════════════════
 @ealam_router.message(Form.ealam_vakalaht_images, F.photo)
 async def ealam_receive_image(message: Message, state: FSMContext, bot: Bot):
+    from text_collector import check_image_limit, MAX_IMAGES_PER_TITLE
+
     data = await state.get_data()
     images = data.get("ealam_images", [])
+
+    # بررسی محدودیت تعداد تصویر
+    if not check_image_limit(len(images)):
+        await message.reply(
+            f"⛔ حداکثر **{MAX_IMAGES_PER_TITLE} تصویر** در هر عنوان مجاز است.\n\n"
+            f"اگر مدرک بیشتری دارید، ابتدا دکمه «اتمام ارسال تصاویر» را بزنید\n"
+            f"و سپس عنوان جدیدی انتخاب کنید و تصاویر باقیمانده را ارسال نمایید.",
+            parse_mode="Markdown"
+        )
+        return
+
     images.append(message.photo[-1].file_id)
     await state.update_data(ealam_images=images)
 
@@ -432,8 +465,9 @@ async def ealam_receive_image(message: Message, state: FSMContext, bot: Bot):
         ],
         resize_keyboard=True
     )
+    remaining = MAX_IMAGES_PER_TITLE - len(images)
     await message.reply(
-        f"✅ تصویر شماره **{len(images)}** دریافت شد. مجموع: **{len(images)} تصویر**",
+        f"✅ تصویر شماره **{len(images)}** دریافت شد. مجموع: **{len(images)}** از {MAX_IMAGES_PER_TITLE} ({remaining} جای باقیمانده)",
         reply_markup=kb,
         parse_mode="Markdown"
     )

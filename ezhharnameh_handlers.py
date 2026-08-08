@@ -464,35 +464,50 @@ async def ezhhar_subject_handler(message: Message, state: FSMContext):
 # مرحله ۴ — شرح متن اظهارنامه
 # ══════════════════════════════════════════════════════════════════════════════
 @ezhharnameh_router.message(Form.ezhhar_text)
-async def ezhhar_text_handler(message: Message, state: FSMContext):
+async def ezhhar_text_handler(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("⚠️ لطفاً شرح متن را به صورت **متن** ارسال فرمایید.")
         return
 
-    await state.update_data(ezhhar_text=message.text, ezhhar_attachments=[], ezhhar_images=[])
+    from text_collector import collect_text_part
 
-    data = await state.get_data()
-    declarants = data.get("ezhhar_declarants", [])
-    has_legal = any(p.get("person_type") == "شخص حقوقی" for p in declarants)
+    user_id = message.from_user.id
+    chat_id = message.chat.id
 
-    if has_legal:
-        # مدرک نمایندگی اجباری است - مستقیم به تصویر می‌رویم
-        await message.answer(
-            "**مرحله ۵ — مدارک:**\n\n"
-            "⚠️ **توجه مهم:** چون اظهارکننده شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
-            "📸 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید.\n"
-            "_(مثلاً: روزنامه رسمی، آگهی تأسیس، وکالت‌نامه رسمی)_",
-            reply_markup=ReplyKeyboardRemove(),
-            parse_mode="Markdown"
-        )
-        await state.update_data(
-            _ezhhar_mandatory_proxy_sent=False,
-            ezhhar_images=[],
-            _ezhhar_current_attachment_title="مدرک نمایندگی"
-        )
-        await state.set_state(Form.ezhhar_attachment_images)
-    else:
-        await _ask_ezhhar_attachment(message, state, is_first=True)
+    async def _on_ezhhar_text_complete(final_text, st, b, cid, was_editing):
+        await st.update_data(ezhhar_text=final_text, ezhhar_attachments=[], ezhhar_images=[])
+
+        data = await st.get_data()
+        declarants = data.get("ezhhar_declarants", [])
+        has_legal = any(p.get("person_type") == "شخص حقوقی" for p in declarants)
+
+        if has_legal:
+            await b.send_message(
+                cid,
+                "**مرحله ۵ — مدارک:**\n\n"
+                "⚠️ **توجه مهم:** چون اظهارکننده شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
+                "📸 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید.\n"
+                "_(مثلاً: روزنامه رسمی، آگهی تأسیس، وکالت‌نامه رسمی)_",
+                parse_mode="Markdown"
+            )
+            await st.update_data(
+                _ezhhar_mandatory_proxy_sent=False,
+                ezhhar_images=[],
+                _ezhhar_current_attachment_title="مدرک نمایندگی"
+            )
+            await st.set_state(Form.ezhhar_attachment_images)
+        else:
+            await _ask_ezhhar_attachment(message, st, is_first=True)
+
+    await collect_text_part(
+        user_id=user_id,
+        chat_id=chat_id,
+        text=message.text,
+        state=state,
+        bot=bot,
+        on_complete=_on_ezhhar_text_complete,
+        first_part_reply="⏳ در حال دریافت متن اظهارنامه...",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -567,8 +582,21 @@ async def ezhhar_attachment_title_handler(message: Message, state: FSMContext):
 
 @ezhharnameh_router.message(Form.ezhhar_images, F.photo)
 async def ezhhar_receive_image(message: Message, state: FSMContext, bot: Bot):
+    from text_collector import check_image_limit, MAX_IMAGES_PER_TITLE
+
     data = await state.get_data()
     images = data.get("ezhhar_images", [])
+
+    # بررسی محدودیت تعداد تصویر
+    if not check_image_limit(len(images)):
+        await message.reply(
+            f"⛔ حداکثر **{MAX_IMAGES_PER_TITLE} تصویر** در هر عنوان مجاز است.\n\n"
+            f"اگر مدرک بیشتری دارید، ابتدا دکمه «اتمام ارسال تصاویر» را بزنید\n"
+            f"و سپس عنوان جدیدی انتخاب کنید و تصاویر باقیمانده را ارسال نمایید.",
+            parse_mode="Markdown"
+        )
+        return
+
     images.append(message.photo[-1].file_id)
     await state.update_data(ezhhar_images=images)
 
@@ -580,9 +608,11 @@ async def ezhhar_receive_image(message: Message, state: FSMContext, bot: Bot):
         ],
         resize_keyboard=True
     )
+    remaining = MAX_IMAGES_PER_TITLE - len(images)
     await message.reply(
         f"✅ تصویر شماره **{len(images)}** دریافت شد.\n"
-        f"مجموع تصاویر این مدرک: **{len(images)} تصویر**",
+        f"مجموع تصاویر این مدرک: **{len(images)}** از {MAX_IMAGES_PER_TITLE}\n"
+        f"({remaining} جای باقیمانده)",
         reply_markup=manage_kb,
         parse_mode="Markdown"
     )
@@ -892,8 +922,21 @@ async def ezhhar_edit_choice_handler(message: Message, state: FSMContext):
 @ezhharnameh_router.message(Form.ezhhar_attachment_images, F.photo)
 async def ezhhar_receive_proxy_image(message: Message, state: FSMContext, bot: Bot):
     """دریافت تصاویر مدرک نمایندگی"""
+    from text_collector import check_image_limit, MAX_IMAGES_PER_TITLE
+
     data = await state.get_data()
     images = data.get("ezhhar_images", [])
+
+    # بررسی محدودیت تعداد تصویر
+    if not check_image_limit(len(images)):
+        await message.reply(
+            f"⛔ حداکثر **{MAX_IMAGES_PER_TITLE} تصویر** در هر عنوان مجاز است.\n\n"
+            f"اگر مدرک بیشتری دارید، ابتدا دکمه «اتمام ارسال تصاویر» را بزنید\n"
+            f"و سپس عنوان جدیدی انتخاب کنید.",
+            parse_mode="Markdown"
+        )
+        return
+
     file_id = message.photo[-1].file_id
     images.append(file_id)
     await state.update_data(ezhhar_images=images)

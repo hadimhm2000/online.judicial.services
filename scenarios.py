@@ -786,7 +786,37 @@ async def process_task(data, bot: Bot):
                         await sana_page.locator('.sweet-alert.showSweetAlert button.confirm').click(timeout=5000)
                     except Exception:
                         pass
-                    await bot.send_message(user_id, "❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
+                    # ── ثبت تلاش ناموفق و بررسی محدودیت (بدون ایمپورت handlers برای جلوگیری از circular) ──
+                    import datetime as _dt
+                    MAX_INQ = 2
+                    SAMANEH_ERR = "کد دفتر، مبلغ پرونده یا دسترسی تقویم مربوط به این شعبه و قاضی نیست."
+                    _now = _dt.datetime.now().isoformat()
+                    _info = runtime_state.inquiry_attempts.get(user_id, {"count": 0, "last_attempt": _now})
+                    _info["count"] += 1
+                    _info["last_attempt"] = _now
+                    runtime_state.inquiry_attempts[user_id] = _info
+                    attempts = _info["count"]
+                    if attempts >= MAX_INQ:
+                        await bot.send_message(
+                            user_id,
+                            f"❌ {SAMANEH_ERR}\n\n"
+                            f"⚠️ **تعداد دفعات تلاش شما به حداکثر ({MAX_INQ} بار) رسیده است.**\n\n"
+                            f"لطفاً کدرهگیری و نوع سند (لایحه، اظهارنامه، شکواییه و ...) را به‌دقت بررسی فرمایید و مجدداً از منوی اصلی شروع کنید."
+                        )
+                    else:
+                        await bot.send_message(
+                            user_id,
+                            f"❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.\n"
+                            f"(تلاش {attempts} از {MAX_INQ})"
+                        )
+                    # اطلاع به مدیر
+                    try:
+                        await bot.send_message(
+                            ADMIN_ID,
+                            f"⚠️ [INQUIRY_FAIL] کاربر {user_id} — تلاش {attempts}/{MAX_INQ} — کد: `{tracking_code}` — نوع: {doc_name}"
+                        )
+                    except Exception:
+                        pass
                     return
 
                 if (
@@ -1048,13 +1078,53 @@ async def process_task(data, bot: Bot):
                 await sana_page.reload()
                 await asyncio.sleep(5)
             else:
-                await bot.send_message(
-                    user_id,
-                    "⚠️ سامانه قضایی با اختلال مواجه است. لطفاً ۳۰ دقیقه دیگر مجدداً تلاش فرمایید."
-                )
                 doc_name = f"{category} - {subcategory}" if subcategory else category
+
+                # ── ذخیره در disrupted_users (فرصت تکرار بدون پرداخت) ──
+                import datetime
+                from handlers import DISRUPTED_RETRY_MINUTES, SAMANEH_WRONG_TYPE_ERROR
+
+                runtime_state.disrupted_users[user_id] = {
+                    "timestamp": datetime.datetime.now(),
+                    "job_data": data,
+                    "notified": True,
+                }
+
+                # ── اطلاع‌رسانی به کاربر با دکمه‌ی تلاش مجدد ──
+                from keyboards import disrupted_retry_kb
+                try:
+                    error_detail = SAMANEH_WRONG_TYPE_ERROR if ('کد دفتر' in str(task_err) or 'مبلغ پرونده' in str(task_err)) else 'عملیات استعلام موفق نبود.'
+                    await bot.send_message(
+                        user_id,
+                        f"⚠️ **سامانه قضایی با اختلال مواجه است.**\n\n"
+                        f"❌ {error_detail}\n\n"
+                        f"🔧 شما تا **{DISRUPTED_RETRY_MINUTES} دقیقه** فرصت دارید بدون پرداخت مجدد، "
+                        f"از منوی اصلی گزینه‌ی شروع (/start) را بزنید تا تلاش مجدد انجام شود.",
+                        reply_markup=disrupted_retry_kb,
+                        parse_mode="Markdown"
+                    )
+                except Exception as send_err:
+                    logging.error(f"خطا در ارسال پیام disrupted به کاربر: {send_err}")
+
+                # ── اطلاع‌رسانی به مدیر (جزئیات کامل) ──
+                try:
+                    await bot.send_message(
+                        ADMIN_ID,
+                        f"🚨 **اختلال در استعلام — disrupted ذخیره شد**\n\n"
+                        f"👤 کاربر: `{user_id}`\n"
+                        f"نوع: {query_type}\n"
+                        f"کد رهگیری: `{tracking_code or ''}`\n"
+                        f"سند: {doc_name}\n"
+                        f"خطا: `{str(task_err)[:300]}`\n\n"
+                        f"✅ کاربر تا {DISRUPTED_RETRY_MINUTES} دقیقه فرصت تلاش مجدد دارد.\n"
+                        f"📋 وضعیت صف: {runtime_state.job_queue.qsize()} تسک در انتظار",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+
                 await log_event(
-                    "خطای سامانه", query_type, str(user_id), user_id,
+                    "خطای سامانه (disrupted)", query_type, str(user_id), user_id,
                     tracking_code=tracking_code or "", doc_name=doc_name or "",
                     note=f"پس از {max_task_attempts} تلاش: {str(task_err)[:200]}"
                 )
@@ -1308,7 +1378,33 @@ async def browser_worker(bot: Bot):
             )
 
         await wait_for_manual_login(bot)
+
+        # ── حلقه‌ی اصلی با حفاظت در برابر کرش ──
         while True:
-            data = await runtime_state.job_queue.get()
-            await process_task(data, bot)
-            runtime_state.job_queue.task_done()
+            try:
+                data = await runtime_state.job_queue.get()
+                await process_task(data, bot)
+                runtime_state.job_queue.task_done()
+            except KeyboardInterrupt:
+                logging.warning("[WORKER] KeyboardIntercept دریافت شد — خروج.")
+                break
+            except Exception as critical_err:
+                logging.critical(f"[WORKER] خطای بحرانی در حلقه‌ی browser_worker: {critical_err}", exc_info=True)
+                # ── اطلاع‌رسانی فوری به مدیر ──
+                try:
+                    await bot.send_message(
+                        ADMIN_ID,
+                        f"🚨🚨 **خطای بحرانی در browser_worker!**\n\n"
+                        f"خطا: `{str(critical_err)[:300]}`\n\n"
+                        f"⚠️ حلقه‌ی کارگر ادامه دارد ولی این تسک از دست رفت.",
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+                # ذخیره‌ی فوری حالت
+                try:
+                    from persistence import save_runtime_state
+                    save_runtime_state()
+                except Exception:
+                    pass
+                runtime_state.job_queue.task_done()

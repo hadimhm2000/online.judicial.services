@@ -600,3 +600,15 @@ subscription_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+# =========================================================
+# کیبوردهای بخش بازیابی پس از قطعی سامانه
+# =========================================================
+
+disrupted_retry_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔄 تلاش مجدد (بدون پرداخت هزینه)")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)

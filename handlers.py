@@ -27,7 +27,7 @@ from keyboards import (
     restart_kb, accept_rules_kb, flow_type_kb, main_menu_kb, doc_category_kb,
     attachments_kb, cart_kb, pay_kb, confirm_single_kb, confirm_cart_kb,
     admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb,
-    payment_cancel_kb,
+    payment_cancel_kb, disrupted_retry_kb,
 )
 from lavayeh_handlers import lavayeh_router
 from stamp_calc_handlers import stamp_calc_router
@@ -42,6 +42,15 @@ TRACKING_CODE_PREFIX_MIN = 1394220
 TRACKING_CODE_PREFIX_MAX = 1406220
 TRACKING_CODE_LENGTH = 16
 
+# ───────────────────────────────────────────────────────────────
+# ثابت‌های محدودیت تلاش و قطعی
+# ───────────────────────────────────────────────────────────────
+MAX_INQUIRY_ATTEMPTS = 2  # حداکثر تلاش ناموفق قبل از توقف
+DISRUPTED_RETRY_MINUTES = 45  # فرصت تکرار بدون پرداخت (دقیقه)
+
+# پیام خطایی که سامانه قضایی نمایش می‌دهد وقتی نوع سند اشتباه انتخاب شود
+SAMANEH_WRONG_TYPE_ERROR = "کد دفتر، مبلغ پرونده یا دسترسی تقویم مربوط به این شعبه و قاضی نیست."
+
 
 def _is_valid_tracking_code(code: str) -> bool:
     """کد رهگیری باید ۱۶ رقمی باشد و ۷ رقم ابتدایی آن در بازه‌ی معتبر باشد."""
@@ -49,6 +58,37 @@ def _is_valid_tracking_code(code: str) -> bool:
         return False
     prefix = int(code[:7])
     return TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX
+
+
+def _record_failed_inquiry(user_id: int) -> int:
+    """ثبت یک تلاش ناموفق استعلام. خروجی: تعداد تلاش فعلی."""
+    now = datetime.datetime.now().isoformat()
+    info = runtime_state.inquiry_attempts.get(user_id, {"count": 0, "last_attempt": now})
+    info["count"] += 1
+    info["last_attempt"] = now
+    runtime_state.inquiry_attempts[user_id] = info
+    return info["count"]
+
+
+def _reset_inquiry_attempts(user_id: int):
+    """پاکسازی شمارنده‌ی تلاش‌های ناموفق (مثلاً وقتی کاربر از اول شروع می‌کند)."""
+    runtime_state.inquiry_attempts.pop(user_id, None)
+
+
+def _check_inquiry_limit(user_id: int) -> bool:
+    """بررسی آیا کاربر به محدودیت تلاش رسیده است. True = محدود شده."""
+    info = runtime_state.inquiry_attempts.get(user_id)
+    if not info:
+        return False
+    # پاکسازی خودکار اگر آخرین تلاش بیش از ۲ ساعت پیش بوده
+    try:
+        last = datetime.datetime.fromisoformat(info["last_attempt"])
+        if (datetime.datetime.now() - last) > datetime.timedelta(hours=2):
+            runtime_state.inquiry_attempts.pop(user_id, None)
+            return False
+    except (ValueError, TypeError):
+        pass
+    return info["count"] >= MAX_INQUIRY_ATTEMPTS
 
 router = Router()
 
@@ -440,6 +480,52 @@ async def confirm_login_from_admin_global(message: types.Message, state: FSMCont
 @router.message(StateFilter("*"), Command("start"))
 @router.message(StateFilter("*"), F.text == "🔄 ثبت درخواست جدید (شروع)")
 async def cmd_start(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+
+    # ── بررسی آیا کاربر در وضعیت disrupted (پرداخت شده ولی سامانه قطع) هست ──
+    disrupted_info = runtime_state.disrupted_users.get(user_id)
+    if disrupted_info:
+        elapsed = datetime.datetime.now() - disrupted_info["timestamp"]
+        if elapsed < datetime.timedelta(minutes=DISRUPTED_RETRY_MINUTES):
+            remaining = DISRUPTED_RETRY_MINUTES - int(elapsed.total_seconds() / 60)
+            await message.answer(
+                f"⚠️ **شما یک استعلام پرداخت‌شده دارید که به‌دلیل اختلال سامانه کامل نشد.**\n\n"
+                f"🔧 شما {remaining} دقیقه دیگر فرصت دارید بدون پرداخت مجدد، تلاش کنید.\n\n"
+                f"آیا مایلید تلاش مجدد انجام دهید؟",
+                reply_markup=disrupted_retry_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.waiting_for_disrupted_retry)
+            return
+        else:
+            # بازه‌ی ۴۵ دقیقه تمام شده
+            del runtime_state.disrupted_users[user_id]
+
+    # ── بررسی آیا ربات اخیراً کرش کرده (بازیابی) — با تفکیک ثبت‌شده/ثبت‌نشده ──
+    if hasattr(runtime_state, '_crash_recovered_users'):
+        if user_id in runtime_state._crash_recovered_users:
+            recovery_type = runtime_state._crash_recovered_users[user_id]
+            if recovery_type == "submitted":
+                # کاربر درخواستش ثبت شده — اطمینان‌بخش
+                await message.answer(
+                    "🤖 **بابت اختلال پیش‌آمده در سامانه صمیمانه پوزش می‌طلبیم.**\n\n"
+                    "درخواست شما قبلاً در سامانه ثبت شده و در حال پردازش است.\n"
+                    "مطمئن باشید که موارد شما در روند ثبت قرار گرفته است.\n"
+                    "لطفاً مجدداً از منوی اصلی اقدام فرمایید.",
+                    parse_mode="Markdown"
+                )
+            else:
+                # کاربر هنوز ثبت نکرده — عذرخواهی و درخواست تلاش مجدد
+                await message.answer(
+                    "🤖 **بابت اختلال پیش‌آمده در سامانه صمیمانه پوزش می‌طلبیم.**\n\n"
+                    "متاسفانه فرآیند شما پیش از ثبت نهایی قطع شد.\n"
+                    "لطفاً مجدداً از ابتدا اقدام فرمایید.\n"
+                    "اگر قبلاً پرداخت کرده‌اید، فرصت تکرار بدون پرداخت به شما داده می‌شود.",
+                    parse_mode="Markdown"
+                )
+            # حذف از لیست بازیابی تا پیام تکرار نشود
+            runtime_state._crash_recovered_users.pop(user_id, None)
+
     welcome_text = "با درود و احترام\n🟢 لطفاً پیش از هرگونه اقدام، آیین‌نامه را مطالعه فرمایید:\n🔗 https://forms.gle/UeevWfg5YiDkC5F37\n\n👇 آیا قوانین را تایید می‌نمایید؟"
     await message.answer(welcome_text, reply_markup=accept_rules_kb)
     await state.set_state(Form.waiting_for_rule_acceptance)
@@ -450,6 +536,69 @@ async def cmd_new_lavayeh_request(message: types.Message, state: FSMContext):
     """شروع مستقیم ثبت لایحه جدید بدون بازگشت به قوانین."""
     from lavayeh_handlers import lavayeh_entry
     await lavayeh_entry(message, state)
+
+
+# ================= هندلر تلاش مجدد بدون پرداخت (disrupted retry) =================
+@router.message(Form.waiting_for_disrupted_retry)
+async def process_disrupted_retry(message: types.Message, state: FSMContext, bot: Bot):
+    """کاربر disrupted می‌تواند یک‌بار بدون پرداخت تلاش مجدد کند."""
+    user_id = message.from_user.id
+
+    if message.text and "انصراف" in message.text:
+        del runtime_state.disrupted_users[user_id]
+        await message.answer(
+            "❌ درخواست تلاش مجدد لغو شد.\nلطفاً مجدداً شروع کنید:",
+            reply_markup=main_menu_kb
+        )
+        await state.set_state(Form.main_menu)
+        return
+
+    if message.text and "تلاش مجدد" in message.text:
+        info = runtime_state.disrupted_users.get(user_id)
+        if not info:
+            await message.answer("⚠️ وضعیت تلاش مجدد یافت نشد. لطفاً از اول شروع کنید.", reply_markup=main_menu_kb)
+            await state.set_state(Form.main_menu)
+            return
+
+        elapsed = datetime.datetime.now() - info["timestamp"]
+        if elapsed >= datetime.timedelta(minutes=DISRUPTED_RETRY_MINUTES):
+            del runtime_state.disrupted_users[user_id]
+            await message.answer(
+                f"⏰ بازه‌ی {DISRUPTED_RETRY_MINUTES} دقیقه‌ای تلاش مجدد تمام شده است.\n"
+                f"لطفاً مجدداً شروع کنید:",
+                reply_markup=main_menu_kb
+            )
+            await state.set_state(Form.main_menu)
+            return
+
+        # تلاش مجدد — ارسال مجدد job به صف بدون نیاز به پرداخت
+        job_data = info["job_data"]
+        queue_pos = runtime_state.job_queue.qsize()
+        queue_note = f"\n📊 موقعیت شما در صف: **{queue_pos + 1}**" if queue_pos > 0 else "\n▶️ پردازش بلافاصله آغاز می‌شود."
+
+        await message.answer(
+            f"🔄 **تلاش مجدد بدون پرداخت ...**\n{queue_note}",
+            reply_markup=restart_kb,
+            parse_mode="Markdown"
+        )
+        await runtime_state.job_queue.put(job_data)
+
+        # حذف از disrupted — فقط یک‌بار اجازه تلاش مجدد
+        del runtime_state.disrupted_users[user_id]
+        await state.clear()
+
+        # اطلاع به مدیر
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                f"🔄 **تلاش مجدد disrupted:**\n"
+                f"👤 کاربر: `{user_id}`\n"
+                f"کد رهگیری: `{job_data.get('tracking_code', 'N/A')}`\n"
+                f"نوع: {job_data.get('query_type', 'N/A')}",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 @router.message(Form.waiting_for_rule_acceptance, F.text == "✅ قوانین و مقررات را تایید می‌نمایم")
 async def rules_accepted(message: types.Message, state: FSMContext):
@@ -583,6 +732,19 @@ async def process_tracking_code(message: types.Message, state: FSMContext):
             "لطفاً کد را دوباره بررسی و ارسال فرمایید:"
         )
         return
+    # ── بررسی محدودیت تلاش قبل از ادامه ──
+    if _check_inquiry_limit(message.from_user.id):
+        await message.answer(
+            f"❌ {SAMANEH_WRONG_TYPE_ERROR}\n\n"
+            f"⚠️ **تعداد دفعات تلاش شما به حداکثر ({MAX_INQUIRY_ATTEMPTS} بار) رسیده است.**\n\n"
+            f"لطفاً کدرهگیری و نوع سند (لایحه، اظهارنامه، شکواییه و ...) را به‌دقت بررسی فرمایید و مجدداً از منوی اصلی شروع کنید.",
+            reply_markup=main_menu_kb,
+            parse_mode="Markdown"
+        )
+        await state.clear()
+        return
+    # پاکسازی شمارنده‌ها وقتی کاربر کد معتبر وارد می‌کند
+    _reset_inquiry_attempts(message.from_user.id)
     await state.update_data(query_type="کد رهگیری", tracking_code=clean_code)
     await message.answer("مربوط به کدام دسته است؟", reply_markup=doc_category_kb)
     await state.set_state(Form.waiting_for_doc_category)
@@ -650,10 +812,44 @@ async def process_attachments_opt(message: types.Message, state: FSMContext):
             )
             fast_success = True
         except FastPetitionNotFoundError:
-            await message.answer(f"❌ پرونده‌ای با کد `{data['tracking_code']}` یافت نگردید.")
+            attempts = _record_failed_inquiry(message.from_user.id)
+            if attempts >= MAX_INQUIRY_ATTEMPTS:
+                await message.answer(
+                    f"❌ {SAMANEH_WRONG_TYPE_ERROR}\n\n"
+                    f"⚠️ **تعداد دفعات تلاش شما به حداکثر ({MAX_INQUIRY_ATTEMPTS} بار) رسیده است.**\n\n"
+                    f"لطفاً کدرهگیری و نوع سند (لایحه، اظهارنامه، شکواییه و ...) را به‌دقت بررسی فرمایید و مجدداً از منوی اصلی شروع کنید.",
+                    reply_markup=main_menu_kb,
+                    parse_mode="Markdown"
+                )
+                await state.clear()
+            else:
+                remaining = MAX_INQUIRY_ATTEMPTS - attempts
+                await message.answer(
+                    f"❌ پرونده‌ای با کد `{data['tracking_code']}` یافت نگردید.\n\n"
+                    f"⚠️ لطفاً کدرهگیری و نوع سند خود را بررسی کنید.\n"
+                    f"(تلاش {attempts} از {MAX_INQUIRY_ATTEMPTS})",
+                    parse_mode="Markdown"
+                )
             return
         except FastInvalidTrackingCodeError:
-            await message.answer("❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.")
+            attempts = _record_failed_inquiry(message.from_user.id)
+            if attempts >= MAX_INQUIRY_ATTEMPTS:
+                await message.answer(
+                    f"❌ {SAMANEH_WRONG_TYPE_ERROR}\n\n"
+                    f"⚠️ **تعداد دفعات تلاش شما به حداکثر ({MAX_INQUIRY_ATTEMPTS} بار) رسیده است.**\n\n"
+                    f"لطفاً کدرهگیری و نوع سند (لایحه، اظهارنامه، شکواییه و ...) را به‌دقت بررسی فرمایید و مجدداً از منوی اصلی شروع کنید.",
+                    reply_markup=main_menu_kb,
+                    parse_mode="Markdown"
+                )
+                await state.clear()
+            else:
+                remaining = MAX_INQUIRY_ATTEMPTS - attempts
+                await message.answer(
+                    f"❌ کدرهگیری یا نوع خدمت را اشتباه وارد نموده‌اید.\n\n"
+                    f"⚠️ لطفاً کدرهگیری و نوع سند خود را بررسی کنید.\n"
+                    f"(تلاش {attempts} از {MAX_INQUIRY_ATTEMPTS})",
+                    parse_mode="Markdown"
+                )
             return
         except FastSessionExpiredError:
             logger.warning("[FAST-CHECK] نشست منقضی — فال‌بک به صف مرورگر")

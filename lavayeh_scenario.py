@@ -384,6 +384,7 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                 # اگر ناموفق بود، checkpoint از داخل _upload_attachment_groups ذخیره شده
                 # فقط نیاز به ذخیره اطلاعات پایه تسک داریم
                 if not upload_ok and lavayeh_bill_no:
+                    from upload_helpers import build_incomplete_task_entry
                     import runtime_state as _rs
                     if task_key not in _rs.incomplete_tasks:
                         _rs.incomplete_tasks[task_key] = build_incomplete_task_entry(

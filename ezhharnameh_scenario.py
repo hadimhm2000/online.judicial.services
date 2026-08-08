@@ -1275,7 +1275,7 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 continue
 
             # انتظار تایید آپلود
-            from upload_helpers import wait_for_upload_confirmation
+            from upload_helpers import wait_for_upload_confirmation, wait_for_alerts_to_disappear
             all_ok = await wait_for_upload_confirmation(page, image_count, bot, user_id, prefix="EZHHAR")
             if not all_ok:
                 error_text = await get_and_close_error_popup_text(page)
@@ -1283,6 +1283,14 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 await full_delete_attachment_row(page, "مدرک نمایندگی", bot, user_id, "EZHHAR")
                 await asyncio.sleep(2)
                 continue
+
+            # انتظار ناپدید شدن کامل alertها قبل از تایید
+            alerts_gone = await wait_for_alerts_to_disappear(page, bot, user_id, prefix="EZHHAR")
+            if not alerts_gone:
+                logging.warning("[EZHHAR] alertهای مدرک نمایندگی ناپدید نشدند — ادامه با احتیاط")
+
+            await wait_for_angular_idle(page)
+            await asyncio.sleep(1)
 
             # اعمال همه
             from upload_helpers import click_apply_all_with_retry

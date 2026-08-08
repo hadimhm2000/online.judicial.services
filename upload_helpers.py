@@ -515,6 +515,46 @@ async def wait_for_upload_confirmation(
     return False
 
 
+async def wait_for_alerts_to_disappear(
+    page,
+    bot: Bot = None,
+    user_id: int = None,
+    timeout_sec: int = 180,
+    prefix: str = "UPLOAD",
+) -> bool:
+    """
+    منتظر می‌ماند تا تمام alertهای موفقیت آپلود از صفحه ناپدید شوند.
+    این تضمین می‌کند که سامانه پردازش تمام فایل‌ها را تمام کرده
+    و آماده دریافت دکمه تایید است.
+
+    وقتی تعداد فایل‌ها زیاد باشد، آپلود طول می‌کشد و alertها
+    ممکن است دیرتر از زمان معمول ظاهر و ناپدید شوند.
+    """
+    _log(prefix, "انتظار برای ناپدید شدن کامل alertهای موفقیت آپلود...")
+
+    for i in range(timeout_sec * 2):  # هر ۰.۵ ثانیه بررسی
+        if i % 8 == 0 and bot and user_id:
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                _log(prefix, "نشست حین انتظار ناپدید شدن alertها تمدید شد")
+                await asyncio.sleep(1)
+
+        count = await page.evaluate('''() => {
+            const alerts = Array.from(document.querySelectorAll('.alert-success [ng-bind-html]'));
+            return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت ثبت گردید")).length;
+        }''')
+
+        if count == 0:
+            _log(prefix, "تمام alertهای موفقیت ناپدید شدند — صفحه آماده تایید")
+            await asyncio.sleep(1)
+            return True
+
+        await asyncio.sleep(0.5)
+
+    _log(prefix, f"تایم‌اوت انتظار ناپدید شدن alertها ({timeout_sec} ثانیه) — ادامه با احتیاط", 'warning')
+    return False
+
+
 async def click_apply_all_with_retry(
     page,
     expected_count: int,
@@ -705,6 +745,19 @@ async def resilient_upload_attachment(
                 await full_delete_attachment_row(page, doc_title, bot, user_id, prefix)
                 await asyncio.sleep(2)
                 continue
+
+            # مرحله ۵.۵: انتظار ناپدید شدن کامل alertها
+            # وقتی تعداد فایل‌ها زیاد است، سامانه ممکن است هنوز در حال
+            # پردازش باشد. باید صبر کنیم تا تمام alertهای موفقیت
+            # از صفحه حذف شوند و سپس دکمه تایید را بزنیم.
+            alerts_gone = await wait_for_alerts_to_disappear(
+                page, bot, user_id, prefix=prefix
+            )
+            if not alerts_gone:
+                _log(prefix, f"alertها ناپدید نشدند ولی ادامه می‌دهیم [{doc_title}]", 'warning')
+
+            await wait_for_angular_idle(page)
+            await asyncio.sleep(1)
 
             # مرحله ۶: اعمال همه
             all_confirmed = await click_apply_all_with_retry(

@@ -1634,7 +1634,7 @@ async def _ask_lavayeh_text_ealam(message: Message, state: FSMContext):
 
 
 @lavayeh_router.message(Form.ealam_vakalaht_text)
-async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext):
+async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext, bot: Bot):
     text = message.text or ""
     if text == "✅ ادامه مراحل":
         # کاربر دکمه «ادامه مراحل» را زده (از مرحله تمبر غیرمالی آمده)
@@ -1644,27 +1644,73 @@ async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext):
     if not text:
         await message.answer("⚠️ لطفاً متن را به صورت متن ارسال فرمایید.")
         return
-    await state.update_data(lavayeh_text=text, lavayeh_attachments=[])
-    await _ask_attachment_title(message, state, is_first=True)
+
+    from text_collector import collect_text_part
+
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    async def _on_ealam_text_complete(final_text, st, b, cid, was_editing):
+        await st.update_data(lavayeh_text=final_text, lavayeh_attachments=[])
+        await b.send_message(
+            cid,
+            f"✅ متن لایحه اعلام وکالت دریافت شد ({len(final_text)} کاراکتر).",
+        )
+        await _ask_attachment_title(message, st, is_first=True)
+
+    await collect_text_part(
+        user_id=user_id,
+        chat_id=chat_id,
+        text=text,
+        state=state,
+        bot=bot,
+        on_complete=_on_ealam_text_complete,
+        first_part_reply="⏳ در حال دریافت متن لایحه اعلام وکالت...",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # مرحله ۵ — شرح متن لایحه (جریان عادی)
 # ══════════════════════════════════════════════════════════════════════════════
 @lavayeh_router.message(Form.lavayeh_text)
-async def lavayeh_get_text(message: Message, state: FSMContext):
+async def lavayeh_get_text(message: Message, state: FSMContext, bot: Bot):
     if not message.text:
         await message.answer("⚠️ لطفاً شرح متن لایحه را به صورت متن ارسال فرمایید.")
         return
+
+    from text_collector import collect_text_part
+
     data = await state.get_data()
     is_editing = data.get("_is_editing")
-    if is_editing:
-        await state.update_data(lavayeh_text=message.text)
-        data = await state.get_data()
-        if await _maybe_return_to_preview(data, message, state):
-            return
-    await state.update_data(lavayeh_text=message.text, lavayeh_attachments=[])
-    await _ask_attachment_title(message, state, is_first=True)
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    async def _on_text_complete(final_text, st, b, cid, was_editing):
+        """بعد از جمع‌آوری کامل متن، ادامه جریان را انجام می‌دهد."""
+        if was_editing:
+            await st.update_data(lavayeh_text=final_text)
+            d = await st.get_data()
+            if await _maybe_return_to_preview(d, message, st):
+                return
+        else:
+            await st.update_data(lavayeh_text=final_text, lavayeh_attachments=[])
+
+        await b.send_message(
+            cid,
+            f"✅ متن لایحه دریافت شد ({len(final_text)} کاراکتر).",
+        )
+        await _ask_attachment_title(message, st, is_first=True)
+
+    await collect_text_part(
+        user_id=user_id,
+        chat_id=chat_id,
+        text=message.text,
+        state=state,
+        bot=bot,
+        on_complete=_on_text_complete,
+        is_editing=bool(is_editing),
+        first_part_reply="⏳ در حال دریافت متن لایحه..." if not is_editing else None,
+    )
 
 
 async def _ask_attachment_title(message: Message, state: FSMContext, is_first: bool):
@@ -1723,8 +1769,21 @@ async def lavayeh_get_attachment_title(message: Message, state: FSMContext):
 
 @lavayeh_router.message(Form.lavayeh_images, F.photo)
 async def lavayeh_receive_image(message: Message, state: FSMContext, bot: Bot):
+    from text_collector import check_image_limit, MAX_IMAGES_PER_TITLE
+
     data = await state.get_data()
     images = data.get("lavayeh_images", [])
+
+    # بررسی محدودیت تعداد تصویر
+    if not check_image_limit(len(images)):
+        await message.reply(
+            f"⛔ حداکثر **{MAX_IMAGES_PER_TITLE} تصویر** در هر عنوان مجاز است.\n\n"
+            f"اگر مدرک بیشتری دارید، ابتدا دکمه «اتمام ارسال تصاویر» را بزنید\n"
+            f"و سپس عنوان جدیدی انتخاب کنید و تصاویر باقیمانده را ارسال نمایید.",
+            parse_mode="Markdown"
+        )
+        return
+
     file_id = message.photo[-1].file_id
     images.append(file_id)
     await state.update_data(lavayeh_images=images)
@@ -1737,10 +1796,12 @@ async def lavayeh_receive_image(message: Message, state: FSMContext, bot: Bot):
         ],
         resize_keyboard=True
     )
+    remaining = MAX_IMAGES_PER_TITLE - len(images)
     await message.reply(
         f"✅ تصویر شماره **{len(images)}** دریافت شد.\n"
-        f"مجموع تصاویر این مدرک: **{len(images)} تصویر**\n\n"
-        "می‌توانید تصاویر بیشتری ارسال کنید یا «اتمام» را بزنید.",
+        f"مجموع تصاویر این مدرک: **{len(images)}** از {MAX_IMAGES_PER_TITLE}\n\n"
+        f"می‌توانید تصاویر بیشتری ارسال کنید ({remaining} جای باقیمانده)\n"
+        f"یا دکمه «اتمام ارسال تصاویر» را بزنید.",
         reply_markup=manage_kb,
         parse_mode="Markdown"
     )

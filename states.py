@@ -151,3 +151,8 @@ class Form(StatesGroup):
     subscription_main = State()                  # منوی اشتراک
     subscription_waiting_payment = State()       # منتظر دریافت رسید پرداخت اشتراک
     subscription_waiting_admin_review = State()   # منتظر تایید مدیر
+
+    # =========================================================
+    # State های بخش بازیابی پس از قطعی سامانه
+    # =========================================================
+    waiting_for_disrupted_retry = State()  # منتظر تصمیم کاربر برای تکرار بدون پرداخت
