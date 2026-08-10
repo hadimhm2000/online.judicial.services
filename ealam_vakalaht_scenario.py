@@ -942,7 +942,18 @@ async def _upload_electronic_vakalaht(
             # کلیک «ثبت و ویرایش پیوست»
             await page.evaluate('''() => {
                 const btn = document.querySelector('#btnSaveDoc');
-                if (btn && !btn.disabled) btn.click();
+                if (!btn || btn.disabled) return;
+                try {
+                    if (typeof angular !== 'undefined') {
+                        const ngEl = angular.element(btn);
+                        if (ngEl && ngEl.scope) {
+                            ngEl.scope().$apply(() => { btn.click(); });
+                            return;
+                        }
+                    }
+                } catch(e) {}
+                btn.click();
+                btn.dispatchEvent(new Event('click', { bubbles: true }));
             }''')
             had_expiry = await resilient_sleep(page, 8, bot, user_id)
             if had_expiry:
@@ -977,13 +988,14 @@ async def _upload_electronic_vakalaht(
 
 
 async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
-    """آپلود پیوست‌های اضافی (سایر ضمائم) — مقاوم (از upload_helpers)"""
-    from upload_helpers import resilient_upload_attachment
+    """آپلود پیوست‌های اضافی (سایر ضمائم) — مقاوم (از upload_helpers)
+    با تقسیم خودکار به ردیف‌های ≤۷ صفحه در صورت زیاد بودن تصاویر."""
+    from upload_helpers import upload_attachment_auto
 
     if not image_paths:
         return
 
-    result = await resilient_upload_attachment(
+    result = await upload_attachment_auto(
         page, title, image_paths, bot, user_id,
         prefix="EALAM",
     )

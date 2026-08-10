@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { appendNewCase } from '@/lib/google-sheets';
 
 export async function GET(request: NextRequest) {
   try {
@@ -108,7 +109,7 @@ export async function PUT(request: NextRequest) {
 
     // Auto-sync to Google Sheets on status/payment change
     if (updateData.status || updateData.feeStatus) {
-      import('@/lib/google-sheets').then(m => m.appendNewCase(id)).catch(() => {});
+      appendNewCase(id).catch(() => {});
     }
 
     return NextResponse.json(updatedCase);
@@ -131,7 +132,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Auto-sync to Google Sheets
-    import('@/lib/google-sheets').then(m => m.appendNewCase(newCase.id)).catch(() => {});
+    appendNewCase(newCase.id).catch(() => {});
 
     return NextResponse.json(newCase, { status: 201 });
   } catch (error) {

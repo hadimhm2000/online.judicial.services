@@ -216,6 +216,9 @@ async def on_lavayeh_sign_persons_loaded(bot: Bot, user_id: int, persons: list, 
 
     # ذخیره لیست اشخاص
     sendable = [p for p in persons if p.get("divVisible")]
+    # اعمال قوانین مسیریابی کد: اگر وکیل وجود داشت فقط برای وکیل؛
+    # در غیر این صورت اگر نماینده/مدیرعامل بود فقط برای آن‌ها؛ وگرنه همه.
+    sendable = _filter_ezhhar_signable_persons(sendable)
     sign_info["sign_persons"] = sendable
     sign_info["persons_awaiting_sign"] = [p["idx"] for p in sendable]
     runtime_state.pending_lavayeh_sign[user_id] = sign_info
@@ -414,6 +417,22 @@ async def on_lavayeh_sign_submit_failure(bot: Bot, user_id: int, state: FSMConte
         parse_mode="Markdown"
     )
     await state.set_state(Form.lavayeh_sign_resend_prompt)
+
+
+async def on_lavayeh_sign_sana_not_registered(bot: Bot, user_id: int, error_text: str, state: FSMContext):
+    """امضای شخص در سامانه ثنا ثبت نیست — ارجاع به دفاتر خدمات قضایی (لایحه)"""
+    await bot.send_message(
+        user_id,
+        f"⚠️ **خطا در ثبت امضا:**\n\n"
+        f"{error_text}\n\n"
+        "امضا در سامانه ثنا ثبت نیست، ابتدا به یکی از دفاتر خدمات قضائی مراجعه کنند و پس از تایید امضا "
+        "با شماره **09306186888** در واتساپ هماهنگ کنید، جهت ارسال کد مجدد.\n"
+        "باتشکر",
+        parse_mode="Markdown",
+        reply_markup=new_lavayeh_request_kb
+    )
+    runtime_state.pending_lavayeh_sign.pop(user_id, None)
+    await state.clear()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,232 @@
+diff --git a/config.py b/config.py
+index 02515ce..d55ada9 100644
+--- a/config.py
++++ b/config.py
+@@ -38,6 +38,10 @@ TELEGRAM_API_BASE = os.environ.get(
+     "https://judicial-proxy.hadimhm79.workers.dev"
+ )
+ 
++# آدرس پنل ادمین (Next.js) — برای خوندن تنظیمات ساعت کاری هر روز هفته.
++# لوکال: http://localhost:3000  |  روی سرور: آدرس دامنه/آی‌پی واقعی پنل
++ADMIN_PANEL_URL = os.environ.get("ADMIN_PANEL_URL", "http://localhost:3000")
++
+ # اگر روزی به یک پروکسی واقعی (HTTP/SOCKS) نیاز شد، می‌توانی این متغیر را
+ # در .env ست کنی. در حالت فعلی (استفاده از Cloudflare Worker) خالی می‌ماند.
+ PROXY_URL = os.environ.get("PROXY_URL", "")
+diff --git a/env.example b/env.example
+index 08d88e7..174d777 100644
+--- a/env.example
++++ b/env.example
+@@ -1 +1,5 @@
+ BOT_TOKEN=your_bot_token_from_botfather_here
++ADMIN_ID=your_telegram_numeric_id_here
++ADMIN_PANEL_URL=http://localhost:3000
++# اختیاری — فقط اگر سرور به api.telegram.org دسترسی مستقیم ندارد (مثل سرور ایران)
++TELEGRAM_API_BASE=https://judicial-proxy.hadimhm79.workers.dev
+diff --git a/handlers.py b/handlers.py
+index e094afb..888ec9f 100644
+--- a/handlers.py
++++ b/handlers.py
+@@ -15,6 +15,7 @@ from aiogram.types import (
+ 
+ import runtime_state
+ from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME, get_fee, FEES
++from working_hours import is_within_working_hours
+ from states import Form
+ from sheets import append_to_sheet, log_event
+ from ocr import verify_payment_receipt
+@@ -119,14 +120,21 @@ class WorkingHoursMiddleware(BaseMiddleware):
+         if event.from_user and event.from_user.id == ADMIN_ID:
+             return await handler(event, data)
+ 
+-        tehran_tz = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
+-        tehran_time = datetime.datetime.now(tehran_tz)
+-
+-        if 12 <= tehran_time.hour < 22:
++        allowed, today = await is_within_working_hours()
++        if allowed:
+             return await handler(event, data)
++
++        if today is not None and not today.get("enabled", True):
++            await event.answer("⛔️ **خارج از ساعت کاری**\n\nامروز سامانه غیرفعال است.")
++        elif today is not None:
++            start = f"{today['startHour']:02d}:{today['startMin']:02d}"
++            end = f"{today['endHour']:02d}:{today['endMin']:02d}"
++            await event.answer(
++                f"⛔️ **خارج از ساعت کاری**\n\nکاربر گرامی، ساعت کاری سامانه امروز از {start} الی {end} می‌باشد."
++            )
+         else:
+-            await event.answer("⛔️ **خارج از ساعت کاری**\n\nکاربر گرامی، ساعت کاری سامانه از ۱۲:۰۰ ظهر الی ۲۲:۰۰ می‌باشد.")
+-            return
++            await event.answer("⛔️ **خارج از ساعت کاری**")
++        return
+ 
+ router.message.middleware(WorkingHoursMiddleware())
+ 
+diff --git a/requirements.txt b/requirements.txt
+index 4b5665c..2d2dd96 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,5 +1,6 @@
+ python-telegram-bot==21.0.1
+ aiogram>=3.4.0
++aiohttp>=3.9.0
+ playwright==1.45.0
+ gspread==6.1.0
+ google-auth==2.35.0
+diff --git a/src/lib/telegram.ts b/src/lib/telegram.ts
+new file mode 100644
+index 0000000..4303e23
+--- /dev/null
++++ b/src/lib/telegram.ts
+@@ -0,0 +1,64 @@
++import fs from 'fs';
++
++const BOT_TOKEN = process.env.BOT_TOKEN;
++
++// سرور ایرانی مستقیم به api.telegram.org دسترسی ندارد. اگر متغیر محیطی
++// TELEGRAM_API_BASE تنظیم شده باشد (مثل پروکسی Cloudflare Worker که سمت
++// ربات پایتون هم استفاده می‌شود)، از همان استفاده می‌کنیم.
++const TELEGRAM_API_BASE = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
++
++function apiUrl(method: string) {
++  if (!BOT_TOKEN) {
++    throw new Error('BOT_TOKEN در فایل .env تنظیم نشده است');
++  }
++  return `${TELEGRAM_API_BASE}/bot${BOT_TOKEN}/${method}`;
++}
++
++/**
++ * ارسال پیام متنی به کاربر از طریق ربات تلگرام.
++ */
++export async function sendTelegramMessage(chatId: string, text: string) {
++  const res = await fetch(apiUrl('sendMessage'), {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ chat_id: chatId, text }),
++  });
++
++  const data = await res.json();
++  if (!data.ok) {
++    throw new Error(data.description || 'ارسال پیام تلگرام ناموفق بود');
++  }
++  return data;
++}
++
++/**
++ * ارسال یک فایل (سند/تصویر) به کاربر از طریق ربات تلگرام.
++ * filePath باید مسیر مطلق فایل روی دیسک سرور باشد.
++ */
++export async function sendTelegramDocument(
++  chatId: string,
++  filePath: string,
++  fileName: string,
++  caption?: string
++) {
++  if (!fs.existsSync(filePath)) {
++    throw new Error(`فایل روی سرور پیدا نشد: ${fileName}`);
++  }
++
++  const buffer = fs.readFileSync(filePath);
++  const form = new FormData();
++  form.append('chat_id', chatId);
++  if (caption) form.append('caption', caption);
++  form.append('document', new Blob([buffer]), fileName);
++
++  const res = await fetch(apiUrl('sendDocument'), {
++    method: 'POST',
++    body: form,
++  });
++
++  const data = await res.json();
++  if (!data.ok) {
++    throw new Error(data.description || `ارسال فایل «${fileName}» ناموفق بود`);
++  }
++  return data;
++}
+diff --git a/working_hours.py b/working_hours.py
+new file mode 100644
+index 0000000..325d37c
+--- /dev/null
++++ b/working_hours.py
+@@ -0,0 +1,80 @@
++"""
++بررسی ساعت کاری ربات — به‌جای بازه‌ی ثابت (۱۲ الی ۲۲ برای همه‌ی روزها)،
++این ماژول تنظیمات واقعی را از پنل ادمین (Next.js) می‌خواند تا مدیر بتواند
++برای هر روز هفته یک بازه‌ی جداگانه (یا تعطیلی کامل آن روز) تعریف کند.
++
++اگر پنل ادمین در دسترس نبود (مثلاً هنوز اجرا نشده یا شبکه قطع بود)،
++به‌صورت امن روی آخرین مقدار دریافتی یا بازه‌ی پیش‌فرض قدیمی fallback می‌کند
++تا ربات هیچ‌وقت به‌خاطر این مشکل کاملاً از کار نیفتد.
++"""
++import datetime
++import logging
++
++import aiohttp
++
++from config import ADMIN_PANEL_URL
++
++logger = logging.getLogger(__name__)
++
++TEHRAN_TZ = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
++
++_CACHE_TTL_SECONDS = 60  # هر ۶۰ ثانیه یک‌بار از پنل ادمین می‌خواند، نه هر پیام
++_cache = {"schedule": None, "fetched_at": None}
++
++# شماره‌ی روز مطابق جدول WorkingHour در پنل ادمین: 0=شنبه ... 6=جمعه
++DEFAULT_SCHEDULE = [
++    {"dayOfWeek": d, "startHour": 12, "startMin": 0, "endHour": 22, "endMin": 0, "enabled": True}
++    for d in range(7)
++]
++
++
++def _python_weekday_to_schema_day(py_weekday: int) -> int:
++    """پایتون: دوشنبه=0 ... یکشنبه=6  →  اسکیمای پروژه: شنبه=0 ... جمعه=6"""
++    return (py_weekday + 2) % 7
++
++
++async def _fetch_schedule():
++    now = datetime.datetime.now(TEHRAN_TZ)
++    if (
++        _cache["schedule"] is not None
++        and _cache["fetched_at"] is not None
++        and (now - _cache["fetched_at"]).total_seconds() < _CACHE_TTL_SECONDS
++    ):
++        return _cache["schedule"]
++
++    try:
++        async with aiohttp.ClientSession() as session:
++            async with session.get(
++                f"{ADMIN_PANEL_URL}/api/admin/working-hours",
++                timeout=aiohttp.ClientTimeout(total=5),
++            ) as resp:
++                data = await resp.json()
++                schedule = data.get("schedule") or DEFAULT_SCHEDULE
++                _cache["schedule"] = schedule
++                _cache["fetched_at"] = now
++                return schedule
++    except Exception as e:
++        logger.warning(
++            f"[WORKING_HOURS] دریافت ساعت کاری از پنل ادمین ({ADMIN_PANEL_URL}) ناموفق بود، "
++            f"از مقدار پیش‌فرض/آخرین مقدار معتبر استفاده می‌شود: {e}"
++        )
++        return _cache["schedule"] or DEFAULT_SCHEDULE
++
++
++async def is_within_working_hours():
++    """
++    برمی‌گرداند: (در_بازه‌ی_کاری: bool, تنظیمات_امروز: dict یا None)
++    """
++    schedule = await _fetch_schedule()
++    tehran_time = datetime.datetime.now(TEHRAN_TZ)
++    schema_day = _python_weekday_to_schema_day(tehran_time.weekday())
++
++    today = next((s for s in schedule if s["dayOfWeek"] == schema_day), None)
++    if today is None or not today.get("enabled", True):
++        return False, today
++
++    start_minutes = today["startHour"] * 60 + today["startMin"]
++    end_minutes = today["endHour"] * 60 + today["endMin"]
++    now_minutes = tehran_time.hour * 60 + tehran_time.minute
++
++    return (start_minutes <= now_minutes < end_minutes), today

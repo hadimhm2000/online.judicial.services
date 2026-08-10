@@ -2,75 +2,62 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
-import { ShieldCheck, UserPlus, UserX, Trash2, Loader2 } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Users, Plus, Trash2, Loader2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
-interface ExemptUser {
+interface ExemptUserRecord {
   id: string;
   telegramId: string;
   fullName: string | null;
-   reason: string | null;
+  reason: string | null;
   createdAt: string;
-  updatedAt: string;
 }
 
-interface Props {
+interface ExemptUsersDialogProps {
   open: boolean;
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
 }
 
-export default function ExemptUsersDialog({ open, onClose }: Props) {
-  const [records, setRecords] = useState<ExemptUser[]>([]);
+export default function ExemptUsersDialog({ open, onOpenChange }: ExemptUsersDialogProps) {
+  const [records, setRecords] = useState<ExemptUserRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
   const [telegramId, setTelegramId] = useState('');
   const [fullName, setFullName] = useState('');
   const [reason, setReason] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/admin/exempt-users');
-      const data = await res.json();
-      if (data.error) {
-        toast.error(data.error);
-        return;
+      if (res.ok) {
+        const data = await res.json();
+        setRecords(data.records || []);
       }
-      setRecords(data.records);
     } catch {
-      toast.error('خطا در دریافت اطلاعات');
+      toast.error('خطا در دریافت لیست کاربران معاف');
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (open) {
-      fetchRecords();
-      setTelegramId('');
-      setFullName('');
-      setReason('');
-    }
+    if (open) fetchRecords();
   }, [open, fetchRecords]);
 
-  const handleAdd = async () => {
+  const handleAdd = useCallback(async () => {
     if (!telegramId.trim()) {
       toast.error('شناسه تلگرام الزامی است');
       return;
     }
-
     setAdding(true);
     try {
       const res = await fetch('/api/admin/exempt-users', {
@@ -82,178 +69,163 @@ export default function ExemptUsersDialog({ open, onClose }: Props) {
           reason: reason.trim() || undefined,
         }),
       });
-
-      const data = await res.json();
-
-      if (res.status === 409) {
-        toast.error(data.error);
-        return;
+      if (res.ok) {
+        toast.success('کاربر معاف با موفقیت اضافه شد');
+        setTelegramId('');
+        setFullName('');
+        setReason('');
+        fetchRecords();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || 'خطا در افزودن کاربر');
       }
-      if (data.error) {
-        toast.error(data.error);
-        return;
-      }
-
-      toast.success('کاربر با موفقیت به لیست معافیت اضافه شد');
-      setTelegramId('');
-      setFullName('');
-      setReason('');
-      fetchRecords();
     } catch {
-      toast.error('خطا در ثبت کاربر');
+      toast.error('خطا در ارتباط با سرور');
     } finally {
       setAdding(false);
     }
-  };
+  }, [telegramId, fullName, reason, fetchRecords]);
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = useCallback(async (id: string) => {
     setDeleting(id);
     try {
-      const res = await fetch(`/api/admin/exempt-users/${id}`, {
-        method: 'DELETE',
-      });
-
-      const data = await res.json();
-
-      if (data.error) {
-        toast.error(data.error);
-        return;
+      const res = await fetch(`/api/admin/exempt-users/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        toast.success('کاربر معاف حذف شد');
+        fetchRecords();
+      } else {
+        toast.error('خطا در حذف کاربر');
       }
-
-      toast.success(data.message);
-      fetchRecords();
     } catch {
-      toast.error('خطا در حذف کاربر');
+      toast.error('خطا در ارتباط با سرور');
     } finally {
       setDeleting(null);
     }
-  };
+  }, [fetchRecords]);
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()} dir="rtl">
-      <DialogContent className="sm:max-w-lg">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg max-h-[85vh] dialog-premium" dir="rtl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldCheck className="size-5" />
-            لیست معافیت از پرداخت
-          </DialogTitle>
-          <DialogDescription>
-            مدیریت کاربران معاف از پرداخت هزینه خدمات
-          </DialogDescription>
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-full bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center animate-float">
+              <Users className="h-5 w-5 text-violet-600" />
+            </div>
+            <div>
+              <DialogTitle className="text-base font-bold">کاربران معاف</DialogTitle>
+              <DialogDescription className="text-xs text-muted-foreground mt-1">
+                مدیریت کاربرانی از محدودیت ساعات کاری معاف هستند
+              </DialogDescription>
+            </div>
+          </div>
         </DialogHeader>
 
-        {/* Add form */}
-        <div className="rounded-xl border bg-muted/30 p-4 space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="exempt-telegram-id" className="text-sm">
-                شناسه تلگرام <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="exempt-telegram-id"
-                placeholder="مثال: 123456789"
-                value={telegramId}
-                onChange={(e) => setTelegramId(e.target.value)}
-                dir="ltr"
-                className="text-left font-mono"
-              />
+        <div className="space-y-4">
+          <div className="space-y-3 p-3 rounded-xl bg-muted/30 border">
+            <p className="text-xs font-medium text-muted-foreground">افزودن کاربر جدید</p>
+            <div className="space-y-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs">شناسه تلگرام *</Label>
+                <Input
+                  value={telegramId}
+                  onChange={(e) => setTelegramId(e.target.value)}
+                  placeholder="مثال: 123456789"
+                  className="h-9 text-xs"
+                  dir="ltr"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">نام کامل</Label>
+                <Input
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="نام و نام خانوادگی"
+                  className="h-9 text-xs"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">دلیل معافیت</Label>
+                <Input
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="دلیل معافیت از محدودیت"
+                  className="h-9 text-xs"
+                />
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="exempt-fullname" className="text-sm">
-                نام و نام خانوادگی
-              </Label>
-              <Input
-                id="exempt-fullname"
-                placeholder="اختیاری"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="exempt-reason" className="text-sm">
-              دلیل معافیت
-            </Label>
-            <Input
-              id="exempt-reason"
-              placeholder="اختیاری"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-            />
-          </div>
-          <div className="flex justify-start">
             <Button
               onClick={handleAdd}
               disabled={adding || !telegramId.trim()}
               size="sm"
-              className="gap-1.5"
+              className="w-full gap-1.5 text-xs bg-violet-600 hover:bg-violet-700"
             >
               {adding ? (
-                <Loader2 className="size-4 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <UserPlus className="size-4" />
+                <Plus className="h-3.5 w-3.5" />
               )}
               افزودن
             </Button>
           </div>
-        </div>
 
-        {/* List section */}
-        <div className="mt-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          <div className="border-t pt-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                لیست کاربران معاف ({new Intl.NumberFormat('fa-IR').format(records.length)} نفر)
+              </p>
             </div>
-          ) : records.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
-              <UserX className="size-8" />
-              <span className="text-sm">هیچ کاربر معافی ثبت نشده</span>
-            </div>
-          ) : (
-            <div className="max-h-64 overflow-y-auto rounded-xl border custom-scrollbar">
-              {records.map((user, index) => (
-                <React.Fragment key={user.id}>
-                  <div className="flex items-center justify-between gap-3 px-4 py-3">
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="rounded bg-muted px-2 py-0.5 font-mono text-sm">
-                          {user.telegramId}
-                        </span>
-                        {user.fullName && (
-                          <span className="text-sm font-medium">
-                            {user.fullName}
+            <ScrollArea className="max-h-[200px]">
+              {loading ? (
+                <div className="flex items-center justify-center py-6">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : records.length === 0 ? (
+                <div className="text-center py-6">
+                  <Users className="h-8 w-8 mx-auto text-muted-foreground/30 mb-2" />
+                  <p className="text-xs text-muted-foreground">کاربر معافی ثبت نشده است</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {records.map((record) => (
+                    <div
+                      key={record.id}
+                      className="flex items-center justify-between gap-3 p-2.5 rounded-lg border bg-card hover:bg-muted/30 transition-colors"
+                    >
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium truncate">{record.fullName || '—'}</span>
+                          <span className="text-[10px] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded" dir="ltr">
+                            {record.telegramId}
                           </span>
+                        </div>
+                        {record.reason && (
+                          <p className="text-[11px] text-muted-foreground truncate">{record.reason}</p>
                         )}
                       </div>
-                      {user.reason && (
-                        <p className="text-xs text-muted-foreground">
-                          {user.reason}
-                        </p>
-                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 shrink-0"
+                        onClick={() => handleDelete(record.id)}
+                        disabled={deleting === record.id}
+                      >
+                        {deleting === record.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <XCircle className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        'size-8 shrink-0 text-muted-foreground hover:text-red-600 hover:bg-red-50',
-                        deleting === user.id && 'opacity-50',
-                      )}
-                      onClick={() => handleDelete(user.id)}
-                      disabled={deleting === user.id}
-                    >
-                      {deleting === user.id ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Trash2 className="size-4" />
-                      )}
-                    </Button>
-                  </div>
-                  {index < records.length - 1 && <Separator />}
-                </React.Fragment>
-              ))}
-            </div>
-          )}
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+          </div>
         </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>بستن</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

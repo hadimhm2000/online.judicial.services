@@ -1,5 +1,7 @@
 import { db } from '@/lib/db';
+import { sendTelegramMessage, sendTelegramDocument } from '@/lib/telegram';
 import { NextRequest, NextResponse } from 'next/server';
+import path from 'path';
 
 export async function POST(
   request: NextRequest,
@@ -16,7 +18,45 @@ export async function POST(
     }
 
     // Handle file uploads if present
-    const uploadedFileUrls = body.uploadedFileUrls || null;
+    const uploadedFileUrls: string[] = body.uploadedFileUrls || [];
+    const shouldSendViaBot = actionType === 'SEND_TO_USER' && Boolean(body.sentViaBot);
+
+    // If sending to the user, actually deliver via the Telegram bot BEFORE
+    // touching the database, so a failed send never gets recorded as success.
+    if (shouldSendViaBot) {
+      if (!existing.telegramId) {
+        return NextResponse.json(
+          { error: 'شناسه تلگرام این کاربر موجود نیست' },
+          { status: 400 }
+        );
+      }
+
+      const messageText =
+        adminNote?.trim() || 'نتیجه پرونده شما بررسی و تکمیل شد.';
+
+      try {
+        await sendTelegramMessage(existing.telegramId, messageText);
+
+        for (const url of uploadedFileUrls) {
+          const filePath = path.join(process.cwd(), 'public', url);
+          const displayName = path
+            .basename(url)
+            .replace(/^[0-9a-f-]{36}-/i, ''); // remove the random-id prefix added on upload
+          await sendTelegramDocument(existing.telegramId, filePath, displayName);
+        }
+      } catch (sendError) {
+        console.error('Telegram send error:', sendError);
+        return NextResponse.json(
+          {
+            error:
+              sendError instanceof Error
+                ? sendError.message
+                : 'ارسال پیام به کاربر از طریق ربات ناموفق بود',
+          },
+          { status: 502 }
+        );
+      }
+    }
 
     // Create admin action record
     const adminAction = await db.adminAction.create({
@@ -24,8 +64,8 @@ export async function POST(
         caseId: id,
         actionType: actionType || 'MANUAL_INTERVENTION',
         adminNote,
-        uploadedFileUrls: uploadedFileUrls ? JSON.stringify(uploadedFileUrls) : null,
-        sentViaBot: body.sentViaBot || false,
+        uploadedFileUrls: uploadedFileUrls.length ? JSON.stringify(uploadedFileUrls) : null,
+        sentViaBot: shouldSendViaBot,
       },
     });
 
@@ -41,13 +81,9 @@ export async function POST(
     // If this is a "send to user" action
     if (actionType === 'SEND_TO_USER') {
       updateData.sentToUserAt = new Date();
-      updateData.sentViaBot = true;
+      updateData.sentViaBot = shouldSendViaBot;
       updateData.status = 'COMPLETED';
       updateData.isInReadyToSend = false;
-
-      // In a real scenario, here we would call the Telegram bot API
-      // to send the result to the user via bot
-      // bot.sendMessage(telegramId, message, files)
     }
 
     // If admin resolves a failed case

@@ -39,6 +39,7 @@ from browser_helpers import (
     safe_click_by_text,
     wait_for_angular_idle,
     wait_for_horizontal_loading_bar,
+    click_sana_main_menu,
 )
 from config import ADMIN_ID
 
@@ -52,50 +53,21 @@ async def _click_ezhhar_menu(page) -> bool:
     """
     کلیک روی منوی «ارایه و پیگیری اظهارنامه».
 
-    اولویت ۱: جستجوی متن دقیق اظهارنامه (نه لایحه) — همان روش قابل‌اعتماد
-              که در ناوبری لایحه استفاده می‌شود.
-    اولویت ۲ (fallback): #menu12Container — این آیدی به‌صورت پویا بر اساس
-              ترتیب آیتم‌های منو در هر حساب دفتر خدمات تعیین می‌شود و ممکن
-              است در حساب‌های مختلف به آیتم دیگری (مثلاً لایحه) اشاره کند.
-              به همین دلیل پیش از کلیک، متن داخل آن حتماً بررسی می‌شود تا
-              مطمئن شویم واقعاً «اظهارنامه» است.
+    از click_sana_main_menu استفاده می‌کند که:
+      - فقط داخل a.list-group-item جستجو می‌کند (نه در div/span/li عمومی‌تر
+        که چند لینک را با هم دربر می‌گیرند و می‌توانند باعث کلیک روی آیتم
+        اشتباه شوند — مثلاً لایحه به‌جای اظهارنامه)
+      - «لایحه» را صریحاً exclude می‌کند
+      - اگر چند لینک هم‌زمان مطابقت داشتند، کوتاه‌ترین (دقیق‌ترین) را انتخاب می‌کند
+
+    توجه: دیگر از #menu12Container استفاده نمی‌شود — آن آیدی بر اساس ترتیب
+    پویای منو در هر حساب تعیین می‌شود و می‌تواند در حساب‌های مختلف به آیتم
+    دیگری (مثلاً لایحه) اشاره کند.
     """
-    # اولویت ۱: جستجوی دقیق متن — فقط اظهارنامه، نه لایحه
-    clicked = await page.evaluate('''() => {
-        const links = Array.from(document.querySelectorAll('a.list-group-item'));
-        for (const el of links) {
-            const text = (el.innerText || "").trim();
-            // باید شامل «اظهارنامه» باشد و شامل «لایحه» نباشد
-            if (text.includes("اظهارنامه") && !text.includes("لایحه")) {
-                el.click();
-                return true;
-            }
-        }
-        return false;
-    }''')
-    if clicked:
-        logging.info("[EZHHAR_SIGN] منو اظهارنامه با متن کلیک شد")
-        return True
-
-    # اولویت ۲ (fallback ایمن): #menu12Container — فقط اگر متن داخلش
-    # واقعاً «اظهارنامه» باشد و «لایحه» نباشد؛ در غیر این صورت کلیک نمی‌شود
-    # تا به‌اشتباه وارد بخش دیگری (مثل لایحه) نشویم.
-    clicked = await page.evaluate('''() => {
-        const menuContainer = document.querySelector('#menu12Container');
-        if (menuContainer) {
-            const text = (menuContainer.innerText || "").trim();
-            if (text.includes("اظهارنامه") && !text.includes("لایحه")) {
-                const link = menuContainer.querySelector('a') || menuContainer;
-                if (link) { link.click(); return true; }
-            }
-        }
-        return false;
-    }''')
-    if clicked:
-        logging.info("[EZHHAR_SIGN] منو اظهارنامه با id (تایید‌شده با متن) کلیک شد")
-        return True
-
-    return False
+    return await click_sana_main_menu(
+        page, "ارایه و پیگیری اظهارنامه", exclude_texts=["لایحه"],
+        timeout_sec=15, prefix="EZHHAR_SIGN",
+    )
 
 
 async def _verify_ezhhar_page_loaded(page) -> bool:
@@ -158,8 +130,17 @@ async def navigate_to_ezhhar_sign_page(
             # ── ۲. کلیک روی «ارایه و پیگیری اظهارنامه» ────────────────────────
             clicked = await _click_ezhhar_menu(sana_page)
             if not clicked:
-                logging.warning(f"[EZHHAR_SIGN] منو اظهارنامه پیدا نشد (تلاش {nav_attempt+1})")
-                await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+                # fallback: کلیک با متن دقیق (شامل «اظهارنامه»، بدون «لایحه»).
+                # _verify_ezhhar_page_loaded پایین‌تر تضمین می‌کند به بخش درست رسیده‌ایم.
+                logging.warning(f"[EZHHAR_SIGN] منو اظهارنامه با روش اصلی پیدا نشد (تلاش {nav_attempt+1}) — fallback با متن")
+                try:
+                    clicked = await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+                except Exception as menu_err:
+                    logging.warning(f"[EZHHAR_SIGN] fallback متن منو اظهارنامه ناموفق: {menu_err}")
+                    clicked = False
+            if not clicked:
+                logging.warning(f"[EZHHAR_SIGN] منو اظهارنامه پیدا نشد (تلاش {nav_attempt+1}) — تلاش مجدد ناوبری")
+                continue
             await resilient_sleep(sana_page, 5, bot, user_id)
 
             # ── ۳. بررسی صحت صفحه — مطمئن شدن در بخش اظهارنامه هستیم ──────
@@ -549,10 +530,17 @@ async def submit_ezhhar_sign_code(
 
         await human_delay(3.0, 5.0)
 
-        # کلیک منوی اظهارنامه — با تابع اصلاح‌شده
+        # کلیک منوی اظهارنامه — با تابع ایمن click_sana_main_menu (+ fallback متنی)
         clicked = await _click_ezhhar_menu(sana_page)
         if not clicked:
-            await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+            logging.warning("[EZHHAR_SIGN] فاز۳: منو اظهارنامه با روش اصلی پیدا نشد — fallback با متن")
+            try:
+                clicked = await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+            except Exception as menu_err:
+                logging.warning(f"[EZHHAR_SIGN] فاز۳: fallback متن منو ناموفق: {menu_err}")
+                clicked = False
+        if not clicked:
+            return {"success": False, "error": "منوی اظهارنامه پیدا نشد"}
         await resilient_sleep(sana_page, 5, bot, user_id)
 
         # بررسی صحت صفحه

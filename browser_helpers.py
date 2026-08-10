@@ -225,6 +225,45 @@ async def handle_session_expired(bot: Bot, user_id: int, page=None):
     await bot.send_message(ADMIN_ID, "✅ **نشست با موفقیت تمدید شد.** ادامه‌ی فرآیند از همان مرحله...")
     await asyncio.sleep(2)
 
+async def detect_concurrent_login_popup(page) -> bool:
+    """
+    تشخیص پاپ‌آپ ورود همزمان (concurrent login) در سامانه ثنا.
+
+    این پاپ‌آپ شامل:
+      - آیکون خطا (sa-error با animateErrorIcon)
+      - متن: «ورود به سامانه در صفحه یا رایانه ای دیگر»
+      - متن: «اعتبار ورود قبلی ... منقضی شده است»
+
+    ⭐ این تابع باید در تمام بخش‌ها فراخوانی شود:
+      - لایحه (lavayeh_scenario / lavayeh_handlers)
+      - اظهارنامه (ezhharnameh_scenario / ezhharnameh_handlers)
+      - اعلام وکالت (ealam_vakalaht_scenario / ealam_vakalaht_handlers)
+      - استعلامات و زیرمجموعه‌های بخش درخواست‌ها
+
+    بازگشت: True اگر پاپ‌آپ ورود همزمان ظاهر شده باشد
+    """
+    is_concurrent = await page.evaluate('''() => {
+        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+        if (!popup) return false;
+
+        // بررسی آیکون خطا
+        const errorIcon = popup.querySelector('.sa-icon.sa-error');
+        if (!errorIcon) return false;
+        if (window.getComputedStyle(errorIcon).display === 'none') return false;
+
+        // بررسی متن پاپ‌آپ
+        const popupText = popup.innerText || "";
+        const isConcurrent =
+            popupText.includes("رایانه ای دیگر") ||
+            popupText.includes("رایانه ای ديگر") ||
+            (popupText.includes("اعتبار ورود") && popupText.includes("منقضی")) ||
+            popupText.includes("منقضي شده");
+
+        return isConcurrent;
+    }''')
+    return bool(is_concurrent)
+
+
 async def wait_for_angular_idle(page):
     """منتظر ماندن برای پایداری انگولار"""
     try:

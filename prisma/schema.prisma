@@ -109,17 +109,15 @@ model BotMessage {
 }
 
 model WorkingHour {
-  id        String   @id @default(cuid())
-  dayOfWeek Int      // 0=شنبه, 1=یکشنبه, ..., 6=جمعه
-  startHour Int      // e.g. 8
-  startMin  Int      @default(0)
-  endHour   Int      // e.g. 22
-  endMin    Int      @default(0)
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([dayOfWeek])
+  id         String @id @default(cuid())
+  dayOfWeek  Int    // 0=Saturday, 1=Sunday, ..., 6=Friday
+  startHour  Int    @default(8)
+  startMin   Int    @default(0)
+  endHour    Int    @default(22)
+  endMin     Int    @default(0)
+  enabled    Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 model ExemptUser {
@@ -128,5 +126,4 @@ model ExemptUser {
   fullName   String?
   reason     String?
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
 }

@@ -4,8 +4,12 @@ import { testConnection, isGoogleSheetsConfigured } from '@/lib/google-sheets';
 export async function POST() {
   try {
     if (!isGoogleSheetsConfigured()) {
-      return NextResponse.json({ success: false, message: 'گوگل شیت پیکربندی نشده است' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, message: 'گوگل شیت پیکربندی نشده است' },
+        { status: 400 }
+      );
     }
+
     const result = await testConnection();
     return NextResponse.json(result);
   } catch (error: unknown) {

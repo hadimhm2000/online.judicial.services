@@ -17,8 +17,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
 from config import BOT_TOKEN, TELEGRAM_API_BASE, ADMIN_ID
+from bug_reporter import init_file_logging, report_bug, upload_logs
 from handlers import router
 from scenarios import browser_worker
+
+# فعال‌سازی لاگ فایل چرخشی در اولین فرصت (قابل آپلود مستمر خطاها)
+init_file_logging()
 import runtime_state
 from persistence import (
     load_into_runtime_state, save_runtime_state, was_crash,

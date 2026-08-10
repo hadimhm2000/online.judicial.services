@@ -433,6 +433,19 @@ async def admin_show_incomplete_tasks(message: types.Message, bot: Bot):
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
 
+@router.message(F.from_user.id == ADMIN_ID, F.text.startswith("/logs"))
+async def admin_upload_logs(message: types.Message, bot: Bot):
+    """آپلود فایل لاگ به مدیر (آپلود مستمر خطاها).
+    استفاده: `/logs` → فقط خطاها/هشدارها | `/logs all` → لاگ کامل"""
+    from bug_reporter import upload_logs
+    parts = message.text.strip().split(maxsplit=1)
+    which = "all" if (len(parts) > 1 and parts[1].strip().lower() == "all") else "bugs"
+    await message.answer(f"⏳ در حال آپلود لاگ «{'کامل' if which == 'all' else 'خطاها/هشدارها'}»...")
+    ok = await upload_logs(bot, chat_id=message.chat.id, which=which)
+    if not ok:
+        await message.answer("ℹ️ لاگی برای ارسال نبود یا آپلود ناموفق شد.")
+
+
 @router.message(F.from_user.id == ADMIN_ID, Command("resume"))
 async def admin_resume_task(message: types.Message, bot: Bot):
     """مدیر می‌تواند ادامه تسک ناقص را از مرحله مشخص‌شده شروع کند"""

@@ -1,0 +1,320 @@
+diff --git a/src/app/api/admin/cases/[id]/manual-intervention/route.ts b/src/app/api/admin/cases/[id]/manual-intervention/route.ts
+index 442049a..2ac5033 100644
+--- a/src/app/api/admin/cases/[id]/manual-intervention/route.ts
++++ b/src/app/api/admin/cases/[id]/manual-intervention/route.ts
+@@ -1,5 +1,7 @@
+ import { db } from '@/lib/db';
++import { sendTelegramMessage, sendTelegramDocument } from '@/lib/telegram';
+ import { NextRequest, NextResponse } from 'next/server';
++import path from 'path';
+ 
+ export async function POST(
+   request: NextRequest,
+@@ -16,7 +18,45 @@ export async function POST(
+     }
+ 
+     // Handle file uploads if present
+-    const uploadedFileUrls = body.uploadedFileUrls || null;
++    const uploadedFileUrls: string[] = body.uploadedFileUrls || [];
++    const shouldSendViaBot = actionType === 'SEND_TO_USER' && Boolean(body.sentViaBot);
++
++    // If sending to the user, actually deliver via the Telegram bot BEFORE
++    // touching the database, so a failed send never gets recorded as success.
++    if (shouldSendViaBot) {
++      if (!existing.telegramId) {
++        return NextResponse.json(
++          { error: 'شناسه تلگرام این کاربر موجود نیست' },
++          { status: 400 }
++        );
++      }
++
++      const messageText =
++        adminNote?.trim() || 'نتیجه پرونده شما بررسی و تکمیل شد.';
++
++      try {
++        await sendTelegramMessage(existing.telegramId, messageText);
++
++        for (const url of uploadedFileUrls) {
++          const filePath = path.join(process.cwd(), 'public', url);
++          const displayName = path
++            .basename(url)
++            .replace(/^[0-9a-f-]{36}-/i, ''); // remove the random-id prefix added on upload
++          await sendTelegramDocument(existing.telegramId, filePath, displayName);
++        }
++      } catch (sendError) {
++        console.error('Telegram send error:', sendError);
++        return NextResponse.json(
++          {
++            error:
++              sendError instanceof Error
++                ? sendError.message
++                : 'ارسال پیام به کاربر از طریق ربات ناموفق بود',
++          },
++          { status: 502 }
++        );
++      }
++    }
+ 
+     // Create admin action record
+     const adminAction = await db.adminAction.create({
+@@ -24,8 +64,8 @@ export async function POST(
+         caseId: id,
+         actionType: actionType || 'MANUAL_INTERVENTION',
+         adminNote,
+-        uploadedFileUrls: uploadedFileUrls ? JSON.stringify(uploadedFileUrls) : null,
+-        sentViaBot: body.sentViaBot || false,
++        uploadedFileUrls: uploadedFileUrls.length ? JSON.stringify(uploadedFileUrls) : null,
++        sentViaBot: shouldSendViaBot,
+       },
+     });
+ 
+@@ -41,13 +81,9 @@ export async function POST(
+     // If this is a "send to user" action
+     if (actionType === 'SEND_TO_USER') {
+       updateData.sentToUserAt = new Date();
+-      updateData.sentViaBot = true;
++      updateData.sentViaBot = shouldSendViaBot;
+       updateData.status = 'COMPLETED';
+       updateData.isInReadyToSend = false;
+-
+-      // In a real scenario, here we would call the Telegram bot API
+-      // to send the result to the user via bot
+-      // bot.sendMessage(telegramId, message, files)
+     }
+ 
+     // If admin resolves a failed case
+diff --git a/src/app/api/admin/upload/route.ts b/src/app/api/admin/upload/route.ts
+new file mode 100644
+index 0000000..7965090
+--- /dev/null
++++ b/src/app/api/admin/upload/route.ts
+@@ -0,0 +1,45 @@
++import { NextRequest, NextResponse } from 'next/server';
++import { writeFile, mkdir } from 'fs/promises';
++import path from 'path';
++import { randomUUID } from 'crypto';
++
++// حداکثر حجم هر فایل: 20 مگابایت (محدودیت تلگرام برای ارسال فایل توسط بات)
++const MAX_FILE_BYTES = 20 * 1024 * 1024;
++
++export async function POST(request: NextRequest) {
++  try {
++    const formData = await request.formData();
++    const files = formData.getAll('files').filter((f): f is File => f instanceof File);
++
++    if (!files.length) {
++      return NextResponse.json({ error: 'فایلی ارسال نشده است' }, { status: 400 });
++    }
++
++    for (const file of files) {
++      if (file.size > MAX_FILE_BYTES) {
++        return NextResponse.json(
++          { error: `فایل «${file.name}» بیشتر از حد مجاز (۲۰ مگابایت) است` },
++          { status: 400 }
++        );
++      }
++    }
++
++    const uploadDir = path.join(process.cwd(), 'public', 'uploads');
++    await mkdir(uploadDir, { recursive: true });
++
++    const results: { url: string; name: string }[] = [];
++
++    for (const file of files) {
++      const buffer = Buffer.from(await file.arrayBuffer());
++      const safeName = file.name.replace(/[^a-zA-Z0-9.\-_\u0600-\u06FF]/g, '_');
++      const storedName = `${randomUUID()}-${safeName}`;
++      await writeFile(path.join(uploadDir, storedName), buffer);
++      results.push({ url: `/uploads/${storedName}`, name: file.name });
++    }
++
++    return NextResponse.json({ success: true, files: results });
++  } catch (error) {
++    console.error('Upload error:', error);
++    return NextResponse.json({ error: 'خطا در آپلود فایل' }, { status: 500 });
++  }
++}
+diff --git a/src/components/admin/manual-intervention-dialog.tsx b/src/components/admin/manual-intervention-dialog.tsx
+index 6cec862..c866072 100644
+--- a/src/components/admin/manual-intervention-dialog.tsx
++++ b/src/components/admin/manual-intervention-dialog.tsx
+@@ -60,25 +60,44 @@ export default function ManualInterventionDialog({
+   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+   const [fileNames, setFileNames] = useState<string[]>([]);
+   const [sending, setSending] = useState(false);
++  const [uploading, setUploading] = useState(false);
++  const [uploadError, setUploadError] = useState<string | null>(null);
+   const [success, setSuccess] = useState(false);
+   const [botSend, setBotSend] = useState(true);
+ 
+   if (!caseItem) return null;
+ 
+-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
++  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+     const files = e.target.files;
+-    if (!files) return;
++    if (!files || files.length === 0) return;
+ 
+-    const newNames: string[] = [...fileNames];
+-    const newUrls: string[] = [...uploadedFiles];
++    setUploadError(null);
++    setUploading(true);
++    try {
++      const formData = new FormData();
++      Array.from(files).forEach((f) => formData.append('files', f));
++
++      const res = await fetch('/api/admin/upload', {
++        method: 'POST',
++        body: formData,
++      });
++      const data = await res.json();
+ 
+-    Array.from(files).forEach((f) => {
+-      newNames.push(f.name);
+-      newUrls.push(`file://${f.name}`);
+-    });
++      if (!res.ok) {
++        throw new Error(data.error || 'آپلود فایل ناموفق بود');
++      }
+ 
+-    setFileNames(newNames);
+-    setUploadedFiles(newUrls);
++      const newUrls = (data.files as { url: string; name: string }[]).map((f) => f.url);
++      const newNames = (data.files as { url: string; name: string }[]).map((f) => f.name);
++
++      setUploadedFiles((prev) => [...prev, ...newUrls]);
++      setFileNames((prev) => [...prev, ...newNames]);
++    } catch (err) {
++      setUploadError(err instanceof Error ? err.message : 'آپلود فایل ناموفق بود');
++    } finally {
++      setUploading(false);
++      e.target.value = '';
++    }
+   };
+ 
+   const removeFile = (index: number) => {
+@@ -116,6 +135,8 @@ export default function ManualInterventionDialog({
+     setUploadedFiles([]);
+     setFileNames([]);
+     setSending(false);
++    setUploading(false);
++    setUploadError(null);
+     setSuccess(false);
+     setBotSend(true);
+     onClose();
+@@ -231,25 +252,37 @@ export default function ManualInterventionDialog({
+                   className="hidden"
+                   id="file-upload"
+                   accept="image/*,.pdf,.doc,.docx"
++                  disabled={uploading}
+                 />
+                 <label
+                   htmlFor="file-upload"
+-                  className="cursor-pointer flex flex-col items-center gap-2.5"
++                  className={cn(
++                    'flex flex-col items-center gap-2.5',
++                    uploading ? 'cursor-wait opacity-70' : 'cursor-pointer'
++                  )}
+                 >
+                   <div className="h-10 w-10 rounded-xl bg-muted/50 group-hover:bg-primary/10 flex items-center justify-center transition-all duration-200 group-hover:scale-110">
+-                    <FileUp className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
++                    {uploading ? (
++                      <Loader2 className="h-5 w-5 text-primary animate-spin" />
++                    ) : (
++                      <FileUp className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
++                    )}
+                   </div>
+                   <div>
+                     <p className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
+-                      {"کلیک کنید یا فایل بکشید"}
++                      {uploading ? 'در حال آپلود...' : 'کلیک کنید یا فایل بکشید'}
+                     </p>
+                     <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+-                      {"تصاویر، PDF، Word"}
++                      {"تصاویر، PDF، Word — حداکثر ۲۰ مگابایت"}
+                     </p>
+                   </div>
+                 </label>
+               </div>
+ 
++              {uploadError && (
++                <p className="text-xs text-red-600 dark:text-red-400">{uploadError}</p>
++              )}
++
+               {fileNames.length > 0 && (
+                 <div className="space-y-1.5">
+                   {fileNames.map((name, i) => (
+@@ -320,7 +353,7 @@ export default function ManualInterventionDialog({
+               </Button>
+               <Button
+                 onClick={handleSubmit}
+-                disabled={sending || (!adminNote.trim() && actionType !== 'SEND_TO_USER')}
++                disabled={sending || uploading || (!adminNote.trim() && actionType !== 'SEND_TO_USER')}
+                 className={cn(
+                   'transition-all duration-200 scale-[1.02] active:scale-[0.98] shadow-md',
+                   actionType === 'SEND_TO_USER'
+diff --git a/src/lib/telegram.ts b/src/lib/telegram.ts
+new file mode 100644
+index 0000000..08be285
+--- /dev/null
++++ b/src/lib/telegram.ts
+@@ -0,0 +1,59 @@
++import fs from 'fs';
++
++const BOT_TOKEN = process.env.BOT_TOKEN;
++
++function apiUrl(method: string) {
++  if (!BOT_TOKEN) {
++    throw new Error('BOT_TOKEN در فایل .env تنظیم نشده است');
++  }
++  return `https://api.telegram.org/bot${BOT_TOKEN}/${method}`;
++}
++
++/**
++ * ارسال پیام متنی به کاربر از طریق ربات تلگرام.
++ */
++export async function sendTelegramMessage(chatId: string, text: string) {
++  const res = await fetch(apiUrl('sendMessage'), {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ chat_id: chatId, text }),
++  });
++
++  const data = await res.json();
++  if (!data.ok) {
++    throw new Error(data.description || 'ارسال پیام تلگرام ناموفق بود');
++  }
++  return data;
++}
++
++/**
++ * ارسال یک فایل (سند/تصویر) به کاربر از طریق ربات تلگرام.
++ * filePath باید مسیر مطلق فایل روی دیسک سرور باشد.
++ */
++export async function sendTelegramDocument(
++  chatId: string,
++  filePath: string,
++  fileName: string,
++  caption?: string
++) {
++  if (!fs.existsSync(filePath)) {
++    throw new Error(`فایل روی سرور پیدا نشد: ${fileName}`);
++  }
++
++  const buffer = fs.readFileSync(filePath);
++  const form = new FormData();
++  form.append('chat_id', chatId);
++  if (caption) form.append('caption', caption);
++  form.append('document', new Blob([buffer]), fileName);
++
++  const res = await fetch(apiUrl('sendDocument'), {
++    method: 'POST',
++    body: form,
++  });
++
++  const data = await res.json();
++  if (!data.ok) {
++    throw new Error(data.description || `ارسال فایل «${fileName}» ناموفق بود`);
++  }
++  return data;
++}

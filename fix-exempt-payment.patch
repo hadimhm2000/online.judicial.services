@@ -1,0 +1,357 @@
+diff --git a/handlers.py b/handlers.py
+index e094afb..49f32da 100644
+--- a/handlers.py
++++ b/handlers.py
+@@ -15,6 +15,8 @@ from aiogram.types import (
+ 
+ import runtime_state
+ from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME, get_fee, FEES
++from working_hours import is_within_working_hours
++from exempt_users import is_exempt_user
+ from states import Form
+ from sheets import append_to_sheet, log_event
+ from ocr import verify_payment_receipt
+@@ -119,19 +121,67 @@ class WorkingHoursMiddleware(BaseMiddleware):
+         if event.from_user and event.from_user.id == ADMIN_ID:
+             return await handler(event, data)
+ 
+-        tehran_tz = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
+-        tehran_time = datetime.datetime.now(tehran_tz)
+-
+-        if 12 <= tehran_time.hour < 22:
++        allowed, today = await is_within_working_hours()
++        if allowed:
+             return await handler(event, data)
++
++        if today is not None and not today.get("enabled", True):
++            await event.answer("⛔️ **خارج از ساعت کاری**\n\nامروز سامانه غیرفعال است.")
++        elif today is not None:
++            start = f"{today['startHour']:02d}:{today['startMin']:02d}"
++            end = f"{today['endHour']:02d}:{today['endMin']:02d}"
++            await event.answer(
++                f"⛔️ **خارج از ساعت کاری**\n\nکاربر گرامی، ساعت کاری سامانه امروز از {start} الی {end} می‌باشد."
++            )
+         else:
+-            await event.answer("⛔️ **خارج از ساعت کاری**\n\nکاربر گرامی، ساعت کاری سامانه از ۱۲:۰۰ ظهر الی ۲۲:۰۰ می‌باشد.")
+-            return
++            await event.answer("⛔️ **خارج از ساعت کاری**")
++        return
+ 
+ router.message.middleware(WorkingHoursMiddleware())
+ 
+ # ================= بخش پردازش فیش‌های واریزی =================
+ 
++async def _enqueue_cart_jobs(message: types.Message, cart: list):
++    """سبد خرید تاییدشده (چه با پرداخت واقعی، چه با معافیت) را به صف پردازش می‌فرستد."""
++    for item in cart:
++        q_type = item['query_type']
++        tracking_code = item['tracking_code']
++        doc_category = item.get('doc_category')
++        doc_subcategory = item.get('doc_subcategory')
++        need_attachments = item.get('need_attachments', False)
++
++        doc_name = f"{doc_category} - {doc_subcategory}" if doc_subcategory else doc_category
++        await log_event(
++            "پرداخت", q_type, message.from_user.full_name, message.from_user.id,
++            tracking_code=tracking_code, doc_name=doc_name, payment_status="پرداخت شده"
++        )
++
++        await runtime_state.job_queue.put({
++            'user_id': message.from_user.id,
++            'query_type': q_type,
++            'tracking_code': tracking_code,
++            'doc_category': doc_category,
++            'doc_subcategory': doc_subcategory,
++            'doc_type': doc_name,
++            'need_attachments': need_attachments
++        })
++
++
++async def _try_handle_exempt_checkout(message: types.Message, state: FSMContext, cart: list) -> bool:
++    """اگر کاربر معاف از پرداخت باشد، بدون درخواست فیش مستقیم پردازش را شروع می‌کند.
++    خروجی True یعنی معاف بود و پردازش شد (دیگر فاکتور نشان ندهید)."""
++    if not await is_exempt_user(message.from_user.id):
++        return False
++
++    await message.answer(
++        f"✅ **کاربر معاف از پرداخت:**\nتعداد {len(cart)} استعلام بدون نیاز به پرداخت در صف پردازش قرار گرفت.",
++        reply_markup=restart_kb,
++    )
++    await _enqueue_cart_jobs(message, cart)
++    await state.clear()
++    return True
++
++
+ @router.message(Form.waiting_for_payment_receipt, F.photo)
+ async def process_payment_receipt(message: types.Message, state: FSMContext, bot: Bot):
+     data = await state.get_data()
+@@ -152,28 +202,7 @@ async def process_payment_receipt(message: types.Message, state: FSMContext, bot
+         queue_note = f"\n📊 موقعیت شما در صف: **{queue_position + 1}**" if queue_position > 0 else "\n▶️ پردازش بلافاصله آغاز می‌شود."
+         await message.answer(f"✅ **تایید پرداخت:**\n{ocr_msg}\nتعداد {len(cart)} استعلام در صف پردازش قرار گرفت.{queue_note}", reply_markup=restart_kb)
+         
+-        for item in cart:
+-            q_type = item['query_type']
+-            tracking_code = item['tracking_code']
+-            doc_category = item.get('doc_category')
+-            doc_subcategory = item.get('doc_subcategory')
+-            need_attachments = item.get('need_attachments', False)
+-            
+-            doc_name = f"{doc_category} - {doc_subcategory}" if doc_subcategory else doc_category
+-            await log_event(
+-                "پرداخت", q_type, message.from_user.full_name, message.from_user.id,
+-                tracking_code=tracking_code, doc_name=doc_name, payment_status="پرداخت شده"
+-            )
+-            
+-            await runtime_state.job_queue.put({
+-                'user_id': message.from_user.id, 
+-                'query_type': q_type, 
+-                'tracking_code': tracking_code, 
+-                'doc_category': doc_category, 
+-                'doc_subcategory': doc_subcategory, 
+-                'doc_type': doc_name,
+-                'need_attachments': need_attachments
+-            })
++        await _enqueue_cart_jobs(message, cart)
+             
+         if os.path.exists(photo_path):
+             os.remove(photo_path)
+@@ -685,7 +714,10 @@ async def process_main_menu(message: types.Message, state: FSMContext):
+         if not cart:
+             await message.answer("🛒 سبد خرید شما خالی است.", reply_markup=main_menu_kb)
+             return
+-            
++
++        if await _try_handle_exempt_checkout(message, state, cart):
++            return
++
+         total_sum = sum(item['fee'] for item in cart)
+         await state.update_data(total_payment_sum=total_sum)
+         
+@@ -991,7 +1023,10 @@ async def confirm_opt_process(message: types.Message, state: FSMContext, bot: Bo
+             'total_attachments': data.get('total_attachments', 0)
+         }
+         await state.update_data(cart=[item])
+-        
++
++        if await _try_handle_exempt_checkout(message, state, [item]):
++            return
++
+         payment_msg = (
+             f"💳 **فاکتور پرداخت:**\n\n"
+             f"🔹 نوع استعلام: **{data.get('query_type')}**\n"
+diff --git a/lavayeh_handlers.py b/lavayeh_handlers.py
+index cb3571b..c636bb2 100644
+--- a/lavayeh_handlers.py
++++ b/lavayeh_handlers.py
+@@ -15,6 +15,7 @@ from aiogram.types import Message, ReplyKeyboardRemove, InlineKeyboardMarkup, In
+ 
+ import runtime_state
+ from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME, calculate_lavayeh_fee, format_lavayeh_fee_explanation
++from exempt_users import is_exempt_user
+ from sheets import log_event
+ from ocr import verify_payment_receipt
+ from states import Form
+@@ -2130,6 +2131,41 @@ async def send_lavayeh_result(
+         fee_text = format_lavayeh_fee_explanation(court_total)
+         final_fee = calculate_lavayeh_fee(court_total)
+ 
++    doc_type = "اظهارنامه" if is_ezhharnameh else "لایحه"
++
++    # ── کاربر معاف از پرداخت: بدون فاکتور، مستقیم وارد مرحله‌ی امضا می‌شود ──
++    if await is_exempt_user(user_id):
++        await bot.send_message(
++            user_id,
++            f"✅ **کاربر معاف از پرداخت:**\nثبت {doc_type} شما بدون نیاز به پرداخت هزینه تکمیل شد.",
++            parse_mode="Markdown"
++        )
++        await log_event(
++            "ثبت", doc_type, str(user_id), user_id,
++            tracking_code=tracking_code, national_id=national_ids,
++            doc_name=doc_type, payment_status="معاف از پرداخت",
++            note=f"هزینه سامانه: {court_total:,} ریال (معاف)"
++        )
++
++        pending = {
++            "invoice_time": datetime.datetime.now(),
++            "final_fee": final_fee,
++            "court_total": court_total,
++            "tracking_code": tracking_code,
++            "national_ids": national_ids,
++            "reminder_sent": False,
++            "blocked": False,
++            "lavayeh_title": lavayeh_title,
++            "lavayeh_province": lavayeh_province,
++            "lavayeh_row_number": lavayeh_row_number,
++            "lavayeh_persons": lavayeh_persons,
++            "is_ezhharnameh": is_ezhharnameh,
++        }
++        user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
++        await _start_signing_flow(bot, user_state, user_id, pending)
++        runtime_state.active_lavayeh_users.discard(user_id)
++        return
++
+     await bot.send_message(user_id, fee_text, parse_mode="Markdown")
+ 
+     service_label = "اظهارنامه" if is_ezhharnameh else "لایحه"
+@@ -2142,7 +2178,6 @@ async def send_lavayeh_result(
+     )
+     await bot.send_message(user_id, payment_msg, parse_mode="Markdown")
+ 
+-    doc_type = "اظهارنامه" if is_ezhharnameh else "لایحه"
+     await log_event(
+         "ثبت", doc_type, str(user_id), user_id,
+         tracking_code=tracking_code, national_id=national_ids,
+@@ -2171,6 +2206,79 @@ async def send_lavayeh_result(
+     runtime_state.active_lavayeh_users.discard(user_id)
+ 
+ 
++# ══════════════════════════════════════════════════════════════════════════════
++# شروع فلوی امضا (بعد از تایید پرداخت یا بعد از معافیت از پرداخت)
++# ══════════════════════════════════════════════════════════════════════════════
++async def _start_signing_flow(bot: Bot, state: FSMContext, user_id: int, pending: dict):
++    """کاربر را وارد مرحله‌ی اخذ امضای الکترونیک می‌کند. بین لایحه و اظهارنامه
++    تمایز می‌گذارد. هم بعد از تایید فیش واقعی و هم بعد از معافیت از پرداخت
++    فراخوانی می‌شود."""
++    if pending.get("is_ezhharnameh", False):
++        # فلوی امضا اظهارنامه
++        raw_persons = pending.get("lavayeh_persons", [])
++        # تبدیل فرمت: اضافه کردن idx و name برای هندلر انتخاب شخص
++        sign_persons = []
++        for i, p in enumerate(raw_persons):
++            sign_persons.append({
++                "idx": i,
++                "name": p.get("name", p.get("national_id", f"شخص {i+1}")),
++                "person_type": p.get("person_type", ""),
++                "national_id": p.get("national_id", ""),
++            })
++        runtime_state.pending_ezhhar_sign[user_id] = {
++            "tracking_code": pending.get("tracking_code", ""),
++            "is_ezhharnameh": True,
++            "sign_persons": sign_persons,
++            "persons_awaiting_sign": list(range(len(sign_persons))),
++            "current_person_idx": 0,
++            "sign_codes_received": {},
++            "sign_sent_time": None,
++            "wrong_code_time": None,
++            "code_sent_announce_time": None,
++            "resend_notified": False,
++            "total_no_action_start": datetime.datetime.now(),
++        }
++        runtime_state.pending_lavayeh_payments.pop(user_id, None)
++
++        from keyboards import ezhhar_sign_ready_kb
++        await bot.send_message(
++            user_id,
++            "🖊 **مرحله اخذ امضای الکترونیک اظهارنامه:**\n\n"
++            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
++            reply_markup=ezhhar_sign_ready_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.ezhhar_sign_ready)
++    else:
++        # فلوی امضا لایحه (قبلی)
++        runtime_state.pending_lavayeh_sign[user_id] = {
++            "tracking_code": pending.get("tracking_code", ""),
++            "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
++            "province": pending.get("lavayeh_province", ""),
++            "row_number": pending.get("lavayeh_row_number", 1),
++            "persons": pending.get("lavayeh_persons", []),
++            "sign_persons": [],
++            "persons_awaiting_sign": [],
++            "current_person_idx": None,
++            "sign_sent_time": None,
++            "sign_codes_received": {},
++            "wrong_code_time": None,
++            "code_sent_announce_time": None,
++            "resend_notified": False,
++            "total_no_action_start": None,
++        }
++        runtime_state.pending_lavayeh_payments.pop(user_id, None)
++
++        await bot.send_message(
++            user_id,
++            "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
++            "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
++            reply_markup=lavayeh_sign_ready_kb,
++            parse_mode="Markdown"
++        )
++        await state.set_state(Form.lavayeh_sign_ready)
++
++
+ # ══════════════════════════════════════════════════════════════════════════════
+ # پرداخت هزینه لایحه
+ # ══════════════════════════════════════════════════════════════════════════════
+@@ -2206,72 +2314,7 @@ async def lavayeh_receive_payment_receipt(message: Message, bot: Bot, state: FSM
+         )
+ 
+         user_id = message.from_user.id
+-
+-        # ── تمایز بین لایحه و اظهارنامه برای فلوی امضا ──
+-        if pending.get("is_ezhharnameh", False):
+-            # فلوی امضا اظهارنامه
+-            raw_persons = pending.get("lavayeh_persons", [])
+-            # تبدیل فرمت: اضافه کردن idx و name برای هندلر انتخاب شخص
+-            sign_persons = []
+-            for i, p in enumerate(raw_persons):
+-                sign_persons.append({
+-                    "idx": i,
+-                    "name": p.get("name", p.get("national_id", f"شخص {i+1}")),
+-                    "person_type": p.get("person_type", ""),
+-                    "national_id": p.get("national_id", ""),
+-                })
+-            runtime_state.pending_ezhhar_sign[user_id] = {
+-                "tracking_code": pending.get("tracking_code", ""),
+-                "is_ezhharnameh": True,
+-                "sign_persons": sign_persons,
+-                "persons_awaiting_sign": list(range(len(sign_persons))),
+-                "current_person_idx": 0,
+-                "sign_codes_received": {},
+-                "sign_sent_time": None,
+-                "wrong_code_time": None,
+-                "code_sent_announce_time": None,
+-                "resend_notified": False,
+-                "total_no_action_start": datetime.datetime.now(),
+-            }
+-            runtime_state.pending_lavayeh_payments.pop(user_id, None)
+-
+-            from keyboards import ezhhar_sign_ready_kb
+-            await bot.send_message(
+-                user_id,
+-                "🖊 **مرحله اخذ امضای الکترونیک اظهارنامه:**\n\n"
+-                "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+-                reply_markup=ezhhar_sign_ready_kb,
+-                parse_mode="Markdown"
+-            )
+-            await state.set_state(Form.ezhhar_sign_ready)
+-        else:
+-            # فلوی امضا لایحه (قبلی)
+-            runtime_state.pending_lavayeh_sign[user_id] = {
+-                "tracking_code": pending.get("tracking_code", ""),
+-                "lavayeh_title": pending.get("lavayeh_title", "لایحه دفاعیه"),
+-                "province": pending.get("lavayeh_province", ""),
+-                "row_number": pending.get("lavayeh_row_number", 1),
+-                "persons": pending.get("lavayeh_persons", []),
+-                "sign_persons": [],
+-                "persons_awaiting_sign": [],
+-                "current_person_idx": None,
+-                "sign_sent_time": None,
+-                "sign_codes_received": {},
+-                "wrong_code_time": None,
+-                "code_sent_announce_time": None,
+-                "resend_notified": False,
+-                "total_no_action_start": None,
+-            }
+-            runtime_state.pending_lavayeh_payments.pop(user_id, None)
+-
+-            await bot.send_message(
+-                user_id,
+-                "🖊 **مرحله اخذ امضای الکترونیک:**\n\n"
+-                "هر موقع آمادگی دارید که کد امضا ارسال شود، گزینه زیر را انتخاب کنید:",
+-                reply_markup=lavayeh_sign_ready_kb,
+-                parse_mode="Markdown"
+-            )
+-            await state.set_state(Form.lavayeh_sign_ready)
++        await _start_signing_flow(bot, state, user_id, pending)
+ 
+     elif ocr_msg == "NEEDS_MANUAL_REVIEW":
+         # ── ارسال رسید به مدیر برای تایید دستی ──

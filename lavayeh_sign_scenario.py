@@ -32,6 +32,7 @@ from browser_helpers import (
     safe_click_by_text,
     wait_for_angular_idle,
     wait_for_horizontal_loading_bar,
+    click_sana_main_menu,
 )
 from config import ADMIN_ID
 
@@ -69,14 +70,17 @@ async def navigate_to_sign_page(
         await human_delay(3.0, 5.0)
 
         # ── ۲. کلیک روی «ارایه و پیگیری لایحه» ─────────────────────────
-        clicked = await sana_page.evaluate('''() => {
-            const links = Array.from(document.querySelectorAll('a.list-group-item'));
-            const t = links.find(el => el.innerText && el.innerText.includes("ارایه و پیگیری لایحه"));
-            if (t) { t.click(); return true; }
-            return false;
-        }''')
+        # نکته مهم: «اظهارنامه» عمداً exclude شده تا با آیتم منوی اظهارنامه
+        # تداخل نکند. از click_sana_main_menu استفاده می‌شود که فقط داخل
+        # a.list-group-item جستجو می‌کند و هرگز به div/span/li عمومی‌تر
+        # escalate نمی‌شود (که می‌توانست باعث کلیک روی آیتم اشتباه شود).
+        clicked = await click_sana_main_menu(
+            sana_page, "ارایه و پیگیری لایحه", exclude_texts=["اظهارنامه"],
+            timeout_sec=15, prefix="LAVAYEH_SIGN",
+        )
         if not clicked:
-            await safe_click_by_text(sana_page, "ارایه و پیگیری لایحه", bot, user_id)
+            logging.error("[SIGN] منوی «ارایه و پیگیری لایحه» پیدا نشد")
+            return False
         await resilient_sleep(sana_page, 5, bot, user_id)
 
         # ── ۳. انتخاب radio #rdbGetPetition (value=2) ───────────────────
@@ -223,6 +227,19 @@ async def get_signable_persons(
                     if (sp.getBoundingClientRect().width > 0) {
                         personType = sp.innerText.trim();
                     }
+                }
+
+                // اگر از span متن نگرفتیم، نوع شخص را از scope انگولار (کد عددی) بخوان
+                if (!personType) {
+                    try {
+                        const scope = angular.element(tr).scope();
+                        if (scope && scope.item) {
+                            const pt = scope.item.PersonType || scope.item.JSSPersonType;
+                            if (pt === 6) personType = "وکیل";
+                            else if (pt === 3) personType = "نماینده";
+                            else if (pt === 4) personType = "مدیرعامل";
+                        }
+                    } catch(e) {}
                 }
 
                 // آیا div ارسال کد نمایش دارد؟
@@ -419,6 +436,10 @@ async def submit_sign_code_for_person(
             await _close_any_popup(sana_page)
             logging.info(f"[SIGN] رمز موقت نادرست — ردیف {row_idx}")
             return {"success": False, "error": "wrong_code"}
+        elif popup_result == "sana_not_registered":
+            await _close_any_popup(sana_page)
+            logging.warning(f"[SIGN] امضا در سامانه ثنا ثبت نشده — ردیف {row_idx}")
+            return {"success": False, "error": "sana_not_registered"}
         else:
             await _close_any_popup(sana_page)
             logging.warning(f"[SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
@@ -522,12 +543,13 @@ async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
 async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
     """
     منتظر پاپ‌آپ نتیجه امضا می‌ماند.
-    Returns: "success" | "wrong_code" | "error" | "timeout"
+    Returns: "success" | "wrong_code" | "sana_not_registered" | "error" | "timeout"
 
     پیام‌های مورد انتظار:
       - موفق (آیکون سبز): "امضاء با موفقیت در صفحه چاپ درج گردید"
       - موفق (آیکون زرد/هشدار): "امضاء « name » در صفحه ی چاپ درج شده است"
       - خطا (آیکون قرمز): "خطای سرویس ثنا   : رمز موقت نادرست است"
+      - امضا ثبت‌نشده در ثنا: "امضای شخص ... در سامانه ثنا درج نشده است"
     """
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
@@ -545,6 +567,10 @@ async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
                 window.getComputedStyle(warningIcon).display !== "none";
             const isErrorVisible = errorIcon &&
                 window.getComputedStyle(errorIcon).display !== "none";
+
+            // امضا در سامانه ثنا ثبت نشده — «امضای شخص ... در سامانه ثنا درج نشده است»
+            // (این پیام هرگز در حالت موفق ظاهر نمی‌شود؛ صرف‌نظر از آیکون بررسی می‌شود)
+            if (text.includes("در سامانه ثنا درج نشده")) return "sana_not_registered";
 
             // موفقیت اصلی — آیکون سبز
             if (isSuccessVisible) return "success";

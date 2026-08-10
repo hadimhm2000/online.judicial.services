@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { appendNewCase } from '@/lib/google-sheets';
 
 type BatchAction = 'APPROVE_PAYMENTS' | 'CHANGE_STATUS' | 'MOVE_TO_READY' | 'CONFIRM_SEND_ALL';
 
@@ -131,7 +132,7 @@ export async function POST(request: NextRequest) {
         count++;
 
         // Auto-sync to Google Sheets
-        import('@/lib/google-sheets').then(m => m.appendNewCase(c.id)).catch(() => {});
+        appendNewCase(c.id).catch(() => {});
       } catch (caseError) {
         console.error(`Batch operation failed for case ${c.id}:`, caseError);
         // Continue with remaining cases even if one fails

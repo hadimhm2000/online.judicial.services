@@ -10,7 +10,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Search, RefreshCw, Download, Shield, Bell, Filter, ShieldCheck, UserX,
+  Search, RefreshCw, Download, Shield, Bell, Filter,
   LayoutDashboard, FileCheck2, FileWarning, CreditCard, Send, AlertTriangle, ListChecks, XCircle, Activity, Moon, Sun, Play, Pause, Zap, ChevronDown, ChevronLeft, CalendarDays, Maximize2, Minimize2, Trash2, Clock, ArrowUp, Printer, Keyboard, Wifi, WifiOff, FileSpreadsheet, Volume2, VolumeX, MessageSquare, ClipboardCheck, Paperclip, Check,
 } from 'lucide-react';
 import {
@@ -34,8 +34,6 @@ const ActivityPanel = React.lazy(() => import('@/components/admin/activity-panel
 const UserHistoryDialog = React.lazy(() => import('@/components/admin/user-history-dialog').then(m => ({ default: m.default })));
 const BotMessageSender = React.lazy(() => import('@/components/admin/bot-message-sender').then(m => ({ default: m.default })));
 const GoogleSheetsPanel = React.lazy(() => import('@/components/admin/google-sheets-panel').then(m => ({ default: m.default })));
-const WorkingHoursDialog = React.lazy(() => import('@/components/admin/working-hours-dialog').then(m => ({ default: m.default })));
-const ExemptUsersDialog = React.lazy(() => import('@/components/admin/exempt-users-dialog').then(m => ({ default: m.default })));
 
 import { ServicePieChart, StatusOverviewChart, RevenueChart } from '@/components/admin/charts';
 import TrendLineChart from '@/components/admin/trend-line-chart';
@@ -222,8 +220,6 @@ export default function AdminPanel() {
   const [isMuted, setMuted] = useNotificationMuted();
   const [botSenderOpen, setBotSenderOpen] = useState(false);
   const [sheetsPanelOpen, setSheetsPanelOpen] = useState(false);
-  const [workingHoursOpen, setWorkingHoursOpen] = useState(false);
-  const [exemptUsersOpen, setExemptUsersOpen] = useState(false);
   const [batchConfirmSending, setBatchConfirmSending] = useState(false);
   const [batchConfirmDone, setBatchConfirmDone] = useState(false);
 
@@ -744,42 +740,6 @@ export default function AdminPanel() {
               >
                 <FileSpreadsheet className="h-4 w-4" />
               </Button>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-9 w-9 p-0 text-orange-600 hover:text-orange-700 hover:bg-orange-50 dark:hover:bg-orange-900/20"
-                    title="تنظیمات ربات"
-                  >
-                    <Shield className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" dir="rtl" className="w-56">
-                  <DropdownMenuItem onClick={() => setWorkingHoursOpen(true)} className="gap-2.5 cursor-pointer">
-                    <Clock className="h-4 w-4 text-amber-500" />
-                    <div className="flex flex-col items-start">
-                      <span className="text-sm">ساعت کاری ربات</span>
-                      <span className="text-[10px] text-muted-foreground">تعیین ساعت کاری هر روز</span>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setExemptUsersOpen(true)} className="gap-2.5 cursor-pointer">
-                    <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                    <div className="flex flex-col items-start">
-                      <span className="text-sm">معافیت از پرداخت</span>
-                      <span className="text-[10px] text-muted-foreground">مدیریت کاربران معاف</span>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setSheetsPanelOpen(true)} className="gap-2.5 cursor-pointer">
-                    <FileSpreadsheet className="h-4 w-4 text-sky-500" />
-                    <div className="flex flex-col items-start">
-                      <span className="text-sm">همگام‌سازی گوگل شیت</span>
-                      <span className="text-[10px] text-muted-foreground">اتصال و تنظیم شیت</span>
-                    </div>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
 
               <Button
                 variant="ghost"
@@ -1512,20 +1472,6 @@ export default function AdminPanel() {
       />
       </Suspense>
 
-      <Suspense fallback={null}>
-      <WorkingHoursDialog
-        open={workingHoursOpen}
-        onClose={() => setWorkingHoursOpen(false)}
-      />
-      </Suspense>
-
-      <Suspense fallback={null}>
-      <ExemptUsersDialog
-        open={exemptUsersOpen}
-        onClose={() => setExemptUsersOpen(false)}
-      />
-      </Suspense>
-
       {/* 14. Confirm Send Dialog - dialog-premium, animate-float icon, gradient preview */}
       <Dialog open={confirmSendOpen} onOpenChange={setConfirmSendOpen}>
         <DialogContent className="max-w-sm p-0 dialog-premium" dir="rtl">
@@ -1652,8 +1598,6 @@ export default function AdminPanel() {
         { id: 'shortcuts', label: 'میانبر کلیدی', icon: Keyboard, group: 'تنظیمات', onSelect: () => setShowShortcuts(true) },
         { id: 'bot-sender', label: 'ارسال پیام به کاربر', icon: MessageSquare, group: 'تنظیمات', onSelect: () => setBotSenderOpen(true) },
         { id: 'google-sheets', label: 'همگام‌سازی گوگل شیت', icon: FileSpreadsheet, group: 'تنظیمات', onSelect: () => setSheetsPanelOpen(true) },
-        { id: 'working-hours', label: 'ساعت کاری ربات', icon: Clock, group: 'تنظیمات', onSelect: () => setWorkingHoursOpen(true) },
-        { id: 'exempt-users', label: 'معافیت از پرداخت', icon: ShieldCheck, group: 'تنظیمات', onSelect: () => setExemptUsersOpen(true) },
       ] as CommandAction[]} />
 
       {/* 6. Back to Top - back-to-top-btn, gradient background */}

@@ -1,0 +1,202 @@
+# ================================================================================
+# PATCH: اصلاح مشکل دکمه تایید همه در مرحله منضمات
+# Apply this patch to fix the "btnApplyAll" button not triggering AngularJS action
+# ================================================================================
+# 
+# مشکل: دکمه تایید همه (btnApplyAll) با ng-click="actions.applyAllAttachment()"
+# کلیک می‌شود ولی تابع AngularJS اجرا نمی‌شود.
+#
+# راه‌حل: استفاده از فراخوانی مستقیم تابع از scope با $apply()
+#
+# فایل‌های تحت تاثیر:
+#   - upload_helpers.py
+#   - lavayeh_scenario.py
+#   - ezhharnameh_scenario.py
+#   - ealam_vakalaht_scenario.py
+#
+# ================================================================================
+
+--- a/upload_helpers.py
++++ b/upload_helpers.py
+@@ -1,5 +1,6 @@
+ '''
+ لایه یکپارچه آپلود منضمات — مقاوم در برابر خطا با قابلیت بازیابی
++[PATCHED] - اصلاح مشکل تایید همه با فراخوانی مستقیم AngularJS
+ '''
+
+ import os
+@@ -REPLACE_FUNCTION click_apply_all_with_retry
++async def click_apply_all_with_retry(
++    page,
++    expected_count: int,
++    bot,
++    user_id: int,
++    prefix: str = "UPLOAD",
++    max_retries: int = MAX_APPLY_ALL_RETRIES,
++) -> bool:
++    """
++    کلیک روی دکمه «تایید همه» با مدیریت بهتر AngularJS.
++    
++    مشکل اصلی: دکمه btnApplyAll با ng-click="actions.applyAllAttachment()"
++    گاهی اوقات کلیک می‌شود ولی اکشن AngularJS اجرا نمی‌شود.
++    
++    راه‌حل: 
++    1. فراخوانی مستقیم تابع از scope
++    2. اجبار به $apply() برای trigger کردن digest cycle
++    3. صبر کامل قبل از کلیک
++    """
++    
++    for attempt in range(max_retries):
++        _log(prefix, f"تایید همه - تلاش {attempt + 1}/{max_retries}")
++        
++        # صبر برای آماده شدن کامل صفحه
++        await wait_for_angular_idle(page)
++        await asyncio.sleep(2)
++        
++        # بررسی وجود و فعال بودن دکمه
++        btn_status = await page.evaluate('''() => {
++            const btn = document.querySelector('#btnApplyAll');
++            if (!btn) return { exists: false };
++            return {
++                exists: true,
++                enabled: !btn.disabled,
++                visible: btn.offsetWidth > 0 && btn.offsetHeight > 0
++            };
++        }''')
++        
++        if not btn_status.get('exists') or not btn_status.get('enabled'):
++            _log(prefix, "دکمه btnApplyAll پیدا نشد یا غیرفعال است", 'warning')
++            await asyncio.sleep(3)
++            continue
++        
++        # فراخوانی مستقیم تابع AngularJS از طریق scope
++        click_result = await page.evaluate('''() => {
++            const btn = document.querySelector('#btnApplyAll');
++            if (!btn || btn.disabled) return { success: false, reason: 'button_not_ready' };
++            
++            try {
++                // روش 1: دسترسی به scope و فراخوانی مستقیم actions.applyAllAttachment
++                const scope = angular.element(btn).scope();
++                if (scope && scope.actions && typeof scope.actions.applyAllAttachment === 'function') {
++                    scope.actions.applyAllAttachment();
++                    // اجبار به $digest cycle
++                    if (!scope.$$phase && !scope.$root.$$phase) {
++                        scope.$apply();
++                    }
++                    return { success: true, method: 'scope_direct' };
++                }
++            } catch(e) {
++                console.error('روش scope_direct شکست خورد:', e);
++            }
++            
++            try {
++                // روش 2: استفاده از $eval روی scope
++                const scope = angular.element(btn).scope();
++                if (scope) {
++                    scope.$eval('actions.applyAllAttachment()');
++                    if (!scope.$$phase) scope.$apply();
++                    return { success: true, method: 'scope_eval' };
++                }
++            } catch(e) {
++                console.error('روش scope_eval شکست خورد:', e);
++            }
++            
++            try {
++                // روش 3: trigger کردن ng-click با شبیه‌سازی
++                const ngClick = btn.getAttribute('ng-click');
++                if (ngClick) {
++                    const scope = angular.element(btn).scope();
++                    if (scope) {
++                        scope.$eval(ngClick);
++                        if (!scope.$$phase) scope.$apply();
++                        return { success: true, method: 'ng_click_eval' };
++                    }
++                }
++            } catch(e) {
++                console.error('روش ng_click_eval شکست خورد:', e);
++            }
++            
++            try {
++                // روش 4: کلیک با MouseEvent کامل
++                btn.focus();
++                const events = ['mousedown', 'mouseup', 'click'];
++                for (const evt of events) {
++                    btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
++                }
++                // اجبار به $apply روی rootScope
++                const rootScope = angular.element(document.body).scope().$root;
++                if (rootScope && !rootScope.$$phase) {
++                    rootScope.$apply();
++                }
++                return { success: true, method: 'mouse_events' };
++            } catch(e) {
++                console.error('روش mouse_events شکست خورد:', e);
++            }
++            
++            // روش آخر: کلیک ساده
++            btn.click();
++            return { success: true, method: 'simple_click' };
++        }''')
++        
++        _log(prefix, f"نتیجه کلیک: {click_result}")
++        
++        if not click_result.get('success'):
++            await asyncio.sleep(3)
++            continue
++        
++        # انتظار برای پردازش
++        await asyncio.sleep(5)
++        
++        # انتظار برای ناپدید شدن لودینگ
++        for _ in range(60):
++            loading = await page.evaluate('''() => {
++                const loaders = document.querySelectorAll('.blockUI, .progress-bar.active, .loading');
++                return Array.from(loaders).some(el => el.offsetWidth > 0);
++            }''')
++            if not loading:
++                break
++            await asyncio.sleep(1)
++        
++        # بررسی خطا
++        error_text = await get_and_close_error_popup_text(page)
++        if error_text:
++            _log(prefix, f"خطا در تایید همه: {error_text}", 'warning')
++            await asyncio.sleep(3)
++            continue
++        
++        # بررسی تایید موفق
++        confirmed = await page.evaluate(f'''() => {{
++            // بررسی alertهای تایید
++            const alerts = Array.from(document.querySelectorAll('[ng-bind-html], .alert-success'));
++            const confirmedCount = alerts.filter(el => {{
++                const text = el.innerText || '';
++                return text.includes('پیوست مورد نظر با موفقیت تایید شد') ||
++                       text.includes('با موفقیت تایید');
++            }}).length;
++            
++            // بررسی پاپ‌آپ موفقیت
++            const popup = document.querySelector('.sweet-alert.showSweetAlert');
++            let popupSuccess = false;
++            if (popup) {{
++                const icon = popup.querySelector('.sa-icon.sa-success');
++                popupSuccess = icon && window.getComputedStyle(icon).display !== 'none';
++            }}
++            
++            return confirmedCount >= {expected_count} || popupSuccess;
++        }}''')
++        
++        if confirmed:
++            _log(prefix, f"تایید همه موفق - {expected_count} فایل تایید شد")
++            await close_success_popup(page)
++            return True
++        
++        _log(prefix, f"تایید همه کامل نشد (تلاش {attempt + 1})")
++        await asyncio.sleep(10)
++    
++    _log(prefix, f"تایید همه پس از {max_retries} تلاش ناموفق", 'error')
++    return False
+
+
+# ================================================================================
+# END OF PATCH
+# ================================================================================

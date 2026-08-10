@@ -815,6 +815,37 @@ async def _fill_real_person(page, national_id: str, bot: Bot, user_id: int,
                       current_national_id=national_id, person_role=person_role, person_index=person_index)
 
 
+async def _set_legal_record_no_zero(page, prefix: str = "EZHHAR"):
+    """شماره ثبت شخص حقوقی (#txtLegalIrShSabt / RecordNo) را روی «0» می‌گذارد.
+
+    سامانه وقتی شخص حقوقی خصوصی است (LegalPersonType==4 و identityInfo==1)،
+    این فیلد را اجباری می‌کند. این فیلد فقط پس از استعلام موفق شرکت رندر می‌شود،
+    پس این تابع باید بعد از callLegalNationalityCode صدا زده شود.
+    """
+    for _ in range(10):
+        done = await page.evaluate('''() => {
+            const inp = document.querySelector('#txtLegalIrShSabt');
+            if (!inp) return false;
+            inp.value = "0";
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+            try {
+                if (typeof angular !== 'undefined') {
+                    const ctrl = angular.element(inp).controller('ngModel');
+                    if (ctrl) { ctrl.$setViewValue("0"); ctrl.$render(); }
+                }
+            } catch(e) {}
+            return true;
+        }''')
+        if done:
+            logging.info(f"[{prefix}] شماره ثبت شخص حقوقی روی «0» تنظیم شد")
+            await asyncio.sleep(1)
+            return True
+        await asyncio.sleep(0.5)
+    logging.warning(f"[{prefix}] فیلد شماره ثبت (#txtLegalIrShSabt) یافت نشد — رد شد")
+    return False
+
+
 async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int,
                               person_role: str = "", person_index: int = 0):
     """پر کردن اطلاعات شخص حقوقی و استعلام"""
@@ -853,6 +884,8 @@ async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int,
         # استعلام شرکت
         await _query_sana(page, "actions.callLegalNationalityCode", bot, user_id, is_legal=True,
                           current_national_id=company_id, person_role=person_role, person_index=person_index)
+        # شماره ثبت شخص حقوقی — همیشه صفر
+        await _set_legal_record_no_zero(page)
         return
 
     # ── ادامه فرآیند عادی با کدملی نماینده ──
@@ -885,6 +918,8 @@ async def _fill_legal_person(page, person: dict, bot: Bot, user_id: int,
     # استعلام شرکت
     await _query_sana(page, "actions.callLegalNationalityCode", bot, user_id, is_legal=True,
                       current_national_id=company_id, person_role=person_role, person_index=person_index)
+    # شماره ثبت شخص حقوقی — همیشه صفر
+    await _set_legal_record_no_zero(page)
     await asyncio.sleep(5)
 
     # انتخاب نوع نماینده (مدیرعامل یا نماینده)
@@ -1254,7 +1289,20 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
             # ویرایش و آپلود فایل‌ها
             await page.evaluate('''() => {
                 const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
-                if (btns.length > 0) btns[btns.length - 1].click();
+                if (btns.length > 0) {
+                    const btn = btns[btns.length - 1];
+                    try {
+                        if (typeof angular !== 'undefined') {
+                            const ngEl = angular.element(btn);
+                            if (ngEl && ngEl.scope) {
+                                ngEl.scope().$apply(() => { btn.click(); });
+                                return;
+                            }
+                        }
+                    } catch(e) {}
+                    btn.click();
+                    btn.dispatchEvent(new Event('click', { bubbles: true }));
+                }
             }''')
             await asyncio.sleep(4)
 
@@ -1264,7 +1312,18 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
 
             await page.evaluate('''() => {
                 const btn = document.querySelector('#btnUploadAll');
-                if (btn && !btn.disabled) btn.click();
+                if (!btn || btn.disabled) return;
+                try {
+                    if (typeof angular !== 'undefined') {
+                        const ngEl = angular.element(btn);
+                        if (ngEl && ngEl.scope) {
+                            ngEl.scope().$apply(() => { btn.click(); });
+                            return;
+                        }
+                    }
+                } catch(e) {}
+                btn.click();
+                btn.dispatchEvent(new Event('click', { bubbles: true }));
             }''')
 
             had_expiry = await check_and_handle_expiry(page, bot, user_id)
@@ -1390,13 +1449,14 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
 
 
 async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
-    """آپلود سایر ضمائم (مقاوم — از upload_helpers)"""
-    from upload_helpers import resilient_upload_attachment
+    """آپلود سایر ضمائم (مقاوم — از upload_helpers)
+    با تقسیم خودکار به ردیف‌های ≤۷ صفحه در صورت زیاد بودن تصاویر."""
+    from upload_helpers import upload_attachment_auto
 
     if not image_paths:
         return
 
-    result = await resilient_upload_attachment(
+    result = await upload_attachment_auto(
         page, title, image_paths, bot, user_id,
         prefix="EZHHAR",
     )

@@ -1,5 +1,6 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { appendNewCase } from '@/lib/google-sheets';
 
 export async function POST(
   _request: NextRequest,
@@ -49,7 +50,7 @@ export async function POST(
     });
 
     // Auto-sync to Google Sheets
-    import('@/lib/google-sheets').then(m => m.appendNewCase(id)).catch(() => {});
+    appendNewCase(id).catch(() => {});
 
     return NextResponse.json(updated);
   } catch (error) {

@@ -1,15 +1,16 @@
 '''
-لایه یکپارچه آپلود منضمات — مقاوم در برابر خطا با قابلیت بازیابی
+lایه یکپارچه آپلود منضمات — بازنویسی‌شده بر اساس مسیر دقیق سامانه ثنا
 Unified resilient upload layer for judicial system attachments.
 
 هر ۳ سناریو (لایحه، اظهارنامه، اعلام وکالت) از این ماژول استفاده می‌کنند.
 
-ویژگی‌ها:
-  - اعتبارسنجی و فشرده‌سازی پیش‌آپلود
-  - شناسایی هوشمند نوع خطا از popup سامانه
-  - حذف کامل ردیف پیوست (فایل‌ها دانه‌به‌دانه + خود ردیف)
-  - تلاش مجدد هوشمند با رفع خودکار مشکل
-  - ذخیره/بازیابی نقاط بازیابی (Checkpoint/Resume)
+تغییرات کلیدی نسبت به نسخه قبل:
+  - پشتیبانی از حالت تک‌برگ (اسکیپ #txt001 و #incAttach0)
+  - استفاده از #files_multipleFileUploader به جای input[type="file"].first
+  - حذف فایل‌ها با دکمه‌های داینامیک (btnDelete0, btnDelete1, ...) و انتظار لودینگ
+  - انتظار نوار لودینگ آبی بعد از هر عملیات سامانه
+  - تشخیص خطای ورود همزمان (concurrent login) در تمام مراحل
+  - بازیابی صحیح بعد از لاگین مجدد مدیر
 '''
 
 import os
@@ -22,7 +23,7 @@ from aiogram import Bot
 
 from browser_helpers import (
     resilient_sleep, check_and_handle_expiry, wait_for_angular_idle,
-    soft_click_if_exists,
+    soft_click_if_exists, dismiss_expiry_popup,
 )
 
 # =========================================================
@@ -34,6 +35,7 @@ MAX_UPLOAD_ATTEMPTS = 3            # تلاش هر ردیف
 MAX_SAVE_DOC_RETRIES = 3          # تلاش ذخیره سند
 MAX_APPLY_ALL_RETRIES = 3         # تلاش اعمال همه
 CHECKPOINT_EXPIRY_HOURS = 24
+LOADING_BAR_TIMEOUT = 60          # حداکثر انتظار برای نوار لودینگ (ثانیه)
 
 
 def _log(prefix, msg, level='info'):
@@ -43,7 +45,7 @@ def _log(prefix, msg, level='info'):
 
 
 def _title_log(prefix, action, title):
-    """لاگ با عنوان — از guillemets استفاده نمی‌کند."""
+    """لاگ با عنوان."""
     return f"{action} [{title}]"
 
 
@@ -185,10 +187,123 @@ async def prepare_files_for_upload(
 
 
 # =========================================================
-# ۲. شناسایی هوشمند خطا
+# ۲. نوار لودینگ و تشخیص خطا
 # =========================================================
 
+async def wait_for_loading_bar(page, timeout: int = LOADING_BAR_TIMEOUT, prefix: str = "UPLOAD") -> bool:
+    """
+    انتظار برای ظاهر شدن و ناپدید شدن نوار لودینگ آبی سامانه.
+    نوار لودینگ: .progress-bar.progress-bar-striped.progress-bar-animated.active
+    با style="background-color:#0072c6"
+
+    اگر نوار لودینگ ظاهر شود → منتظر ناپدید شدنش می‌ماند و True برمی‌گرداند.
+    اگر نوار لودینگ ظاهر نشود → False برمی‌گرداند (اسکیپ).
+    اگر تایم‌اوت → False برمی‌گرداند.
+    """
+    # مرحله ۱: بررسی آیا لودینگ از قبل وجود دارد یا بعداً ظاهر می‌شود
+    initial_check = await page.evaluate('''() => {
+        const bars = document.querySelectorAll(
+            '.progress-bar.progress-bar-striped.progress-bar-animated'
+        );
+        for (const bar of bars) {
+            const rect = bar.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0 &&
+                window.getComputedStyle(bar).display !== 'none') {
+                return true;
+            }
+        }
+        return false;
+    }''')
+
+    if not initial_check:
+        # لودینگ هنوز نیامده — چند ثانیه صبر می‌کنیم تا شاید ظاهر شود
+        # بعضی مواقع لودینگ خیلی سریع تمام می‌شود
+        await asyncio.sleep(1)
+
+        recheck = await page.evaluate('''() => {
+            const bars = document.querySelectorAll(
+                '.progress-bar.progress-bar-striped.progress-bar-animated'
+            );
+            for (const bar of bars) {
+                const rect = bar.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0 &&
+                    window.getComputedStyle(bar).display !== 'none') {
+                    return true;
+                }
+            }
+            return false;
+        }''')
+
+        if not recheck:
+            _log(prefix, "نوار لودینگ ظاهر نشد — اسکیپ", 'debug')
+            return False
+
+    # مرحله ۲: لودینگ وجود دارد — منتظر ناپدید شدنش می‌مانیم
+    _log(prefix, "نوار لودینگ ظاهر شد — منتظر اتمام...", 'debug')
+    waited = 0
+    while waited < timeout:
+        await asyncio.sleep(1)
+        waited += 1
+
+        still_visible = await page.evaluate('''() => {
+            const bars = document.querySelectorAll(
+                '.progress-bar.progress-bar-striped.progress-bar-animated'
+            );
+            for (const bar of bars) {
+                const rect = bar.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0 &&
+                    window.getComputedStyle(bar).display !== 'none') {
+                    return true;
+                }
+            }
+            return false;
+        }''')
+
+        if not still_visible:
+            _log(prefix, f"نوار لودینگ بعد از {waited} ثانیه تمام شد")
+            return True
+
+    _log(prefix, f"تایم‌اوت نوار لودینگ ({timeout} ثانیه) — ادامه", 'warning')
+    return False
+
+
+async def detect_concurrent_login_popup(page) -> bool:
+    """
+    تشخیص پاپ‌آپ ورود همزمان (concurrent login).
+    این پاپ‌آپ شامل:
+      - آیکون خطا (sa-error)
+      - متن: «ورود به سامانه در صفحه یا رایانه ای دیگر» یا «اعتبار ورود قبلی ... منقضی شده»
+
+    این تابع در تمام بخش‌ها (لایحه، اظهارنامه، اعلام وکالت، استعلامات)
+    باید فراخوانی شود.
+    """
+    is_concurrent = await page.evaluate('''() => {
+        const popup = document.querySelector('.sweet-alert.showSweetAlert');
+        if (!popup) return false;
+
+        // بررسی آیکون خطا
+        const errorIcon = popup.querySelector('.sa-icon.sa-error');
+        if (!errorIcon) return false;
+        if (window.getComputedStyle(errorIcon).display === 'none') return false;
+
+        // بررسی متن پاپ‌آپ
+        const popupText = popup.innerText || "";
+        const isConcurrent =
+            popupText.includes("رایانه ای دیگر") ||
+            popupText.includes("رایانه ای ديگر") ||
+            popupText.includes("اعتبار ورود") && popupText.includes("منقضی") ||
+            popupText.includes("منقضي شده");
+
+        return isConcurrent;
+    }''')
+    return bool(is_concurrent)
+
+
 async def get_and_close_error_popup_text(page) -> Optional[str]:
+    """
+    دریافت متن خطای پاپ‌آپ و بستن آن.
+    فقط پاپ‌آپ‌های خطا (non-success) را می‌بندد.
+    """
     text = await page.evaluate('''() => {
         const popup = document.querySelector('.sweet-alert.showSweetAlert');
         if (!popup) return null;
@@ -261,6 +376,8 @@ def detect_error_type(error_text: str) -> str:
         "انقض", "نشست", "session", "ورود", "لاگین",
         "از ساعت ورود شما می‌گذرد",
         "اصل اولویت", "احراز هویت", "تمدید",
+        "رایانه ای دیگر", "رایانه ای ديگر",
+        "اعتبار ورود", "منقضی", "منقضي",
     ]):
         return "session"
     if any(kw in text for kw in ["تکراری", "قبلا", "موجود"]):
@@ -277,7 +394,9 @@ def detect_error_type(error_text: str) -> str:
 async def delete_all_files_in_row(page, bot: Bot = None, user_id: int = None, prefix: str = "UPLOAD") -> int:
     """
     حذف دانه‌به‌دانه تمام فایل‌های آپلودشده در ردیف فعلی.
-    از دکمه btnDelete3 و removeAttachment استفاده می‌کند.
+    از دکمه‌های داینامیک btnDelete0, btnDelete1, btnDelete2, ... استفاده می‌کند.
+    بعد از هر حذف، منتظر نوار لودینگ آبی می‌ماند.
+
     بازگشت: تعداد فایل‌های حذفشده
     """
     deleted_count = 0
@@ -290,20 +409,42 @@ async def delete_all_files_in_row(page, bot: Bot = None, user_id: int = None, pr
                 _log(prefix, "نشست حین حذف فایل‌های ردیف تمدید شد.")
                 await asyncio.sleep(2)
 
-        deleted = await page.evaluate('''() => {
-            const btn3 = document.querySelector('button#btnDelete3:not([disabled])');
-            if (btn3) { btn3.click(); return 'btnDelete3'; }
+        # جستجوی دکمه حذف با شناسه داینامیک
+        clicked = await page.evaluate('''() => {
+            // اول دکمه با شناسه دقیق btnDelete{N}
+            const allBtns = Array.from(document.querySelectorAll(
+                'button[id^="btnDelete"]:not([disabled])'
+            ));
+            for (const btn of allBtns) {
+                const rect = btn.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0 &&
+                    window.getComputedStyle(btn).display !== 'none') {
+                    btn.click();
+                    return btn.id;
+                }
+            }
+            // اگر btnDelete پیدا نشد، removeAttachment را امتحان کن
             const btnAttach = document.querySelector('button[ng-click*="removeAttachment"]:not([disabled])');
-            if (btnAttach) { btnAttach.click(); return 'removeAttachment'; }
+            if (btnAttach) {
+                const rect = btnAttach.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    btnAttach.click();
+                    return 'removeAttachment';
+                }
+            }
             return null;
         }''')
 
-        if not deleted:
+        if not clicked:
             break
 
         deleted_count += 1
-        _log(prefix, f"فایل #{deleted_count} حذف شد ({deleted})")
-        await asyncio.sleep(2)
+        _log(prefix, f"فایل #{deleted_count} حذف شد ({clicked})")
+
+        # ⭐ مهم: بعد از هر حذف، صبر کن تا نوار لودینگ تمام شود
+        # اکثر مواقع سریع تمام می‌شود ولی بعضی مواقع طول می‌کشد
+        await wait_for_loading_bar(page, timeout=LOADING_BAR_TIMEOUT, prefix=prefix)
+        await asyncio.sleep(1)
 
     _log(prefix, f"مجموعاً {deleted_count} فایل از ردیف حذف شد")
     return deleted_count
@@ -313,6 +454,7 @@ async def delete_document_row_by_title(page, title: str, prefix: str = "UPLOAD")
     """
     حذف یک ردیف پیوست از فهرست (سطل زباله removeDocument).
     ردیف را بر اساس عنوان پیدا می‌کند.
+    بعد از حذف، پیام "پیوست مورد نظر با موفقیت حذف گردید" را بررسی می‌کند.
     """
     escaped = title.replace("`", "'").replace("\\", "").replace('"', '\\"')
 
@@ -350,15 +492,23 @@ async def delete_document_row_by_title(page, title: str, prefix: str = "UPLOAD")
         return 'not_found';
     }}''')
 
-    if result == 'found_and_clicked':
-        _log(prefix, f"ردیف [{title}] حذف شد (removeDocument)")
+    if result in ('found_and_clicked', 'last_row_clicked'):
+        _log(prefix, f"ردیف [{title}] حذف شد (removeDocument) — result: {result}")
         await asyncio.sleep(2)
-        await close_any_popup(page)
-        await asyncio.sleep(1)
-        return True
-    elif result == 'last_row_clicked':
-        _log(prefix, "آخرین ردیف پیوست حذف شد")
-        await asyncio.sleep(2)
+
+        # بررسی پیام موفقیت حذف
+        deletion_confirmed = await page.evaluate('''() => {
+            const alerts = Array.from(document.querySelectorAll('[ng-bind-html]'));
+            return alerts.some(el =>
+                el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت حذف گردید")
+            );
+        }''')
+
+        if deletion_confirmed:
+            _log(prefix, f"تایید حذف ردیف [{title}] دریافت شد ✓")
+        else:
+            _log(prefix, f"پیام تایید حذف برای [{title}] یافت نشد", 'warning')
+
         await close_any_popup(page)
         await asyncio.sleep(1)
         return True
@@ -379,10 +529,11 @@ async def full_delete_attachment_row(
 ) -> bool:
     """
     حذف کامل یک ردیف پیوست:
-      ۱. وارد حالت ویرایش ردیف
-      ۲. حذف تمام فایل‌ها (btnDelete3)
-      ۳. بازگشت به فهرست
+      ۱. وارد حالت ویرایش ردیف شویم (editDocument)
+      ۲. حذف تمام فایل‌ها (btnDelete0, btnDelete1, ...) — با انتظار لودینگ بعد از هر حذف
+      ۳. بازگشت به فهرست منضمات
       ۴. حذف ردیف (removeDocument)
+      ۵. بررسی پیام "پیوست مورد نظر با موفقیت حذف گردید"
     """
     _log(prefix, f"شروع حذف کامل ردیف [{title}]...")
 
@@ -414,7 +565,7 @@ async def full_delete_attachment_row(
             await asyncio.sleep(4)
             _log(prefix, f"وارد حالت ویرایش ردیف [{title}] شدیم")
 
-        # مرحله ۲: حذف تمام فایل‌ها
+        # مرحله ۲: حذف تمام فایل‌ها (با انتظار لودینگ بعد از هر حذف)
         files_deleted = await delete_all_files_in_row(page, bot, user_id, prefix)
         _log(prefix, f"{files_deleted} فایل از ردیف [{title}] حذف شد")
 
@@ -454,20 +605,29 @@ async def click_save_doc_with_retry(
     max_retries: int = MAX_SAVE_DOC_RETRIES,
     prefix: str = "UPLOAD",
 ) -> bool:
+    """
+    کلیک روی «ثبت و ویرایش پیوست» (#btnSaveDoc) با تلاش مجدد.
+    بعد از هر کلیک، منتظر نوار لودینگ آبی می‌ماند.
+    """
     for attempt in range(max_retries):
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnSaveDoc');
             if (btn && !btn.disabled) btn.click();
         }''')
 
+        # ⭐ مهم: انتظار برای نوار لودینگ آبی
+        # ممکن است خیلی سریع تمام شود یا طول بکشد
+        await wait_for_loading_bar(page, timeout=LOADING_BAR_TIMEOUT, prefix=prefix)
+
         if bot and user_id:
-            had_expiry = await resilient_sleep(page, 8, bot, user_id)
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
             if had_expiry:
                 _log(prefix, "نشست حین ذخیره سند تمدید شد")
                 continue
         else:
-            await asyncio.sleep(8)
+            await asyncio.sleep(3)
 
+        # بررسی پاپ‌آپ موفقیت
         success = await page.evaluate('''() => {
             const popup = document.querySelector('.sweet-alert.showSweetAlert');
             if (!popup) return false;
@@ -478,6 +638,7 @@ async def click_save_doc_with_retry(
             await close_success_popup(page)
             return True
 
+        # بررسی پاپ‌آپ خطا
         error_text = await get_and_close_error_popup_text(page)
         if error_text:
             _log(prefix, f"خطا در ذخیره سند (تلاش {attempt+1}/{max_retries}): {error_text}", 'warning')
@@ -498,6 +659,10 @@ async def wait_for_upload_confirmation(
     timeout_sec: int = UPLOAD_CONFIRM_TIMEOUT,
     prefix: str = "UPLOAD",
 ) -> bool:
+    """
+    منتظر می‌ماند تا به تعداد expected_count آلارم موفقیت آپلود
+    ("پیوست مورد نظر با موفقیت ثبت گردید") ظاهر شود.
+    """
     for i in range(timeout_sec * 2):
         if i % 4 == 0 and bot and user_id:
             had_expiry = await check_and_handle_expiry(page, bot, user_id)
@@ -524,15 +689,12 @@ async def wait_for_alerts_to_disappear(
 ) -> bool:
     """
     منتظر می‌ماند تا تمام alertهای موفقیت آپلود از صفحه ناپدید شوند.
-    این تضمین می‌کند که سامانه پردازش تمام فایل‌ها را تمام کرده
-    و آماده دریافت دکمه تایید است.
-
-    وقتی تعداد فایل‌ها زیاد باشد، آپلود طول می‌کشد و alertها
-    ممکن است دیرتر از زمان معمول ظاهر و ناپدید شوند.
+    به ازای هر پیوست موفق، یک alert ظاهر شده و بعد از چند ثانیه محو می‌شود.
+    باید صبر کرد تا همه محو شوند.
     """
     _log(prefix, "انتظار برای ناپدید شدن کامل alertهای موفقیت آپلود...")
 
-    for i in range(timeout_sec * 2):  # هر ۰.۵ ثانیه بررسی
+    for i in range(timeout_sec * 2):
         if i % 8 == 0 and bot and user_id:
             had_expiry = await check_and_handle_expiry(page, bot, user_id)
             if had_expiry:
@@ -563,6 +725,17 @@ async def click_apply_all_with_retry(
     max_retries: int = MAX_APPLY_ALL_RETRIES,
     prefix: str = "UPLOAD",
 ) -> bool:
+    """
+    کلیک روی «تایید همه» (#btnApplyAll) با تلاش مجدد.
+
+    اگر خطای ورود همزمان ظاهر شود:
+      - مدیر لاگین مجدد می‌کند
+      - سپس دوباره #btnApplyAll کلیک می‌شود
+      - منتظر پیام تایید می‌مانیم
+
+    اگر خطای دیگری (غیر از ورود همزمان) ظاهر شود:
+      - همان مراحل حذف و ثبت مجدد تکرار می‌شود
+    """
     for attempt in range(max_retries):
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
@@ -570,9 +743,9 @@ async def click_apply_all_with_retry(
         }''')
 
         if bot and user_id:
-            had_expiry = await resilient_sleep(page, 10, bot, user_id)
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
             if had_expiry:
-                _log(prefix, "نشست حین اعمال همه تمدید شد")
+                _log(prefix, "نشست حین اعمال همه تمدید شد — تلاش مجدد")
                 continue
         else:
             await asyncio.sleep(10)
@@ -584,14 +757,23 @@ async def click_apply_all_with_retry(
         if confirmed:
             return True
 
-        # بررسی popup خطا — فقط اگر خطایی واقعاً وجود داشت ناموفق است
+        # بررسی پاپ‌آپ خطا
         error_text = await get_and_close_error_popup_text(page)
         if error_text:
-            _log(prefix, f"خطا در اعمال همه (تلاش {attempt+1}): {error_text}", 'warning')
-            await asyncio.sleep(5)
-            continue
+            error_type = detect_error_type(error_text)
+            _log(prefix, f"خطا در اعمال همه (تلاش {attempt+1}): {error_text} (نوع: {error_type})", 'warning')
 
-        # هیچ popup خطایی نیست → اعمال با موفقیت انجام شده
+            if error_type == "session":
+                # خطای ورود همزمان — بعد از لاگین مجدد، فقط دوباره تلاش کن
+                _log(prefix, "خطای ورود همزمان در اعمال همه — بعد از لاگین مجدد مجدداً تلاش می‌کنیم")
+                await asyncio.sleep(3)
+                continue
+            else:
+                # خطای دیگر — فراخوان‌کننده باید حذف و ثبت مجدد انجام دهد
+                _log(prefix, f"خطای غیر از ورود همزمان — فراخوان‌کننده باید حذف و ثبت مجدد انجام دهد")
+                return False
+
+        # هیچ پاپ‌آپ خطایی نیست → اعمال با موفقیت انجام شده
         _log(prefix, f"اعمال همه: بدون خطا (تایید متنی یافت نشد ولی popup خطا هم نبود) — موفق")
         return True
 
@@ -614,7 +796,24 @@ async def resilient_upload_attachment(
     incomplete_tasks: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """
-    آپلود مقاوم یک ردیف پیوست.
+    آپلود مقاوم یک ردیف پیوست — بازنویسی‌شده بر اساس مسیر دقیق سامانه.
+
+    مسیر دقیق:
+      ۱. انتخاب «سایر ضمائم» از #attachmentType
+      ۲. قرار دادن «۰» در #txtNo
+      ۳. قرار دادن عنوان در #txtName (یا «مستندات»)
+      ۴. اگر فقط ۱ فایل → اسکیپ #txt001 و #incAttach0
+         اگر بیش از ۱ فایل → تعداد در #txt001 و کلیک #incAttach0
+      ۵. کلیک #btnSaveDoc + انتظار لودینگ
+      ۶. بستن پاپ‌آپ موفقیت
+      ۷. کلیک editDocument روی ردیف
+      ۸. آپلود فایل‌ها با #files_multipleFileUploader
+      ۹. کلیک #btnUploadAll
+      ۱۰. تشخیص خطای ورود همزمان → اطلاع به مدیر → لاگین مجدد
+          → حذف فایل‌ها (با لودینگ) → حذف ردیف → شروع از اول
+      ۱۱. انتظار alertهای موفقیت (ظاهر و محو شدن)
+      ۱۲. کلیک #btnApplyAll
+      ۱۳. تشخیص خطای ورود همزمان → لاگین مجدد → کلیک مجدد #btnApplyAll
 
     form_fill_fn: async def fn(page, doc_title, image_paths, force_page_count=None) -> bool
         اگر None باشد، از فرم پیش‌فرض سایر ضمائم استفاده می‌شود.
@@ -657,7 +856,7 @@ async def resilient_upload_attachment(
                 _log(prefix, f"نشست قبل از آپلود [{doc_title}] تمدید شد")
                 await asyncio.sleep(2)
 
-            # مرحله ۱: پر کردن فرم
+            # ─── مرحله ۱: پر کردن فرم ───
             if form_fill_fn:
                 form_ok = await form_fill_fn(page, doc_title, prepared_paths)
                 if not form_ok:
@@ -673,7 +872,7 @@ async def resilient_upload_attachment(
 
             await asyncio.sleep(2)
 
-            # مرحله ۲: ذخیره سند
+            # ─── مرحله ۲: ذخیره سند (#btnSaveDoc) + انتظار لودینگ ───
             save_ok = await click_save_doc_with_retry(page, bot, user_id, prefix=prefix)
             if not save_ok:
                 error_text = await get_and_close_error_popup_text(page)
@@ -707,24 +906,49 @@ async def resilient_upload_attachment(
 
             await asyncio.sleep(3)
 
-            # مرحله ۳: ویرایش و آپلود فایل‌ها
+            # ─── مرحله ۳: کلیک editDocument روی ردیف ───
             await page.evaluate('''() => {
                 const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
                 if (btns.length > 0) btns[btns.length - 1].click();
             }''')
             await asyncio.sleep(4)
 
-            file_input = page.locator('input[type="file"]').first
-            if prepared_paths:
+            # ─── مرحله ۴: آپلود فایل‌ها با #files_multipleFileUploader ───
+            # استفاده از انتخاب‌گر دقیق دستورالعمل
+            file_input = page.locator('#files_multipleFileUploader')
+            if await file_input.count() > 0:
+                await file_input.set_input_files(prepared_paths)
+                await asyncio.sleep(3)
+            else:
+                # فال‌بک: اولین input[type="file"]
+                _log(prefix, "#files_multipleFileUploader پیدا نشد — فال‌بک به input[type=file]", 'warning')
+                file_input = page.locator('input[type="file"]').first
                 await file_input.set_input_files(prepared_paths)
                 await asyncio.sleep(3)
 
-            # مرحله ۴: کلیک آپلود همه
+            # ─── مرحله ۵: کلیک آپلود همه (#btnUploadAll) ───
             await page.evaluate('''() => {
                 const btn = document.querySelector('#btnUploadAll');
                 if (btn && !btn.disabled) btn.click();
             }''')
 
+            # ⭐ مرحله ۵.۱: بررسی فوری خطای ورود همزمان
+            await asyncio.sleep(3)
+            is_concurrent = await detect_concurrent_login_popup(page)
+            if is_concurrent:
+                _log(prefix, f"خطای ورود همزمان بعد از آپلود همه [{doc_title}]!", 'error')
+                # اطلاع به مدیر و لاگین مجدد از طریق check_and_handle_expiry
+                await check_and_handle_expiry(page, bot, user_id)
+                # بعد از لاگین مجدد:
+                # ۱. کلیک editDocument روی ردیف
+                # ۲. حذف تمام فایل‌ها (با انتظار لودینگ)
+                # ۳. حذف ردیف
+                # ۴. شروع از اول
+                await full_delete_attachment_row(page, doc_title, bot, user_id, prefix)
+                await asyncio.sleep(2)
+                continue
+
+            # بررسی سایر خطاها
             had_expiry = await check_and_handle_expiry(page, bot, user_id)
             if had_expiry:
                 _log(prefix, f"نشست بعد از آپلود همه [{doc_title}] تمدید شد")
@@ -733,7 +957,7 @@ async def resilient_upload_attachment(
                 await asyncio.sleep(2)
                 continue
 
-            # مرحله ۵: انتظار تایید آپلود
+            # ─── مرحله ۶: انتظار تایید آپلود (alertها) ───
             all_uploaded = await wait_for_upload_confirmation(
                 page, image_count, bot, user_id, prefix=prefix
             )
@@ -741,15 +965,15 @@ async def resilient_upload_attachment(
             if not all_uploaded:
                 error_text = await get_and_close_error_popup_text(page)
                 error_type = detect_error_type(error_text) if error_text else "upload_timeout"
+
+                # اگر خطای غیر از ورود همزمان است → حذف و ثبت مجدد
                 _log(prefix, f"آپلود [{doc_title}] تایید نشد (نوع: {error_type}): {error_text}", 'warning')
                 await full_delete_attachment_row(page, doc_title, bot, user_id, prefix)
                 await asyncio.sleep(2)
                 continue
 
-            # مرحله ۵.۵: انتظار ناپدید شدن کامل alertها
-            # وقتی تعداد فایل‌ها زیاد است، سامانه ممکن است هنوز در حال
-            # پردازش باشد. باید صبر کنیم تا تمام alertهای موفقیت
-            # از صفحه حذف شوند و سپس دکمه تایید را بزنیم.
+            # ─── مرحله ۶.۵: انتظار ناپدید شدن کامل alertها ───
+            # به ازای هر پیوست موفق، یک alert ظاهر شده و بعد از چند ثانیه محو می‌شود
             alerts_gone = await wait_for_alerts_to_disappear(
                 page, bot, user_id, prefix=prefix
             )
@@ -759,7 +983,7 @@ async def resilient_upload_attachment(
             await wait_for_angular_idle(page)
             await asyncio.sleep(1)
 
-            # مرحله ۶: اعمال همه
+            # ─── مرحله ۷: اعمال همه (#btnApplyAll) ───
             all_confirmed = await click_apply_all_with_retry(
                 page, image_count, bot, user_id, prefix=prefix
             )
@@ -779,11 +1003,17 @@ async def resilient_upload_attachment(
                 result["success"] = True
                 return result
 
-            # اعمال همه ناموفق
+            # اعمال همه ناموفق — بررسی نوع خطا
             error_text = await get_and_close_error_popup_text(page)
-            error_type = detect_error_type(error_text) if error_text else "apply_failed"
-            _log(prefix, f"اعمال همه [{doc_title}] ناموفق (نوع: {error_type}): {error_text}", 'warning')
+            if error_text:
+                error_type = detect_error_type(error_text)
+                if error_type == "session":
+                    # خطای ورود همزمان — فقط دوباره تلاش کن (بدون حذف)
+                    _log(prefix, f"خطای ورود همزمان در اعمال همه — تلاش مجدد بدون حذف")
+                    continue
 
+            # خطای دیگر — حذف و ثبت مجدد
+            _log(prefix, f"اعمال همه [{doc_title}] ناموفق: {error_text}", 'warning')
             await full_delete_attachment_row(page, doc_title, bot, user_id, prefix)
             await asyncio.sleep(2)
 
@@ -814,6 +1044,23 @@ async def resilient_upload_attachment(
 # =========================================================
 
 async def _default_fill_other_attachment_form(page, doc_title: str, page_count: int) -> bool:
+    """
+    پر کردن فرم پیش‌فرض «سایر ضمائم».
+
+    ⭐ تغییر مهم: اگر page_count == 1 (تک‌برگ)، فیلد #txt001 و دکمه
+    #incAttach0 اسکیپ می‌شوند (بر اساس دستورالعمل).
+
+    مسیر:
+      ۱. انتخاب «سایر ضمائم» از #attachmentType
+      ۲. قرار دادن «۰» در #txtNo
+      ۳. قرار دادن عنوان در #txtName
+      ۴. اگر page_count > 1:
+           - تعداد در #txt001
+           - کلیک #incAttach0 (افزودن پیوست)
+         اگر page_count <= 1:
+           - اسکیپ مرحله ۴
+    """
+    # مرحله ۱: انتخاب «سایر ضمائم»
     await page.evaluate('''() => {
         const sel = document.querySelector('#attachmentType');
         if (sel) {
@@ -827,6 +1074,7 @@ async def _default_fill_other_attachment_form(page, doc_title: str, page_count: 
     }''')
     await asyncio.sleep(3)
 
+    # مرحله ۲: شماره مدرک = ۰
     await page.evaluate('''() => {
         const inputs = Array.from(document.querySelectorAll('input#txtNo'));
         if (inputs.length > 0) {
@@ -835,7 +1083,8 @@ async def _default_fill_other_attachment_form(page, doc_title: str, page_count: 
         }
     }''')
 
-    escaped_title = doc_title.replace("`", "'").replace("\\", "")
+    # مرحله ۳: عنوان مدرک
+    escaped_title = doc_title.replace("`", "'").replace("\\", "").replace('"', '\\"')
     await page.evaluate(f'''() => {{
         const inputs = Array.from(document.querySelectorAll('input#txtName'));
         if (inputs.length > 0) {{
@@ -844,19 +1093,25 @@ async def _default_fill_other_attachment_form(page, doc_title: str, page_count: 
         }}
     }}''')
 
-    await page.evaluate(f'''() => {{
-        const inp = document.querySelector('#txt001');
-        if (inp) {{
-            inp.value = "{page_count}";
-            inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-        }}
-    }}''')
+    # ⭐ مرحله ۴: تعداد صفحات و افزودن پیوست
+    # اگر فقط ۱ برگ باشد → اسکیپ (دستورالعمل: نیازی به این مرحله نیست)
+    if page_count > 1:
+        await page.evaluate(f'''() => {{
+            const inp = document.querySelector('#txt001');
+            if (inp) {{
+                inp.value = "{page_count}";
+                inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            }}
+        }}''')
 
-    await page.evaluate('''() => {
-        const btn = document.querySelector('#incAttach0');
-        if (btn && !btn.disabled) btn.click();
-    }''')
-    await asyncio.sleep(3)
+        # کلیک «افزودن پیوست» (#incAttach0)
+        await page.evaluate('''() => {
+            const btn = document.querySelector('#incAttach0');
+            if (btn && !btn.disabled) btn.click();
+        }''')
+        await asyncio.sleep(3)
+    else:
+        _log("UPLOAD", f"حالت تک‌برگ ({page_count} فایل) — #txt001 و #incAttach0 اسکیپ شدند")
 
     return True
 

@@ -60,25 +60,44 @@ export default function ManualInterventionDialog({
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [fileNames, setFileNames] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [botSend, setBotSend] = useState(true);
 
   if (!caseItem) return null;
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
-    const newNames: string[] = [...fileNames];
-    const newUrls: string[] = [...uploadedFiles];
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      Array.from(files).forEach((f) => formData.append('files', f));
 
-    Array.from(files).forEach((f) => {
-      newNames.push(f.name);
-      newUrls.push(`file://${f.name}`);
-    });
+      const res = await fetch('/api/admin/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
 
-    setFileNames(newNames);
-    setUploadedFiles(newUrls);
+      if (!res.ok) {
+        throw new Error(data.error || 'آپلود فایل ناموفق بود');
+      }
+
+      const newUrls = (data.files as { url: string; name: string }[]).map((f) => f.url);
+      const newNames = (data.files as { url: string; name: string }[]).map((f) => f.name);
+
+      setUploadedFiles((prev) => [...prev, ...newUrls]);
+      setFileNames((prev) => [...prev, ...newNames]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'آپلود فایل ناموفق بود');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
   };
 
   const removeFile = (index: number) => {
@@ -116,6 +135,8 @@ export default function ManualInterventionDialog({
     setUploadedFiles([]);
     setFileNames([]);
     setSending(false);
+    setUploading(false);
+    setUploadError(null);
     setSuccess(false);
     setBotSend(true);
     onClose();
@@ -231,24 +252,36 @@ export default function ManualInterventionDialog({
                   className="hidden"
                   id="file-upload"
                   accept="image/*,.pdf,.doc,.docx"
+                  disabled={uploading}
                 />
                 <label
                   htmlFor="file-upload"
-                  className="cursor-pointer flex flex-col items-center gap-2.5"
+                  className={cn(
+                    'flex flex-col items-center gap-2.5',
+                    uploading ? 'cursor-wait opacity-70' : 'cursor-pointer'
+                  )}
                 >
                   <div className="h-10 w-10 rounded-xl bg-muted/50 group-hover:bg-primary/10 flex items-center justify-center transition-all duration-200 group-hover:scale-110">
-                    <FileUp className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                    {uploading ? (
+                      <Loader2 className="h-5 w-5 text-primary animate-spin" />
+                    ) : (
+                      <FileUp className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                    )}
                   </div>
                   <div>
                     <p className="text-xs text-muted-foreground group-hover:text-foreground transition-colors">
-                      {"کلیک کنید یا فایل بکشید"}
+                      {uploading ? 'در حال آپلود...' : 'کلیک کنید یا فایل بکشید'}
                     </p>
                     <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                      {"تصاویر، PDF، Word"}
+                      {"تصاویر، PDF، Word — حداکثر ۲۰ مگابایت"}
                     </p>
                   </div>
                 </label>
               </div>
+
+              {uploadError && (
+                <p className="text-xs text-red-600 dark:text-red-400">{uploadError}</p>
+              )}
 
               {fileNames.length > 0 && (
                 <div className="space-y-1.5">
@@ -320,7 +353,7 @@ export default function ManualInterventionDialog({
               </Button>
               <Button
                 onClick={handleSubmit}
-                disabled={sending || (!adminNote.trim() && actionType !== 'SEND_TO_USER')}
+                disabled={sending || uploading || (!adminNote.trim() && actionType !== 'SEND_TO_USER')}
                 className={cn(
                   'transition-all duration-200 scale-[1.02] active:scale-[0.98] shadow-md',
                   actionType === 'SEND_TO_USER'

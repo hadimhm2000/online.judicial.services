@@ -273,6 +273,28 @@ async def process_lavayeh_task(data: dict, bot: Bot):
                     await _click_sana_query_with_retry(sana_page, "actions.callLegalNationalityCode", bot, user_id)
                     await resilient_sleep(sana_page, 8, bot, user_id)
 
+                    # شماره ثبت شخص حقوقی (#txtLegalIrShSabt / RecordNo) — سامانه این فیلد را
+                    # برای شخص حقوقی خصوصی اجباری می‌کند؛ همیشه «0» می‌گذاریم.
+                    for _ in range(8):
+                        _rec_ok = await sana_page.evaluate('''() => {
+                            const inp = document.querySelector('#txtLegalIrShSabt');
+                            if (!inp) return false;
+                            inp.value = "0";
+                            inp.dispatchEvent(new Event("input", { bubbles: true }));
+                            inp.dispatchEvent(new Event("change", { bubbles: true }));
+                            try {
+                                if (typeof angular !== 'undefined') {
+                                    const ctrl = angular.element(inp).controller('ngModel');
+                                    if (ctrl) { ctrl.$setViewValue("0"); ctrl.$render(); }
+                                }
+                            } catch(e) {}
+                            return true;
+                        }''')
+                        if _rec_ok:
+                            logging.info("[LAVAYEH] شماره ثبت شخص حقوقی روی «0» تنظیم شد")
+                            break
+                        await resilient_sleep(sana_page, 1, bot, user_id)
+
                     await sana_page.evaluate('''() => {
                         const rdb = document.querySelector('input[type="radio"][value="7"]');
                         if (rdb) rdb.click();
@@ -1295,7 +1317,18 @@ async def _click_save_doc_with_retry(page, bot: Bot, user_id: int, max_retries: 
     for attempt in range(max_retries):
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnSaveDoc');
-            if (btn && !btn.disabled) btn.click();
+            if (!btn || btn.disabled) return;
+            try {
+                if (typeof angular !== 'undefined') {
+                    const ngEl = angular.element(btn);
+                    if (ngEl && ngEl.scope) {
+                        ngEl.scope().$apply(() => { btn.click(); });
+                        return;
+                    }
+                }
+            } catch(e) {}
+            btn.click();
+            btn.dispatchEvent(new Event('click', { bubbles: true }));
         }''')
 
         had_expiry = await resilient_sleep(page, 8, bot, user_id)
@@ -1354,9 +1387,24 @@ async def _delete_uploaded_files(page, bot: Bot, user_id: int):
 
 async def _click_apply_all_with_retry(page, expected_count: int, bot: Bot, user_id: int, max_retries: int = 2) -> bool:
     for attempt in range(max_retries):
+        logging.info(f"[LAVAYEH][منضمات] اعمال همه — تلاش {attempt+1}/{max_retries}")
+
         await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
-            if (btn && !btn.disabled) btn.click();
+            if (!btn) return;
+            if (btn.disabled) return;
+            // استفاده از scope.$apply برای اجرای صحیح ng-click در AngularJS
+            try {
+                if (typeof angular !== 'undefined') {
+                    const ngEl = angular.element(btn);
+                    if (ngEl && ngEl.scope) {
+                        ngEl.scope().$apply(() => { btn.click(); });
+                        return;
+                    }
+                }
+            } catch(e) {}
+            btn.click();
+            btn.dispatchEvent(new Event('click', { bubbles: true }));
         }''')
 
         had_expiry = await resilient_sleep(page, 10, bot, user_id)
@@ -1370,6 +1418,33 @@ async def _click_apply_all_with_retry(page, expected_count: int, bot: Bot, user_
         }}''')
         if confirmed:
             return True
+
+        # بررسی popup خطا
+        error_text = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return null;
+            const h2 = popup.querySelector('h2');
+            const icon = popup.querySelector('.sa-icon.sa-error');
+            if (icon && window.getComputedStyle(icon).display !== 'none') {
+                return h2 ? h2.innerText : 'خطا';
+            }
+            return null;
+        }''')
+        if error_text:
+            logging.warning(f"[LAVAYEH][منضمات] خطا در اعمال همه (تلاش {attempt+1}): {error_text}")
+            await resilient_sleep(page, 5, bot, user_id)
+            continue
+
+        # بررسی sweet-alert موفقیت
+        success_popup = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const icon = popup.querySelector('.sa-icon.sa-success');
+            return icon && window.getComputedStyle(icon).display !== 'none';
+        }''')
+        if success_popup:
+            return True
+
         await resilient_sleep(page, 30, bot, user_id)
 
     return False

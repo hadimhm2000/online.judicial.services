@@ -1138,11 +1138,6 @@ async def _process_lavayeh_send_sign_code(data: dict, bot: Bot):
     tracking_code = data.get("tracking_code", "")
     phase = data.get("phase", "navigate")
 
-    from lavayeh_sign_scenario import (
-        navigate_to_sign_page,
-        get_signable_persons,
-        send_sign_code_for_person,
-    )
     from lavayeh_sign_handlers import (
         on_lavayeh_sign_persons_loaded,
         on_lavayeh_sign_code_sent_success,
@@ -1152,6 +1147,12 @@ async def _process_lavayeh_send_sign_code(data: dict, bot: Bot):
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
+        from lavayeh_sign_scenario import (
+            navigate_to_sign_page,
+            get_signable_persons,
+            send_sign_code_for_person,
+        )
+
         if phase == "navigate":
             # فاز ۱: ناوبری به صفحه امضا و دریافت لیست اشخاص
             await bot.send_message(ADMIN_ID, f"🔄 [SIGN] ناوبری به صفحه امضا برای کاربر {user_id}")
@@ -1199,6 +1200,13 @@ async def _process_lavayeh_send_sign_code(data: dict, bot: Bot):
 
     except Exception as e:
         logging.error(f"[SIGN] خطا در _process_lavayeh_send_sign_code: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="_process_lavayeh_send_sign_code", error=e,
+                             user_id=user_id, bill_no=tracking_code,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await on_lavayeh_sign_code_sent_failure(bot, user_id, user_state)
 
 
@@ -1211,16 +1219,18 @@ async def _process_lavayeh_submit_sign(data: dict, bot: Bot):
     row_idx = data.get("row_idx", 0)
     code = data.get("code", "")
 
-    from lavayeh_sign_scenario import submit_sign_code_for_person
     from lavayeh_sign_handlers import (
         on_lavayeh_sign_submit_success,
         on_lavayeh_sign_submit_failure,
         on_lavayeh_sign_wrong_code,
+        on_lavayeh_sign_sana_not_registered,
     )
 
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
+        from lavayeh_sign_scenario import submit_sign_code_for_person
+
         await bot.send_message(ADMIN_ID, f"🔄 [SIGN] ثبت امضا برای کاربر {user_id}")
         result = await submit_sign_code_for_person(
             bot, user_id, row_idx, code
@@ -1233,11 +1243,21 @@ async def _process_lavayeh_submit_sign(data: dict, bot: Bot):
             error = result.get("error", "")
             if "wrong_code" in error:
                 await on_lavayeh_sign_wrong_code(bot, user_id, row_idx, user_state)
+            elif "sana_not_registered" in error:
+                await on_lavayeh_sign_sana_not_registered(bot, user_id, "امضای شخص در سامانه ثنا درج نشده است", user_state)
+                await bot.send_message(ADMIN_ID, f"❌ [SIGN] امضا در ثنا ثبت نیست — کاربر {user_id}.")
             else:
                 await on_lavayeh_sign_submit_failure(bot, user_id, user_state)
 
     except Exception as e:
         logging.error(f"[SIGN] خطا در _process_lavayeh_submit_sign: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="_process_lavayeh_submit_sign", error=e,
+                             user_id=user_id, bill_no=tracking_code,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await on_lavayeh_sign_submit_failure(bot, user_id, user_state)
 
 
@@ -1249,11 +1269,7 @@ async def _process_ezhharnameh_send_sign_code(data: dict, bot: Bot):
     tracking_code = data.get("tracking_code", "")
     phase = data.get("phase", "navigate")
 
-    from ezhharnameh_sign_scenario import (
-        navigate_to_ezhhar_sign_page,
-        get_ezhhar_signable_persons,
-        send_ezhhar_sign_code_for_person,
-    )
+    # هندلرها بیرون از try ایمپورت می‌شوند تا در بلوک except در دسترس باشند
     from lavayeh_sign_handlers import (
         on_ezhhar_sign_persons_loaded,
         on_ezhhar_sign_code_sent_success,
@@ -1263,6 +1279,14 @@ async def _process_ezhharnameh_send_sign_code(data: dict, bot: Bot):
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
+        # ایمپورت سناریو داخل try — اگر روزی ImportError داد، به‌جای کرش
+        # browser_worker، به مسیر شکست نرم هدایت می‌شود.
+        from ezhharnameh_sign_scenario import (
+            navigate_to_ezhhar_sign_page,
+            get_ezhhar_signable_persons,
+            send_ezhhar_sign_code_for_person,
+        )
+
         if phase == "navigate":
             await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ناوبری به صفحه امضا اظهارنامه برای کاربر {user_id}")
             nav_ok = await navigate_to_ezhhar_sign_page(bot, user_id, tracking_code)
@@ -1311,6 +1335,13 @@ async def _process_ezhharnameh_send_sign_code(data: dict, bot: Bot):
 
     except Exception as e:
         logging.error(f"[EZHHAR_SIGN] خطا در _process_ezhharnameh_send_sign_code: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="_process_ezhharnameh_send_sign_code", error=e,
+                             user_id=user_id, bill_no=tracking_code,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await on_ezhhar_sign_code_sent_failure(bot, user_id, user_state)
 
 
@@ -1320,7 +1351,6 @@ async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
     row_idx = data.get("row_idx", 0)
     code = data.get("code", "")
 
-    from ezhharnameh_sign_scenario import submit_ezhhar_sign_code
     from lavayeh_sign_handlers import (
         on_ezhhar_sign_submit_success,
         on_ezhhar_sign_submit_failure,
@@ -1331,6 +1361,8 @@ async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
     user_state = runtime_state.dp.fsm.resolve_context(bot, user_id, user_id)
 
     try:
+        from ezhharnameh_sign_scenario import submit_ezhhar_sign_code
+
         await bot.send_message(ADMIN_ID, f"🔄 [EZHHAR_SIGN] ثبت امضا اظهارنامه برای کاربر {user_id}")
         result = await submit_ezhhar_sign_code(bot, user_id, tracking_code, row_idx, code)
 
@@ -1349,6 +1381,13 @@ async def _process_ezhharnameh_submit_sign(data: dict, bot: Bot):
 
     except Exception as e:
         logging.error(f"[EZHHAR_SIGN] خطا در _process_ezhharnameh_submit_sign: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="_process_ezhharnameh_submit_sign", error=e,
+                             user_id=user_id, bill_no=tracking_code,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await on_ezhhar_sign_submit_failure(bot, user_id, user_state)
 
 
@@ -1390,17 +1429,26 @@ async def browser_worker(bot: Bot):
                 break
             except Exception as critical_err:
                 logging.critical(f"[WORKER] خطای بحرانی در حلقه‌ی browser_worker: {critical_err}", exc_info=True)
-                # ── اطلاع‌رسانی فوری به مدیر ──
+                # ── گزارش کامل باگ (traceback + اسکرین‌شات + زمینه) به مدیر ──
                 try:
-                    await bot.send_message(
-                        ADMIN_ID,
-                        f"🚨🚨 **خطای بحرانی در browser_worker!**\n\n"
-                        f"خطا: `{str(critical_err)[:300]}`\n\n"
-                        f"⚠️ حلقه‌ی کارگر ادامه دارد ولی این تسک از دست رفت.",
-                        parse_mode="Markdown"
+                    from bug_reporter import report_bug
+                    _d = locals().get("data") or {}
+                    await report_bug(
+                        bot,
+                        where="browser_worker (حلقه‌ی اصلی)",
+                        error=critical_err,
+                        user_id=_d.get("user_id"),
+                        bill_no=_d.get("tracking_code") or _d.get("bill_no"),
+                        page=getattr(runtime_state, "sana_page", None),
+                        context={k: _d.get(k) for k in ("task_type", "query_type", "phase", "doc_category") if _d.get(k) is not None},
+                        level="critical",
                     )
                 except Exception:
-                    pass
+                    # اگر گزارش‌گر هم خطا داد، حداقل یک پیام کوتاه بفرست
+                    try:
+                        await bot.send_message(ADMIN_ID, f"🚨🚨 خطای بحرانی در browser_worker: {str(critical_err)[:300]}")
+                    except Exception:
+                        pass
                 # ذخیره‌ی فوری حالت
                 try:
                     from persistence import save_runtime_state
