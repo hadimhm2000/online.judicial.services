@@ -375,6 +375,13 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
                     tracking_code=tracking_code, doc_name="اعلام وکالت",
                     note=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}"
                 )
+                try:
+                    from bug_reporter import report_bug
+                    await report_bug(bot, where="process_ealam_vakalaht_task", error=e,
+                                     user_id=user_id,
+                                     page=getattr(runtime_state, "sana_page", None))
+                except Exception:
+                    pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -982,20 +989,26 @@ async def _upload_electronic_vakalaht(
 
         except Exception as e:
             logging.error(f"[EALAM] _upload_electronic_vakalaht تلاش {attempt+1}: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(bot, where="_upload_electronic_vakalaht", error=e,
+                                 user_id=user_id,
+                                 page=getattr(runtime_state, "sana_page", None))
+            except Exception:
+                pass
             await asyncio.sleep(5)
 
     return False
 
 
 async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
-    """آپلود پیوست‌های اضافی (سایر ضمائم) — مقاوم (از upload_helpers)
-    با تقسیم خودکار به ردیف‌های ≤۷ صفحه در صورت زیاد بودن تصاویر."""
-    from upload_helpers import upload_attachment_auto
+    """آپلود پیوست‌های اضافی (سایر ضمائم) — مقاوم (از upload_helpers)"""
+    from upload_helpers import resilient_upload_attachment
 
     if not image_paths:
         return
 
-    result = await upload_attachment_auto(
+    result = await resilient_upload_attachment(
         page, title, image_paths, bot, user_id,
         prefix="EALAM",
     )
@@ -1251,6 +1264,14 @@ async def _print_lavayeh(page, browser_context, bill_no: str, bot: Bot, user_id:
             await page.pdf(path=pdf_path, format="A4")
         except Exception:
             pass
+
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="click_print", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
     return pdf_path
 
 
@@ -1326,4 +1347,11 @@ async def _download_images_from_telegram(bot: Bot, file_ids: list, user_id: int)
             paths.append(path)
         except Exception as e:
             logging.error(f"[EALAM] خطا در دانلود تصویر {i} برای user {user_id}: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(bot, where="_download_images_from_telegram", error=e,
+                                 user_id=user_id,
+                                 page=getattr(runtime_state, "sana_page", None))
+            except Exception:
+                pass
     return paths

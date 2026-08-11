@@ -319,6 +319,11 @@ async def subscription_expiry_checker(bot: Bot):
                     logging.error(f"[SUBSCRIPTION] خطا در ارسال اعلان انقضا به {user_id}: {e}")
         except Exception as e:
             logging.error(f"[SUBSCRIPTION] خطا در حلقه بررسی انقضا: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(None, where="subscription_expiry_checker", error=e, notify_admin=False)
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -351,6 +351,11 @@ async def admin_approve_bulk(message: types.Message, bot: Bot):
         
     except Exception as e:
         logging.error(f"[ADMIN_APPROVE_BULK] خطا: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="admin_approve_bulk", error=e, notify_admin=False)
+        except Exception:
+            pass
         await message.answer(f"⚠️ خطا در تایید درخواست: {e}")
 
 
@@ -405,6 +410,11 @@ async def admin_reject_bulk(message: types.Message, bot: Bot):
         
     except Exception as e:
         logging.error(f"[ADMIN_REJECT_BULK] خطا: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="admin_reject_bulk", error=e, notify_admin=False)
+        except Exception:
+            pass
         await message.answer(f"⚠️ خطا در رد درخواست: {e}")
 
 

@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { telegramId, fullName, messageText } = body;
+    const { telegramId, fullName, messageText, fileUrl, fileName } = body;
 
     if (!telegramId || !messageText) {
       return NextResponse.json(
@@ -62,6 +62,8 @@ export async function POST(request: NextRequest) {
         telegramId,
         fullName: fullName || '',
         messageText,
+        fileUrl: fileUrl || null,
+        fileName: fileName || null,
         status: 'PENDING',
       },
     });

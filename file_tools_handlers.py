@@ -230,6 +230,14 @@ async def file_tools_receive_image(message: Message, state: FSMContext, bot: Bot
         )
     except Exception:
         logging.exception("file_tools image compress error")
+
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="file_tools_receive_image", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await message.answer("❌ خطایی در پردازش عکس رخ داد. لطفاً دوباره تلاش کنید.")
     finally:
         for p in (src_path, dst_path):
@@ -345,6 +353,14 @@ async def file_tools_receive_pdf(message: Message, state: FSMContext, bot: Bot):
         )
     except Exception:
         logging.exception("file_tools pdf2image error")  # چاپ کامل traceback
+
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="file_tools_receive_pdf", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await message.answer("❌ خطایی در تبدیل فایل PDF رخ داد. لطفاً لاگ را بررسی کنید.")
     finally:
         for p in [pdf_path] + page_paths:

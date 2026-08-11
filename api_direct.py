@@ -263,11 +263,19 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
             await force_click_by_text(page, step)
             await asyncio.sleep(2 if i < len(steps) - 1 else 5)
 
-        # لایحه: جستجوی لایحه و بازیابی
+        # لایحه: انتخاب رادیو #rdbGetPetition (value=2) و ورود کد رهگیری
         if category == "لایحه" or (
             category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
         ):
-            await force_click_by_text(page, "جستجوی لایحه")
+            # کلیک روی رادیوباتن استعلام لایحه (#rdbGetPetition)
+            radio_clicked = await page.evaluate('''() => {
+                const radio = document.querySelector('#rdbGetPetition');
+                if (radio) { radio.click(); return true; }
+                return false;
+            }''')
+            if not radio_clicked:
+                # فال‌بک: تلاش با انتخاب متن
+                await force_click_by_text(page, "جستجوی لایحه")
             await asyncio.sleep(4)
 
         # ── وارد کردن کد رهگیری ────────────────────────────────
@@ -276,23 +284,31 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
         except PlaywrightTimeoutError:
             raise FastCheckError("صفحه کارتابل لود نشد")
 
-        await page.fill('#txtPetitionNo, #billNo', tracking_code)
+        # لایحه: فیلد ورودی کدرهگیری #billNo
+        if (category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        )):
+            await page.fill('#billNo', tracking_code)
+        else:
+            await page.fill('#txtPetitionNo, #billNo', tracking_code)
         await asyncio.sleep(1.5)
 
-        # لایحه: بازیابی
-        if category == "لایحه" or (
-            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
-        ):
-            await force_click_by_text(page, "بازیابی")
-            await asyncio.sleep(2)
-
         # ── کلیک جستجو (بدون fallback خطرناک) ───────────────────
-        await page.evaluate('''() => {
-            const exactBtn = document.querySelector('#btnGetJSSPetition');
-            if (exactBtn) { exactBtn.click(); return; }
-            const exactBtn2 = document.querySelector('#btnGetJSSBill');
-            if (exactBtn2) { exactBtn2.click(); return; }
-        }''')
+        # لایحه: دکمه #btnGetJSSBill  |  سایر: #btnGetJSSPetition
+        if (category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        )):
+            await page.evaluate('''() => {
+                const btn = document.querySelector('#btnGetJSSBill');
+                if (btn) { btn.click(); return; }
+            }''')
+        else:
+            await page.evaluate('''() => {
+                const exactBtn = document.querySelector('#btnGetJSSPetition');
+                if (exactBtn) { exactBtn.click(); return; }
+                const exactBtn2 = document.querySelector('#btnGetJSSBill');
+                if (exactBtn2) { exactBtn2.click(); return; }
+            }''')
         await asyncio.sleep(3)
         await _wait_for_loading(page, timeout=45)
         await _dismiss_error_and_retry(page)
@@ -328,6 +344,24 @@ async def _do_page_check(tracking_code, category, subcategory, user_id, bot) -> 
             raise SessionExpiredError("نشست منقضی")
 
         # ── کلیک منضمات و شمارش ─────────────────────────────────
+        # بررسی وجود تب «منضمات» قبل از کلیک
+        mozamatat_exists = await page.evaluate('''() => {
+            const tags = ['button', 'a', 'label', 'span', 'li', 'h5', 'div', 'td'];
+            for (let tag of tags) {
+                const elements = Array.from(document.querySelectorAll(tag));
+                const target = elements.find(el => el.innerText && el.innerText.trim().includes("منضمات"));
+                if (target) {
+                    const rect = target.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) return true;
+                }
+            }
+            return false;
+        }''')
+        if not mozamatat_exists:
+            logger.info("[FAST-CHECK] تب منضمات یافت نشد — تعداد پیوست: 0")
+            discovery.analyze_and_save()
+            return 0
+
         await force_click_by_text(page, "منضمات")
         await asyncio.sleep(4)
         count = await page.evaluate('''() => {

@@ -775,3 +775,65 @@ async def safe_type(page, selector, text, bot: Bot, user_id: int, retry_count=3)
             await asyncio.sleep(2)
             
     raise Exception(f"Failed to type in '{selector}' after multiple retries.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# کلیک ایمن روی آیتم‌های منوی اصلی سامانه (a.list-group-item)
+# ══════════════════════════════════════════════════════════════════════════════
+async def click_sana_main_menu(
+    page,
+    text: str,
+    exclude_texts: list = None,
+    timeout_sec: int = 15,
+    prefix: str = "MENU",
+) -> bool:
+    """
+    کلیک روی آیتم منوی اصلی سامانه (تگ <a class="list-group-item">).
+
+    ویژگی‌ها:
+      - فقط داخل a.list-group-item جستجو می‌کند (نه div/span/li عمومی‌تر)
+      - آیتم‌هایی که متن exclude_texts را شامل شوند را نادیده می‌گیرد
+      - اگر چند لینک هم‌زمان مطابقت داشتند، کوتاه‌ترین (دقیق‌ترین) را انتخاب می‌کند
+      - تا timeout_sec ثانیه صبر می‌کند (برای رندر آنگولار)
+
+    Returns:
+        True اگر کلیک موفق بود، False در غیر این صورت.
+    """
+    if exclude_texts is None:
+        exclude_texts = []
+
+    deadline = asyncio.get_event_loop().time() + timeout_sec
+    while asyncio.get_event_loop().time() < deadline:
+        result = await page.evaluate('''(args) => {
+            const text = args.text;
+            const excludes = args.excludes;
+            const links = Array.from(document.querySelectorAll('a.list-group-item'));
+            let candidates = links.filter(a => {
+                const t = (a.innerText || "").trim();
+                if (!t.includes(text)) return false;
+                for (const ex of excludes) {
+                    if (t.includes(ex)) return false;
+                }
+                // فقط آیتم‌های قابل مشاهده
+                const rect = a.getBoundingClientRect();
+                if (rect.width === 0 || rect.height === 0) return false;
+                return true;
+            });
+            if (candidates.length === 0) return null;
+            // کوتاه‌ترین متن = دقیق‌ترین تطبیق
+            candidates.sort((a, b) => {
+                return (a.innerText || "").trim().length - (b.innerText || "").trim().length;
+            });
+            candidates[0].click();
+            return (candidates[0].innerText || "").trim();
+        }''', {"text": text, "excludes": exclude_texts})
+
+        if result:
+            logging.info(f"[{prefix}] کلیک روی منو: '{result}'")
+            return True
+
+        await asyncio.sleep(1)
+
+    logging.warning(f"[{prefix}] آیتم منوی '{text}' پیدا نشد (timeout={timeout_sec}s")
+    return False
+

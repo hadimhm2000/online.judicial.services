@@ -388,7 +388,158 @@ def detect_error_type(error_text: str) -> str:
 
 
 # =========================================================
-# ۳. حذف کامل ردیف پیوست
+# ۳. کلیک editDocument روی ردیف + انتظار آپلودر
+# =========================================================
+
+async def click_edit_document_for_title(
+    page,
+    title: str,
+    bot: Bot = None,
+    user_id: int = None,
+    prefix: str = "UPLOAD",
+    table_wait_timeout: int = 15,
+    uploader_wait_timeout: int = 15,
+) -> bool:
+    """
+    بعد از ذخیره سند و بستن پاپ‌آپ موفقیت، جدول پیوست‌ها ظاهر می‌شود.
+    این تابع:
+      ۱. صبر می‌کند تا جدول ظاهر شود
+      ۲. ردیفی که عنوانش با title مطابقت دارد را پیدا می‌کند
+      ۳. دکمه editDocument (glyphicon-hand-left) آن ردیف را کلیک می‌کند
+         ⭐ از Playwright native click استفاده می‌کند (نه page.evaluate)
+         تا Angular ng-click به‌درستی فعال شود
+      ۴. صبر می‌کند تا #files_multipleFileUploader در DOM ظاهر شود
+
+    بازگشت: True اگر موفق، False در غیر این صورت
+    """
+    # آماده‌سازی متغiants عنوان (فارسی/عربی)
+    title_variants = [title]
+    if 'نمایندگی' in title:
+        title_variants.extend(['مدرک نمايندگي', 'مدرک نمایندگی', 'تصوير مدرک نمايندگي', 'تصویر مدرک نمایندگی'])
+    if 'ضمایم' in title or 'ضمائم' in title:
+        title_variants.extend(['ساير ضمائم', 'سایر ضمائم'])
+    # حذف تکراری‌ها
+    title_variants = list(dict.fromkeys(title_variants))
+
+    # ─── مرحله ۱: انتظار برای ظاهر شدن جدول و پیدا کردن ردیف ───
+    found_btn = False
+    for i in range(table_wait_timeout * 2):
+        # بررسی انقضا
+        if i % 10 == 0 and bot and user_id:
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                _log(prefix, "نشست حین انتظار جدول پیوست‌ها تمدید شد")
+                await asyncio.sleep(2)
+
+        result = await page.evaluate('''(variants) => {
+            const rows = document.querySelectorAll('table tbody tr');
+            for (const row of rows) {
+                const cells = row.querySelectorAll('td');
+                for (const cell of cells) {
+                    const text = (cell.innerText || '').trim();
+                    for (const v of variants) {
+                        if (text.includes(v)) {
+                            const editBtn = row.querySelector('button[ng-click*="editDocument"]');
+                            if (editBtn && !editBtn.disabled) {
+                                //_mark با شناسه موقت برای Playwright
+                                editBtn.setAttribute('data-target-edit', '1');
+                                return { found: true, rowCount: rows.length };
+                            }
+                            return { found: false, reason: 'no_button', rowCount: rows.length };
+                        }
+                    }
+                }
+            }
+            return { found: false, reason: 'not_found', rowCount: rows.length };
+        }''', title_variants)
+
+        if result.get("found"):
+            _log(prefix, f"ردیف [{title}] در جدول پیدا شد ({result['rowCount']} ردیف کل)")
+            found_btn = True
+            break
+        elif result.get("reason") == "no_button":
+            _log(prefix, f"ردیف [{title}] پیدا شد ولی دکمه ویرایش یافت نشد", 'warning')
+            return False
+        # not_found → ادامه انتظار
+        await asyncio.sleep(0.5)
+
+    if not found_btn:
+        _log(prefix, f"ردیف [{title}] در جدول ظاهر نشد", 'warning')
+        return False
+
+    # ─── مرحله ۲: کلیک با Playwright (native click برای Angular) ───
+    try:
+        # اسکرول به دکمه و کلیک
+        target = page.locator('button[data-target-edit="1"]')
+        await target.scroll_into_view_if_needed(timeout=5000)
+        await asyncio.sleep(0.5)
+        await target.click(timeout=10000)
+        _log(prefix, f"دکمه editDocument ردیف [{title}] با Playwright کلیک شد")
+    except Exception as e:
+        _log(prefix, f"کلیک Playwright ناموفق، تلاش با JavaScript: {e}", 'warning')
+        # فال‌بک: کلیک جاوااسکریپتی با triggerHandler
+        clicked = await page.evaluate('''() => {
+            const btn = document.querySelector('button[data-target-edit="1"]');
+            if (!btn) return false;
+            try {
+                if (typeof angular !== 'undefined') {
+                    const scope = angular.element(btn).scope();
+                    if (scope && scope.$parent && scope.$parent.actions) {
+                        const $index = scope.$parent.$index !== undefined ? scope.$parent.$index : 0;
+                        scope.$apply(() => { scope.$parent.actions.editDocument($index); });
+                        return true;
+                    }
+                    if (scope && scope.actions) {
+                        const $index = scope.$index !== undefined ? scope.$index : 0;
+                        scope.$apply(() => { scope.actions.editDocument($index); });
+                        return true;
+                    }
+                }
+            } catch(e) {}
+            btn.click();
+            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            return true;
+        }''')
+        if not clicked:
+            _log(prefix, "هیچ روش کلیکی کار نکرد", 'error')
+            # پاک‌سازی
+            await page.evaluate('''() => {
+                const btn = document.querySelector('button[data-target-edit="1"]');
+                if (btn) btn.removeAttribute('data-target-edit');
+            }''')
+            return False
+
+    # پاک‌سازی شناسه موقت
+    await page.evaluate('''() => {
+        const btn = document.querySelector('button[data-target-edit="1"]');
+        if (btn) btn.removeAttribute('data-target-edit');
+    }''')
+
+    # ─── مرحله ۳: انتظار برای ظاهر شدن #files_multipleFileUploader ───
+    _log(prefix, f"انتظار برای ظاهر شدن آپلودر...")
+    for i in range(uploader_wait_timeout * 2):
+        if i % 10 == 0 and bot and user_id:
+            had_expiry = await check_and_handle_expiry(page, bot, user_id)
+            if had_expiry:
+                _log(prefix, "نشست حین انتظار آپلودر تمدید شد")
+                await asyncio.sleep(2)
+
+        uploader_count = await page.evaluate('''() => {
+            return document.querySelectorAll('#files_multipleFileUploader').length;
+        }''')
+        if uploader_count > 0:
+            _log(prefix, f"#files_multipleFileUploader ظاهر شد (بعد از {(i+1)*0.5:.1f} ثانیه)")
+            await asyncio.sleep(1)
+            return True
+
+        await asyncio.sleep(0.5)
+
+    _log(prefix, f"#files_multipleFileUploader بعد از {uploader_wait_timeout} ثانیه ظاهر نشد", 'warning')
+    return False
+
+
+# =========================================================
+# ۴. حذف کامل ردیف پیوست
 # =========================================================
 
 async def delete_all_files_in_row(page, bot: Bot = None, user_id: int = None, prefix: str = "UPLOAD") -> int:
@@ -906,25 +1057,28 @@ async def resilient_upload_attachment(
 
             await asyncio.sleep(3)
 
-            # ─── مرحله ۳: کلیک editDocument روی ردیف ───
-            await page.evaluate('''() => {
-                const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
-                if (btns.length > 0) btns[btns.length - 1].click();
-            }''')
-            await asyncio.sleep(4)
+            # ─── مرحله ۳: کلیک editDocument روی ردیف + انتظار آپلودر ───
+            edit_ok = await click_edit_document_for_title(
+                page, doc_title, bot, user_id, prefix=prefix,
+            )
+            if not edit_ok:
+                _log(prefix, f"editDocument یا آپلودر برای [{doc_title}] ناموفق", 'warning')
+                await full_delete_attachment_row(page, doc_title, bot, user_id, prefix)
+                await asyncio.sleep(2)
+                continue
 
             # ─── مرحله ۴: آپلود فایل‌ها با #files_multipleFileUploader ───
-            # استفاده از انتخاب‌گر دقیق دستورالعمل
-            file_input = page.locator('#files_multipleFileUploader')
-            if await file_input.count() > 0:
+            # (آپلودر توسط click_edit_document_for_title تضمین شده)
+            try:
+                file_input = page.locator('#files_multipleFileUploader')
                 await file_input.set_input_files(prepared_paths)
-                await asyncio.sleep(3)
-            else:
-                # فال‌بک: اولین input[type="file"]
-                _log(prefix, "#files_multipleFileUploader پیدا نشد — فال‌بک به input[type=file]", 'warning')
-                file_input = page.locator('input[type="file"]').first
-                await file_input.set_input_files(prepared_paths)
-                await asyncio.sleep(3)
+                _log(prefix, f"{len(prepared_paths)} فایل با #files_multipleFileUploader انتخاب شدند")
+            except Exception as e:
+                _log(prefix, f"خطا در انتخاب فایل: {e}", 'error')
+                await full_delete_attachment_row(page, doc_title, bot, user_id, prefix)
+                await asyncio.sleep(2)
+                continue
+            await asyncio.sleep(3)
 
             # ─── مرحله ۵: کلیک آپلود همه (#btnUploadAll) ───
             await page.evaluate('''() => {

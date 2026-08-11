@@ -101,6 +101,8 @@ model BotMessage {
   telegramId  String
   fullName    String?
   messageText String
+  fileUrl     String?  // مسیر فایل پیوست شده (public/uploads/...)
+  fileName    String?  // نام نمایشی فایل
   status      String   @default("PENDING") // PENDING, SENT, FAILED
   sentAt      DateTime?
   errorDetails String?

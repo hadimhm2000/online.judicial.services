@@ -251,9 +251,21 @@ async def ezhhar_declarant_national_id_handler(message: Message, state: FSMConte
         return
 
     data = await state.get_data()
+    # ── بررسی تکراری نبودن کدملی (هم در اظهارکننده‌ها و هم در مخاطبین) ──
+    declarants = data.get("ezhhar_declarants", [])
+    addressees = data.get("ezhhar_addressees", [])
+    all_ids = [p.get("national_id") for p in declarants + addressees if p.get("national_id")]
+    if nat_id in all_ids:
+        await message.answer(
+            f"⚠️ کد ملی `{nat_id}` قبلاً ثبت شده است.\n"
+            f"هر شخص باید کد ملی متفاوت داشته باشد.\n\n"
+            f"لطفاً کد ملی دیگری وارد فرمایید:",
+            parse_mode="Markdown"
+        )
+        return
+
     current = data.get("_ezhhar_current_declarant", {})
     current["national_id"] = nat_id
-    declarants = data.get("ezhhar_declarants", [])
     declarants.append(current)
     await state.update_data(ezhhar_declarants=declarants, _ezhhar_current_declarant={})
 
@@ -402,9 +414,21 @@ async def ezhhar_addressee_national_id_handler(message: Message, state: FSMConte
         return
 
     data = await state.get_data()
+    # ── بررسی تکراری نبودن کدملی (هم در مخاطبین و هم در اظهارکننده‌ها) ──
+    addressees = data.get("ezhhar_addressees", [])
+    declarants = data.get("ezhhar_declarants", [])
+    all_ids = [p.get("national_id") for p in addressees + declarants if p.get("national_id")]
+    if nat_id in all_ids:
+        await message.answer(
+            f"⚠️ کد ملی `{nat_id}` قبلاً ثبت شده است.\n"
+            f"هر شخص باید کد ملی متفاوت داشته باشد.\n\n"
+            f"لطفاً کد ملی دیگری وارد فرمایید:",
+            parse_mode="Markdown"
+        )
+        return
+
     current = data.get("_ezhhar_current_addressee", {})
     current["national_id"] = nat_id
-    addressees = data.get("ezhhar_addressees", [])
     addressees.append(current)
     await state.update_data(ezhhar_addressees=addressees, _ezhhar_current_addressee={})
 

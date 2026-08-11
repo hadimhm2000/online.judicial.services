@@ -96,11 +96,17 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot, _retry: bool = Fa
             await force_click_by_text(page, step)
             await asyncio.sleep(2 if i < len(steps) - 1 else 5)
 
-        # لایحه: جستجوی لایحه
+        # لایحه: انتخاب رادیو #rdbGetPetition (value=2) به‌جای "جستجوی لایحه"
         if category == "لایحه" or (
             category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
         ):
-            await force_click_by_text(page, "جستجوی لایحه")
+            radio_clicked = await page.evaluate('''() => {
+                const radio = document.querySelector('#rdbGetPetition');
+                if (radio) { radio.click(); return true; }
+                return false;
+            }''')
+            if not radio_clicked:
+                await force_click_by_text(page, "جستجوی لایحه")
             await asyncio.sleep(4)
 
         # ── ۳. وارد کردن کد رهگیری ────────────────────────────────
@@ -110,24 +116,32 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot, _retry: bool = Fa
             await bot.send_message(user_id, "⚠️ صفحه سامانه بارگذاری نشد.")
             return
 
-        selector = '#txtPetitionNo, #billNo'
-        await page.fill(selector, tracking_code)
-        await asyncio.sleep(1.5)
-
-        # لایحه: بازیابی
+        # لایحه: فیلد ورودی کدرهگیری #billNo
         if category == "لایحه" or (
             category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
         ):
-            await force_click_by_text(page, "بازیابی")
-            await asyncio.sleep(2)
+            await page.fill('#billNo', tracking_code)
+        else:
+            selector = '#txtPetitionNo, #billNo'
+            await page.fill(selector, tracking_code)
+        await asyncio.sleep(1.5)
 
         # ── ۴. کلیک جستجو ────────────────────────────────────────
-        await page.evaluate('''() => {
-            const exactBtn = document.querySelector('#btnGetJSSPetition');
-            if (exactBtn) { exactBtn.click(); return; }
-            const exactBtn2 = document.querySelector('#btnGetJSSBill');
-            if (exactBtn2) { exactBtn2.click(); return; }
-        }''')
+        # لایحه: دکمه #btnGetJSSBill  |  سایر: #btnGetJSSPetition
+        if category == "لایحه" or (
+            category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+        ):
+            await page.evaluate('''() => {
+                const btn = document.querySelector('#btnGetJSSBill');
+                if (btn) { btn.click(); return; }
+            }''')
+        else:
+            await page.evaluate('''() => {
+                const exactBtn = document.querySelector('#btnGetJSSPetition');
+                if (exactBtn) { exactBtn.click(); return; }
+                const exactBtn2 = document.querySelector('#btnGetJSSBill');
+                if (exactBtn2) { exactBtn2.click(); return; }
+            }''')
         await asyncio.sleep(3)
 
         # منتظر لودینگ
@@ -180,35 +194,52 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot, _retry: bool = Fa
             return await _process_pre_check_on_new_page(data, bot, _retry=True)
 
         # ── ۷. کلیک «منضمات» و شمارش ────────────────────────────
-        await force_click_by_text(page, "منضمات")
-        await asyncio.sleep(5)
-
-        total_attachments_count = await page.evaluate('''() => {
-            const tbody = document.querySelector('tbody');
-            if (!tbody) return 0;
-            const trs = Array.from(tbody.querySelectorAll('tr'));
-            const isIgnored = (title) => {
-                const t = title.replace(/\\u200c/g, ' ');
-                return t.includes("قرارداد الکترونیک") &&
-                       (t.includes("وکالت نامه") || t.includes("وکالتنامه"));
-            };
-            const rows_data = trs.map((tr, index) => {
-                const tds = tr.querySelectorAll('td');
-                if (tds.length >= 6) {
-                    const title = tds[2].innerText.trim();
-                    const countText = tds[5].innerText.trim();
-                    const count = parseInt(countText) || 0;
-                    return { index, title, count };
+        # بررسی وجود تب «منضمات» قبل از کلیک
+        mozamatat_exists = await page.evaluate('''() => {
+            const tags = ['button', 'a', 'label', 'span', 'li', 'h5', 'div', 'td'];
+            for (let tag of tags) {
+                const elements = Array.from(document.querySelectorAll(tag));
+                const target = elements.find(el => el.innerText && el.innerText.trim().includes("منضمات"));
+                if (target) {
+                    const rect = target.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) return true;
                 }
-                return null;
-            }).filter(r => r !== null && !isIgnored(r.title));
-            const has_sig = rows_data.length > 0 &&
-                (rows_data[0].title.includes("امضا") || rows_data[0].title.includes("امضاء"));
-            const start = has_sig ? 1 : 0;
-            let sum = 0;
-            for (let i = start; i < rows_data.length; i++) { sum += rows_data[i].count; }
-            return sum;
+            }
+            return false;
         }''')
+        if not mozamatat_exists:
+            total_attachments_count = 0
+            logging.info(f"[PRE_CHECK] تب منضمات یافت نشد — تعداد پیوست: 0 (کد: {tracking_code})")
+        else:
+            await force_click_by_text(page, "منضمات")
+            await asyncio.sleep(5)
+
+            total_attachments_count = await page.evaluate('''() => {
+                const tbody = document.querySelector('tbody');
+                if (!tbody) return 0;
+                const trs = Array.from(tbody.querySelectorAll('tr'));
+                const isIgnored = (title) => {
+                    const t = title.replace(/\\u200c/g, ' ');
+                    return t.includes("قرارداد الکترونیک") &&
+                           (t.includes("وکالت نامه") || t.includes("وکالتنامه"));
+                };
+                const rows_data = trs.map((tr, index) => {
+                    const tds = tr.querySelectorAll('td');
+                    if (tds.length >= 6) {
+                        const title = tds[2].innerText.trim();
+                        const countText = tds[5].innerText.trim();
+                        const count = parseInt(countText) || 0;
+                        return { index, title, count };
+                    }
+                    return null;
+                }).filter(r => r !== null && !isIgnored(r.title));
+                const has_sig = rows_data.length > 0 &&
+                    (rows_data[0].title.includes("امضا") || rows_data[0].title.includes("امضاء"));
+                const start = has_sig ? 1 : 0;
+                let sum = 0;
+                for (let i = start; i < rows_data.length; i++) { sum += rows_data[i].count; }
+                return sum;
+            }''')
 
         # ── ۸. ارسال نتیجه به کاربر ─────────────────────────────────
         calculated_fee = FEES["کد رهگیری با منضمات"] + total_attachments_count * 5000
@@ -246,6 +277,14 @@ async def _process_pre_check_on_new_page(data: dict, bot: Bot, _retry: bool = Fa
 
     except Exception as e:
         logging.error(f"[PRE_CHECK] خطا در تب جدید: {e}")
+
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="_process_pre_check_on_new_page", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         await bot.send_message(ADMIN_ID, f"❌ [PRE_CHECK] خطا: {e}")
         await bot.send_message(
             user_id,
@@ -624,6 +663,14 @@ async def process_task(data, bot: Bot):
                             raise e
                         await bot.send_message(ADMIN_ID, f"❌ خطا در پروفایل {nat_id}: {e}")
 
+                        try:
+                            from bug_reporter import report_bug
+                            await report_bug(bot, where="process_task", error=e,
+                                             user_id=user_id,
+                                             page=getattr(runtime_state, "sana_page", None))
+                        except Exception:
+                            pass
+
                 await sana_page.goto("https://sakha2.adliran.ir/Offices/Index")
                 await bot.send_message(ADMIN_ID, f"✅ پردازش موبایل {phone_number} تمام شد.")
                 return
@@ -737,7 +784,14 @@ async def process_task(data, bot: Bot):
                 if category == "لایحه" or (
                     category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
                 ):
-                    await safe_click_by_text(sana_page, "جستجوی لایحه", bot, user_id)
+                    # انتخاب رادیوباتن استعلام لایحه (#rdbGetPetition) به‌جای "جستجوی لایحه"
+                    radio_clicked = await sana_page.evaluate('''() => {
+                        const radio = document.querySelector('#rdbGetPetition');
+                        if (radio) { radio.click(); return true; }
+                        return false;
+                    }''')
+                    if not radio_clicked:
+                        await safe_click_by_text(sana_page, "جستجوی لایحه", bot, user_id)
                     await resilient_sleep(sana_page, 4, bot, user_id)
 
                 try:
@@ -745,23 +799,32 @@ async def process_task(data, bot: Bot):
                 except Exception:
                     raise Exception("صفحه کارتابل لود نشد.")
 
-                selector = '#txtPetitionNo, #billNo, input[name="txtPetitionNo"], input[name="billNo"]'
-                await safe_type(sana_page, selector, tracking_code, bot, user_id)
-                await resilient_sleep(sana_page, 2, bot, user_id)
-
+                # لایحه: فیلد ورودی کدرهگیری #billNo
                 if category == "لایحه" or (
                     category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
                 ):
-                    await soft_click_if_exists(sana_page, "بازیابی")
-                    await resilient_sleep(sana_page, 2, bot, user_id)
+                    await safe_type(sana_page, '#billNo', tracking_code, bot, user_id)
+                else:
+                    selector = '#txtPetitionNo, #billNo, input[name="txtPetitionNo"], input[name="billNo"]'
+                    await safe_type(sana_page, selector, tracking_code, bot, user_id)
+                await resilient_sleep(sana_page, 2, bot, user_id)
 
-                await sana_page.evaluate('''() => {
-                    const exactBtn = document.querySelector('#btnGetJSSPetition');
-                    if (exactBtn) { exactBtn.click(); return; }
-                    const btns = Array.from(document.querySelectorAll('button'));
-                    const searchBtn = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
-                    if (searchBtn) searchBtn.click();
-                }''')
+                # لایحه: دکمه جستجو #btnGetJSSBill
+                if category == "لایحه" or (
+                    category == "دیوان عدالت اداری" and subcategory == "ارایه و پیگیری لایحه"
+                ):
+                    await sana_page.evaluate('''() => {
+                        const btn = document.querySelector('#btnGetJSSBill');
+                        if (btn) { btn.click(); return; }
+                    }''')
+                else:
+                    await sana_page.evaluate('''() => {
+                        const exactBtn = document.querySelector('#btnGetJSSPetition');
+                        if (exactBtn) { exactBtn.click(); return; }
+                        const btns = Array.from(document.querySelectorAll('button'));
+                        const searchBtn = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
+                        if (searchBtn) searchBtn.click();
+                    }''')
 
                 doc_name = subcategory if subcategory else category
                 await bot.send_message(ADMIN_ID, f"⏳ استعلام «{doc_name}»...")
@@ -893,9 +956,40 @@ async def process_task(data, bot: Bot):
                     except Exception as print_err:
                         logging.error(f"خطا در چاپ: {print_err}")
                         await bot.send_message(user_id, "⚠️ چاپ پرونده با خطا مواجه شد.")
+
+                        try:
+                            from bug_reporter import report_bug
+                            await report_bug(bot, where="process_task_attachment", error=e,
+                                             user_id=user_id,
+                                             page=getattr(runtime_state, "sana_page", None))
+                        except Exception:
+                            pass
                         raise Exception("Failed to print the document.")
 
                     if need_attachments:
+                        # ── بررسی وجود تب «منضمات» قبل از کلیک ─────
+                        mozamatat_exists = await sana_page.evaluate('''() => {
+                            const tags = ['button', 'a', 'label', 'span', 'li', 'h5', 'div', 'td'];
+                            for (let tag of tags) {
+                                const elements = Array.from(document.querySelectorAll(tag));
+                                const target = elements.find(el => el.innerText && el.innerText.trim().includes("منضمات"));
+                                if (target) {
+                                    const rect = target.getBoundingClientRect();
+                                    if (rect.width > 0 && rect.height > 0) return true;
+                                }
+                            }
+                            return false;
+                        }''')
+                        if not mozamatat_exists:
+                            # تب منضمات وجود ندارد — فایل اصلی را ارسال و اسکیپ کن
+                            for path, caption in saved_attachments:
+                                if os.path.exists(path):
+                                    doc = FSInputFile(path)
+                                    await bot.send_document(user_id, document=doc, caption=caption)
+                                    os.remove(path)
+                            await bot.send_message(user_id, "📄 این درخواست فاقد بخش منضمات است.")
+                            return
+
                         await safe_click_by_text(sana_page, "منضمات", bot, user_id)
                         await resilient_sleep(sana_page, 5, bot, user_id)
 
@@ -1075,6 +1169,14 @@ async def process_task(data, bot: Bot):
             logging.error(f"تلاش {task_attempt+1} ناموفق: {task_err}")
             if task_attempt < max_task_attempts - 1:
                 await bot.send_message(ADMIN_ID, f"⚠️ فرآیند با خطا مواجه شد. تلاش مجدد {task_attempt+2}...")
+
+                try:
+                    from bug_reporter import report_bug
+                    await report_bug(bot, where="process_task_retry", error=e,
+                                     user_id=user_id,
+                                     page=getattr(runtime_state, "sana_page", None))
+                except Exception:
+                    pass
                 await sana_page.reload()
                 await asyncio.sleep(5)
             else:

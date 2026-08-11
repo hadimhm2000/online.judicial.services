@@ -777,6 +777,11 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
             await message.bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Error sending bulk request to admin: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(message.bot, where="bulk_confirm_handler", error=e, notify_admin=False)
+            except Exception:
+                pass
         
         await state.clear()
         await message.answer(
@@ -1246,9 +1251,19 @@ async def lavayeh_get_national_id(message: Message, state: FSMContext):
         await message.answer("⚠️ کد ملی باید **۱۰ رقمی** باشد:", parse_mode="Markdown")
         return
     data = await state.get_data()
+    # ── بررسی تکراری نبودن کدملی ─────────────────────────────────
+    persons = data.get("lavayeh_persons", [])
+    existing_ids = [p.get("national_id") for p in persons if p.get("national_id")]
+    if nat_id in existing_ids:
+        await message.answer(
+            f"⚠️ کد ملی `{nat_id}` قبلاً ثبت شده است.\n"
+            f"هر شخص باید کد ملی متفاوت داشته باشد.\n\n"
+            f"لطفاً کد ملی دیگری وارد فرمایید:",
+            parse_mode="Markdown"
+        )
+        return
     current_person = data.get("_current_person", {})
     current_person["national_id"] = nat_id
-    persons = data.get("lavayeh_persons", [])
     persons.append(current_person)
     await state.update_data(lavayeh_persons=persons, _current_person={})
     person_type = current_person.get("person_type", "")
@@ -2479,6 +2494,11 @@ async def lavayeh_payment_reminder_loop(bot: Bot):
                         logging.error(f"[LAVAYEH] خطا در ارسال یادآوری به کاربر {user_id}: {e}")
         except Exception as e:
             logging.error(f"[LAVAYEH] خطا در حلقه یادآوری: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(None, where="lavayeh_payment_reminder_loop", error=e, notify_admin=False)
+            except Exception:
+                pass
         await asyncio.sleep(1800)
 
 

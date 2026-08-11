@@ -42,6 +42,10 @@ TELEGRAM_API_BASE = os.environ.get(
 # در .env ست کنی. در حالت فعلی (استفاده از Cloudflare Worker) خالی می‌ماند.
 PROXY_URL = os.environ.get("PROXY_URL", "")
 
+# آدرس پنل ادمین (Next.js) — exempt_users و working_hours از این آدرس
+# تنظیمات را می‌خوانند. اگر روی همسرور است: http://localhost:3000
+ADMIN_PANEL_URL = os.environ.get("ADMIN_PANEL_URL", "http://localhost:3000")
+
 # ================= تنظیمات مالی ربات =================
 CARD_NUMBER = "6219861936929354"
 ACCOUNT_NAME = "هادی منتظران"

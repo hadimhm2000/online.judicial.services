@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
   Send, MessageSquare, Search, Check, XCircle, Clock, Trash2, User, ChevronDown,
+  Paperclip, X, Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -18,6 +19,8 @@ interface BotMessageItem {
   telegramId: string;
   fullName: string | null;
   messageText: string;
+  fileUrl: string | null;
+  fileName: string | null;
   status: string;
   sentAt: string | null;
   errorDetails: string | null;
@@ -54,8 +57,11 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [sendingAll, setSendingAll] = useState(false);
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
+  const [attachedFile, setAttachedFile] = useState<{ url: string; name: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchMessages = useCallback(async () => {
     setLoading(true);
@@ -110,6 +116,44 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
     setShowSuggestions(false);
   };
 
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error('حجم فایل نباید بیشتر از ۲۰ مگابایت باشد');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('files', file);
+      const res = await fetch('/api/admin/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.files?.length) {
+          setAttachedFile({ url: data.files[0].url, name: data.files[0].name });
+          toast.success(`فایل «${file.name}» آپلود شد`);
+        }
+      } else {
+        toast.error('خطا در آپلود فایل');
+      }
+    } catch {
+      toast.error('خطا در آپلود فایل');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const removeFile = () => {
+    setAttachedFile(null);
+  };
+
   const handleSend = async () => {
     if (!telegramId.trim() || !messageText.trim()) {
       toast.error('شناسه تلگرام و متن پیام الزامی است');
@@ -124,6 +168,8 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
           telegramId: telegramId.trim(),
           fullName: fullName.trim(),
           messageText: messageText.trim(),
+          fileUrl: attachedFile?.url || null,
+          fileName: attachedFile?.name || null,
         }),
       });
 
@@ -131,7 +177,6 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
         const msg = await res.json();
         toast.success('پیام ثبت شد');
 
-        // Now send it
         setSending(msg.id);
         const sendRes = await fetch(`/api/admin/bot-messages/${msg.id}/send`, { method: 'POST' });
         setSending(null);
@@ -139,6 +184,7 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
         if (sendRes.ok) {
           toast.success(`پیام برای ${fullName || telegramId} ارسال شد`);
           setMessageText('');
+          setAttachedFile(null);
           fetchMessages();
           onRefresh?.();
         } else {
@@ -201,7 +247,8 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
             <div className="flex-1">
               <DialogTitle className="text-base font-bold">{'ارسال پیام به کاربر'}</DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground mt-1">
-                {'ارسال پیام سفارشی برای کاربر از طریق ربات'}</DialogDescription>
+                {'ارسال پیام سفارشی برای کاربر از طریق ربات'}
+              </DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -297,11 +344,48 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
                 </p>
               </div>
 
+              {/* File Attachment */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-medium text-muted-foreground">{'فایل پیوست (اختیاری)'}</label>
+                {attachedFile ? (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg border bg-muted/30">
+                    <Paperclip className="h-4 w-4 text-sky-600 shrink-0" />
+                    <span className="flex-1 text-xs font-medium truncate" dir="ltr">{attachedFile.name}</span>
+                    <button
+                      onClick={removeFile}
+                      className="h-6 w-6 rounded-full flex items-center justify-center hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition-colors"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border border-dashed text-sm text-muted-foreground hover:text-foreground hover:border-sky-300 hover:bg-sky-50/50 dark:hover:bg-sky-900/10 transition-all disabled:opacity-50"
+                  >
+                    {uploading ? (
+                      <div className="h-4 w-4 border-2 border-sky-300 border-t-sky-600 rounded-full animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    {uploading ? 'در حال آپلود...' : 'انتخاب فایل'}
+                  </button>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={handleFileSelect}
+                />
+                <p className="text-[10px] text-muted-foreground">حداکثر ۲۰ مگابایت</p>
+              </div>
+
               {/* Send Button */}
               <Button
                 className="w-full h-11 bg-sky-600 hover:bg-sky-700 gap-2 text-sm font-medium"
                 onClick={handleSend}
-                disabled={!telegramId.trim() || !messageText.trim() || sending !== null}
+                disabled={!telegramId.trim() || !messageText.trim() || sending !== null || uploading}
               >
                 {sending ? (
                   <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -401,6 +485,12 @@ export default function BotMessageSender({ open, onClose, onRefresh }: Props) {
                               </div>
                             </div>
                             <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">{msg.messageText}</p>
+                            {msg.fileName && (
+                              <div className="flex items-center gap-1.5 text-xs text-sky-600 dark:text-sky-400">
+                                <Paperclip className="h-3 w-3" />
+                                <span className="truncate" dir="ltr">{msg.fileName}</span>
+                              </div>
+                            )}
                             <p className="text-[10px] text-muted-foreground/60" dir="ltr">
                               {new Date(msg.createdAt).toLocaleString('fa-IR')}
                             </p>

@@ -733,6 +733,13 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                     doc_name=subject,
                     note=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}"
                 )
+            try:
+                from bug_reporter import report_bug
+                await report_bug(bot, where="process_ezhharnameh_task", error=e,
+                                 user_id=user_id,
+                                 page=getattr(runtime_state, "sana_page", None))
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1193,12 +1200,30 @@ async def _click_goto_main(page, bot: Bot, user_id: int):
 
 
 async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int):
-    """آپلود مدرک نمایندگی (مقاوم) — از upload_helpers استفاده می‌کند."""
+    """آپلود مدرک نمایندگی (مقاوم) — بازنویسی‌شده بر اساس مسیر دقیق سامانه.
+
+    مسیر دقیق:
+      ۱. انتخاب «تصویر مدرک نمایندگی» از #attachmentType
+      ۲. #txtNo = 0
+      ۳. تقویم = امروز
+      ۴. اگر >۱ فایل: #txt001 + #incAttach0  |  اگر ۱ فایل: اسکیپ
+      ۵. #btnSaveDoc + انتظار لودینگ
+      ۶. بستن پاپ‌آپ موفقیت
+      ۷. editDocument روی ردیف
+      ۸. آپلود با #files_multipleFileUploader
+      ۹. #btnUploadAll
+      ۱۰. تشخیص ورود همزمان → حذف + شروع از اول
+      ۱۱. انتظار alertها + #btnApplyAll
+    """
     from upload_helpers import (
-        resilient_upload_attachment, prepare_files_for_upload,
+        prepare_files_for_upload,
         click_save_doc_with_retry, close_success_popup, close_error_popup,
         wait_for_angular_idle, get_and_close_error_popup_text, detect_error_type,
         full_delete_attachment_row,
+        wait_for_upload_confirmation, wait_for_alerts_to_disappear,
+        click_apply_all_with_retry,
+        wait_for_loading_bar, detect_concurrent_login_popup,
+        click_edit_document_for_title,
     )
 
     if not image_paths:
@@ -1220,7 +1245,7 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 logging.info("[EZHHAR][منضمات] نشست قبل از مدرک نمایندگی تمدید شد")
                 await asyncio.sleep(2)
 
-            # انتخاب تصوير مدرک نمايندگي
+            # مرحله ۱: انتخاب تصوير مدرک نمايندگي
             selected = await page.evaluate('''() => {
                 const sel = document.querySelector('#attachmentType');
                 if (!sel) return false;
@@ -1237,14 +1262,24 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 return
             await asyncio.sleep(3)
 
-            # پر کردن فیلدها
+            # مرحله ۲: #txtNo = 0
             await page.evaluate('''() => {
                 const inp = document.querySelector('#txtNo');
                 if (inp) { inp.value = "0"; inp.dispatchEvent(new Event("input", { bubbles: true })); }
             }''')
             await asyncio.sleep(1)
 
-            # تقویم — امروز
+            # مرحله ۲.۵: #txtName = «مدرک نمایندگی» (الزامی)
+            await page.evaluate('''() => {
+                const inp = document.querySelector('#txtName');
+                if (inp) {
+                    inp.value = "مدرک نمایندگی";
+                    inp.dispatchEvent(new Event("input", { bubbles: true }));
+                }
+            }''')
+            await asyncio.sleep(1)
+
+            # مرحله ۳: تقویم = امروز
             await page.evaluate('''() => {
                 const calBtn = document.querySelector('button.btn-primary i.glyphicon-calendar');
                 if (calBtn) calBtn.closest('button').click();
@@ -1257,7 +1292,7 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
             }''')
             await asyncio.sleep(1)
 
-            # تعداد صفحات
+            # مرحله ۴: تعداد صفحات — اگر ۱ فایل باشد اسکیپ
             if image_count > 1:
                 await page.evaluate(f'''() => {{
                     const inp = document.querySelector('#txt001');
@@ -1268,13 +1303,16 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 }}''')
                 await asyncio.sleep(1)
 
-            # افزودن و ذخیره
-            await page.evaluate('''() => {
-                const btn = document.querySelector('#incAttach0');
-                if (btn && !btn.disabled) btn.click();
-            }''')
-            await asyncio.sleep(3)
+                # افزودن پیوست
+                await page.evaluate('''() => {
+                    const btn = document.querySelector('#incAttach0');
+                    if (btn && !btn.disabled) btn.click();
+                }''')
+                await asyncio.sleep(3)
+            else:
+                logging.info(f"[EZHHAR] مدرک نمایندگی تک‌برگ ({image_count} فایل) — #txt001 و #incAttach0 اسکیپ شدند")
 
+            # مرحله ۵: ذخیره سند + انتظار لودینگ
             save_ok = await click_save_doc_with_retry(page, bot, user_id, prefix="EZHHAR")
             if not save_ok:
                 error_text = await get_and_close_error_popup_text(page)
@@ -1286,30 +1324,36 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
 
             await asyncio.sleep(3)
 
-            # ویرایش و آپلود فایل‌ها
-            await page.evaluate('''() => {
-                const btns = Array.from(document.querySelectorAll('button[ng-click*="editDocument"]'));
-                if (btns.length > 0) {
-                    const btn = btns[btns.length - 1];
-                    try {
-                        if (typeof angular !== 'undefined') {
-                            const ngEl = angular.element(btn);
-                            if (ngEl && ngEl.scope) {
-                                ngEl.scope().$apply(() => { btn.click(); });
-                                return;
-                            }
-                        }
-                    } catch(e) {}
-                    btn.click();
-                    btn.dispatchEvent(new Event('click', { bubbles: true }));
-                }
-            }''')
-            await asyncio.sleep(4)
+            # مرحله ۶: بستن پاپ‌آپ موفقیت
+            # (click_save_doc_with_retry معمولاً پاپ‌آپ را می‌بندد، ولی اطمینان می‌کنیم)
+            await close_success_popup(page)
+            await asyncio.sleep(1)
 
-            file_input = page.locator('input[type="file"]').first
-            await file_input.set_input_files(prepared)
+            # مرحله ۷+۸: کلیک editDocument روی ردیف + انتظار آپلودر
+            # ⭐ از تابع جدید استفاده می‌کند: Playwright native click + انتظار #files_multipleFileUploader
+            edit_ok = await click_edit_document_for_title(
+                page, "مدرک نمایندگی", bot, user_id, prefix="EZHHAR",
+            )
+            if not edit_ok:
+                logging.warning("[EZHHAR] editDocument یا آپلودر برای مدرک نمایندگی ناموفق")
+                await full_delete_attachment_row(page, "مدرک نمایندگی", bot, user_id, "EZHHAR")
+                await asyncio.sleep(2)
+                continue
+
+            # مرحله ۹: آپلود فایل‌ها با #files_multipleFileUploader
+            # (آپلودر توسط click_edit_document_for_title تضمین شده)
+            try:
+                file_input = page.locator('#files_multipleFileUploader')
+                await file_input.set_input_files(prepared)
+                logging.info(f"[EZHHAR] {len(prepared)} فایل با #files_multipleFileUploader انتخاب شدند")
+            except Exception as e:
+                logging.error(f"[EZHHAR] خطا در انتخاب فایل مدرک نمایندگی: {e}")
+                await full_delete_attachment_row(page, "مدرک نمایندگی", bot, user_id, "EZHHAR")
+                await asyncio.sleep(2)
+                continue
             await asyncio.sleep(3)
 
+            # مرحله ۱۰: کلیک آپلود همه (#btnUploadAll)
             await page.evaluate('''() => {
                 const btn = document.querySelector('#btnUploadAll');
                 if (!btn || btn.disabled) return;
@@ -1326,6 +1370,16 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 btn.dispatchEvent(new Event('click', { bubbles: true }));
             }''')
 
+            # مرحله ۱۰: تشخیص فوری ورود همزمان
+            await asyncio.sleep(3)
+            is_concurrent = await detect_concurrent_login_popup(page)
+            if is_concurrent:
+                logging.error("[EZHHAR] خطای ورود همزمان بعد از آپلود مدرک نمایندگی!")
+                await check_and_handle_expiry(page, bot, user_id)
+                await full_delete_attachment_row(page, "مدرک نمایندگی", bot, user_id, "EZHHAR")
+                await asyncio.sleep(2)
+                continue
+
             had_expiry = await check_and_handle_expiry(page, bot, user_id)
             if had_expiry:
                 logging.info("[EZHHAR] نشست حین آپلود مدرک نمایندگی تمدید شد")
@@ -1333,8 +1387,7 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 await full_delete_attachment_row(page, "مدرک نمایندگی", bot, user_id, "EZHHAR")
                 continue
 
-            # انتظار تایید آپلود
-            from upload_helpers import wait_for_upload_confirmation, wait_for_alerts_to_disappear
+            # مرحله ۱۱: انتظار تایید آپلود
             all_ok = await wait_for_upload_confirmation(page, image_count, bot, user_id, prefix="EZHHAR")
             if not all_ok:
                 error_text = await get_and_close_error_popup_text(page)
@@ -1351,8 +1404,7 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
             await wait_for_angular_idle(page)
             await asyncio.sleep(1)
 
-            # اعمال همه
-            from upload_helpers import click_apply_all_with_retry
+            # اعمال همه (#btnApplyAll)
             confirmed = await click_apply_all_with_retry(page, image_count, bot, user_id, prefix="EZHHAR")
             if confirmed:
                 await close_success_popup(page)
@@ -1362,6 +1414,12 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
                 return
 
             error_text = await get_and_close_error_popup_text(page)
+            error_type = detect_error_type(error_text) if error_text else "unknown"
+            if error_type == "session":
+                # خطای ورود همزمان — فقط تلاش مجدد بدون حذف
+                logging.warning("[EZHHAR] ورود همزمان در اعمال همه — تلاش مجدد")
+                continue
+
             logging.warning(f"[EZHHAR] اعمال همه مدرک نمایندگی ناموفق: {error_text}")
             await full_delete_attachment_row(page, "مدرک نمایندگی", bot, user_id, "EZHHAR")
             await asyncio.sleep(2)
@@ -1376,6 +1434,14 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
 
     logging.error("[EZHHAR] مدرک نمایندگی پس از ۳ تلاش ناموفق")
     await bot.send_message(ADMIN_ID, f"❌ [EZHHAR] آپلود مدرک نمایندگی ناموفق | کاربر: {user_id}")
+
+    try:
+        from bug_reporter import report_bug
+        await report_bug(bot, where="_upload_proxy_document", error=e,
+                         user_id=user_id,
+                         page=getattr(runtime_state, "sana_page", None))
+    except Exception:
+        pass
 
 
 async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_value: int, bot: Bot, user_id: int):
@@ -1446,17 +1512,23 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
 
     except Exception as e:
         logging.error(f"[EZHHAR] خطا در آپلود وکالت‌نامه الکترونیک: {e}")
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="_upload_electronic_vakalaht", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
 
 
 async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
-    """آپلود سایر ضمائم (مقاوم — از upload_helpers)
-    با تقسیم خودکار به ردیف‌های ≤۷ صفحه در صورت زیاد بودن تصاویر."""
-    from upload_helpers import upload_attachment_auto
+    """آپلود سایر ضمائم (مقاوم — از upload_helpers)"""
+    from upload_helpers import resilient_upload_attachment
 
     if not image_paths:
         return
 
-    result = await upload_attachment_auto(
+    result = await resilient_upload_attachment(
         page, title, image_paths, bot, user_id,
         prefix="EZHHAR",
     )
@@ -1760,6 +1832,14 @@ async def _print_ezhharnameh(page, browser_context, bill_no: str, bot: Bot, user
             await page.pdf(path=pdf_path, format="A4")
         except Exception:
             pass
+
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="click_print", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
     return pdf_path
 
 
@@ -1820,6 +1900,13 @@ async def _download_images(bot: Bot, file_ids: list, user_id: int) -> list:
             paths.append(path)
         except Exception as e:
             logging.error(f"[EZHHAR] خطا در دانلود تصویر {i}: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(bot, where="_download_images", error=e,
+                                 user_id=user_id,
+                                 page=getattr(runtime_state, "sana_page", None))
+            except Exception:
+                pass
     return paths
 
 
@@ -1839,3 +1926,10 @@ async def _auto_delete_pending_ezhhar(bot: Bot, user_id: int, timeout_seconds: i
             )
         except Exception as e:
             logging.error(f"[EZHHAR] خطا در ارسال پیام حذف خودکار به کاربر {user_id}: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(bot, where="_auto_delete_pending_ezhhar", error=e,
+                                 user_id=user_id,
+                                 page=getattr(runtime_state, "sana_page", None))
+            except Exception:
+                pass

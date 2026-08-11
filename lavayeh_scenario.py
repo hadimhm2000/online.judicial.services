@@ -534,6 +534,13 @@ async def process_lavayeh_task(data: dict, bot: Bot):
 
         except Exception as e:
             logging.error(f"[LAVAYEH] تلاش {attempt + 1} ناموفق برای user={user_id}: {e}")
+            try:
+                from bug_reporter import report_bug
+                await report_bug(bot, where="process_lavayeh_task", error=e,
+                                 user_id=user_id, bill_no=tracking_code,
+                                 page=sana_page)
+            except Exception:
+                pass
             if attempt < max_attempts - 1:
                 await bot.send_message(
                     ADMIN_ID,
@@ -1751,6 +1758,14 @@ async def _print_lavayeh(page, browser_context, tracking_code: str, bot: Bot, us
 
     except Exception as e:
         logging.error(f"[LAVAYEH] خطا در چاپ: {e}")
+
+        try:
+            from bug_reporter import report_bug
+            await report_bug(bot, where="click_print", error=e,
+                             user_id=user_id,
+                             page=getattr(runtime_state, "sana_page", None))
+        except Exception:
+            pass
         try:
             await page.pdf(path=pdf_path, format="A4")
         except Exception:
