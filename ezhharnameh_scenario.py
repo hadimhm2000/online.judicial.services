@@ -1354,24 +1354,76 @@ async def _upload_proxy_document(page, image_paths: list, bot: Bot, user_id: int
             await asyncio.sleep(3)
 
             # مرحله ۱۰: کلیک آپلود همه (#btnUploadAll)
-            await page.evaluate('''() => {
+            # ⭐ از چند روش فال‌بک AngularJS استفاده می‌کند
+            clicked_method = await page.evaluate('''() => {
                 const btn = document.querySelector('#btnUploadAll');
-                if (!btn || btn.disabled) return;
+                if (!btn || btn.disabled) return 'disabled_or_missing';
+
+                // روش ۱: angular.element().scope().$apply
                 try {
                     if (typeof angular !== 'undefined') {
                         const ngEl = angular.element(btn);
                         if (ngEl && ngEl.scope) {
+                            const scope = ngEl.scope();
+                            if (scope && scope.actions && typeof scope.actions.addMultipleDocumentFile === 'function') {
+                                scope.$apply(() => { scope.actions.addMultipleDocumentFile(scope.directivesApiSingleUpload); });
+                                return 'angular_apply_direct_call';
+                            }
                             ngEl.scope().$apply(() => { btn.click(); });
-                            return;
+                            return 'angular_apply_click';
                         }
                     }
                 } catch(e) {}
+
+                // روش ۲: mouse events + $apply
+                try {
+                    btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                    btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                    if (typeof angular !== 'undefined') {
+                        const rootScope = angular.element(document).scope();
+                        if (rootScope) rootScope.$apply();
+                    }
+                    return 'mouse_events';
+                } catch(e) {}
+
                 btn.click();
                 btn.dispatchEvent(new Event('click', { bubbles: true }));
+                return 'fallback';
             }''')
+            logging.info(f"[EZHHAR] آپلود همه (مدرک نمایندگی): روش {clicked_method}")
 
-            # مرحله ۱۰: تشخیص فوری ورود همزمان
-            await asyncio.sleep(3)
+            # ⭐ انتظار واقعی برای شروع آپلود
+            from upload_helpers import wait_for_loading_bar
+            upload_started = False
+            for _wait_i in range(15):
+                await asyncio.sleep(1)
+                ui_state = await page.evaluate('''() => {
+                    const blockUI = document.querySelector('.blockUI');
+                    if (blockUI && window.getComputedStyle(blockUI).display !== 'none') return 'blockui';
+                    const bars = document.querySelectorAll('.progress-bar.progress-bar-striped.progress-bar-animated');
+                    for (const bar of bars) {
+                        const rect = bar.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) return 'progress_bar';
+                    }
+                    const btn = document.querySelector('#btnUploadAll');
+                    if (btn && btn.disabled) return 'btn_disabled';
+                    const alerts = Array.from(document.querySelectorAll('.alert-success [ng-bind-html]'));
+                    const upload_ok = alerts.some(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت ثبت گردید"));
+                    if (upload_ok) return 'upload_confirmed';
+                    return null;
+                }''')
+                if ui_state:
+                    upload_started = True
+                    logging.info(f"[EZHHAR] آپلود مدرک نمایندگی: وضعیت = {ui_state}")
+                    if ui_state == 'upload_confirmed':
+                        break
+                    break
+
+            if not upload_started:
+                logging.warning("[EZHHAR] آپلود مدرک نمایندگی: هیچ علامتی از شروع آپلود دریافت نشد")
+
+            # مرحله ۱۰.۱: تشخیص فوری ورود همزمان
             is_concurrent = await detect_concurrent_login_popup(page)
             if is_concurrent:
                 logging.error("[EZHHAR] خطای ورود همزمان بعد از آپلود مدرک نمایندگی!")

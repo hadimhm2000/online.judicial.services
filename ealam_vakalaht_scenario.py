@@ -43,6 +43,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 import runtime_state
 from config import ADMIN_ID
 from sheets import log_event
+from admin_db import register_case
 from browser_helpers import (
     resilient_sleep, check_and_handle_expiry, soft_click_if_exists,
     goto_url_with_retry, human_delay, force_click_by_text,
@@ -343,6 +344,16 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
                 ADMIN_ID,
                 f"✅ [EALAM] ثبت اعلام وکالت کاربر {user_id} موفق. هزینه: {court_total:,} تومان"
             )
+            await log_event(
+                "ثبت موقت", "اعلام وکالت", str(user_id), user_id,
+                tracking_code=lavayeh_bill_no or tracking_code, doc_name="اعلام وکالت",
+                note=f"اعلام وکالت ثبت موفق | هزینه: {court_total:,} تومان"
+            )
+            await register_case(
+                event_type="ثبت موقت", full_name=str(user_id), user_id=user_id,
+                trackingCode=lavayeh_bill_no or tracking_code or "", documentCategory="اعلام وکالت",
+                note=f"اعلام وکالت ثبت موفق | هزینه: {court_total:,} تومان",
+            )
             return
 
         except EalamFatalError as e:
@@ -352,6 +363,11 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
                 "خطای سامانه", "اعلام وکالت", str(user_id), user_id,
                 tracking_code=tracking_code, doc_name="اعلام وکالت",
                 note=f"خطای قطعی: {str(e)[:200]}"
+            )
+            await register_case(
+                event_type="خطای سامانه", full_name=str(user_id), user_id=user_id,
+                trackingCode=tracking_code or "", documentCategory="اعلام وکالت",
+                errorDetails=f"خطای قطعی: {str(e)[:200]}", errorStep="FATAL_ERROR",
             )
             return
 
@@ -374,6 +390,11 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
                     "خطای سامانه", "اعلام وکالت", str(user_id), user_id,
                     tracking_code=tracking_code, doc_name="اعلام وکالت",
                     note=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}"
+                )
+                await register_case(
+                    event_type="خطای سامانه", full_name=str(user_id), user_id=user_id,
+                    trackingCode=tracking_code or "", documentCategory="اعلام وکالت",
+                    errorDetails=f"پس از {max_attempts} تلاش ناموفق: {str(e)[:200]}", errorStep="MAX_RETRIES_EXCEEDED",
                 )
                 try:
                     from bug_reporter import report_bug

@@ -2,13 +2,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu';
+// DropdownMenu removed — all items now have dedicated header buttons
 import {
   Shield, Bell, RefreshCw, Play, Pause, Volume2, VolumeX, MessageSquare,
   FileSpreadsheet, Moon, Sun, Maximize2, Minimize2, Printer, Keyboard,
-  Wifi, WifiOff, Clock, Settings, Users,
+  Wifi, WifiOff, Clock, Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -157,6 +155,26 @@ export default function AdminHeader({
                 <FileSpreadsheet className="h-4 w-4" />
               </Button>
 
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 w-9 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50 dark:hover:bg-amber-900/20"
+                onClick={onOpenWorkingHours}
+                title="ساعات کاری"
+              >
+                <Clock className="h-4 w-4" />
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 w-9 p-0 text-violet-600 hover:text-violet-700 hover:bg-violet-50 dark:hover:bg-violet-900/20"
+                onClick={onOpenExemptUsers}
+                title="کاربران معاف از پرداخت"
+              >
+                <Users className="h-4 w-4" />
+              </Button>
+
               {onToggleTheme && (
                 <Button
                   variant="ghost"
@@ -168,34 +186,6 @@ export default function AdminHeader({
                   {theme === 'dark' ? <Sun className="h-4 w-4 hidden dark:block" /> : <Moon className="h-4 w-4 dark:hidden" />}
                 </Button>
               )}
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-9 w-9 p-0"
-                    title="تنظیمات"
-                  >
-                    <Settings className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" dir="rtl">
-                  <DropdownMenuItem onClick={onOpenWorkingHours}>
-                    <Clock className="ml-2 h-4 w-4" />
-                    ساعات کاری
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={onOpenExemptUsers}>
-                    <Users className="ml-2 h-4 w-4" />
-                    کاربران معاف
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={onOpenSheetsPanel}>
-                    <FileSpreadsheet className="ml-2 h-4 w-4" />
-                    گوگل شیت
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
 
               <div className={cn(
                 'hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all duration-300',

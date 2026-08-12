@@ -15,6 +15,7 @@ from aiogram.types import Message, ReplyKeyboardRemove, InlineKeyboardMarkup, In
 
 import runtime_state
 from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME, calculate_lavayeh_fee, format_lavayeh_fee_explanation
+from exempt_users import is_exempt_user
 from sheets import log_event
 from ocr import verify_payment_receipt
 from states import Form
@@ -777,11 +778,6 @@ async def bulk_confirm_handler(message: Message, state: FSMContext):
             await message.bot.send_message(ADMIN_ID, admin_message, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Error sending bulk request to admin: {e}")
-            try:
-                from bug_reporter import report_bug
-                await report_bug(message.bot, where="bulk_confirm_handler", error=e, notify_admin=False)
-            except Exception:
-                pass
         
         await state.clear()
         await message.answer(
@@ -1251,19 +1247,9 @@ async def lavayeh_get_national_id(message: Message, state: FSMContext):
         await message.answer("⚠️ کد ملی باید **۱۰ رقمی** باشد:", parse_mode="Markdown")
         return
     data = await state.get_data()
-    # ── بررسی تکراری نبودن کدملی ─────────────────────────────────
-    persons = data.get("lavayeh_persons", [])
-    existing_ids = [p.get("national_id") for p in persons if p.get("national_id")]
-    if nat_id in existing_ids:
-        await message.answer(
-            f"⚠️ کد ملی `{nat_id}` قبلاً ثبت شده است.\n"
-            f"هر شخص باید کد ملی متفاوت داشته باشد.\n\n"
-            f"لطفاً کد ملی دیگری وارد فرمایید:",
-            parse_mode="Markdown"
-        )
-        return
     current_person = data.get("_current_person", {})
     current_person["national_id"] = nat_id
+    persons = data.get("lavayeh_persons", [])
     persons.append(current_person)
     await state.update_data(lavayeh_persons=persons, _current_person={})
     person_type = current_person.get("person_type", "")
@@ -2148,6 +2134,40 @@ async def send_lavayeh_result(
     await bot.send_message(user_id, fee_text, parse_mode="Markdown")
 
     service_label = "اظهارنامه" if is_ezhharnameh else "لایحه"
+    doc_type = "اظهارنامه" if is_ezhharnameh else "لایحه"
+
+    # بررسی معافیت از پرداخت
+    if await is_exempt_user(user_id):
+        await log_event(
+            "ثبت", doc_type, str(user_id), user_id,
+            tracking_code=tracking_code, national_id=national_ids,
+            doc_name=doc_type, payment_status="معاف از پرداخت",
+            note=f"مبلغ فاکتور: {final_fee:,} ریال (معاف)"
+        )
+        # ادامه فرآیند بدون نیاز به فیش پرداخت
+        runtime_state.pending_lavayeh_payments[user_id] = {
+            "invoice_time": datetime.datetime.now(),
+            "final_fee": 0,  # پرداخت لازم نیست
+            "court_total": court_total,
+            "tracking_code": tracking_code,
+            "national_ids": national_ids,
+            "reminder_sent": False,
+            "blocked": False,
+            "lavayeh_title": lavayeh_title,
+            "lavayeh_province": lavayeh_province,
+            "lavayeh_row_number": lavayeh_row_number,
+            "lavayeh_persons": lavayeh_persons,
+            "is_ezhharnameh": is_ezhharnameh,
+        }
+        await bot.send_message(
+            user_id,
+            f"✅ **معافیت از پرداخت**\n\n"
+            f"شما در لیست کاربران معاف هستید."
+            f"\nثبت {service_label} بدون نیاز به پرداخت انجام شد.",
+            parse_mode="Markdown"
+        )
+        return
+
     payment_msg = (
         f"💳 **فاکتور پرداخت خدمات {service_label}:**\n\n"
         f"💰 مبلغ: **{final_fee:,} ریال**\n\n"
@@ -2157,7 +2177,6 @@ async def send_lavayeh_result(
     )
     await bot.send_message(user_id, payment_msg, parse_mode="Markdown")
 
-    doc_type = "اظهارنامه" if is_ezhharnameh else "لایحه"
     await log_event(
         "ثبت", doc_type, str(user_id), user_id,
         tracking_code=tracking_code, national_id=national_ids,
@@ -2494,11 +2513,6 @@ async def lavayeh_payment_reminder_loop(bot: Bot):
                         logging.error(f"[LAVAYEH] خطا در ارسال یادآوری به کاربر {user_id}: {e}")
         except Exception as e:
             logging.error(f"[LAVAYEH] خطا در حلقه یادآوری: {e}")
-            try:
-                from bug_reporter import report_bug
-                await report_bug(None, where="lavayeh_payment_reminder_loop", error=e, notify_admin=False)
-            except Exception:
-                pass
         await asyncio.sleep(1800)
 
 

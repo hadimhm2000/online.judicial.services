@@ -15,6 +15,8 @@ from aiogram.types import (
 
 import runtime_state
 from config import ADMIN_ID, CARD_NUMBER, ACCOUNT_NAME, get_fee, FEES
+from exempt_users import is_exempt_user
+from working_hours import is_within_working_hours
 from states import Form
 from sheets import append_to_sheet, log_event
 from ocr import verify_payment_receipt
@@ -119,13 +121,21 @@ class WorkingHoursMiddleware(BaseMiddleware):
         if event.from_user and event.from_user.id == ADMIN_ID:
             return await handler(event, data)
 
-        tehran_tz = datetime.timezone(datetime.timedelta(hours=3, minutes=30))
-        tehran_time = datetime.datetime.now(tehran_tz)
-
-        if 12 <= tehran_time.hour < 22:
+        within, today_config = await is_within_working_hours()
+        if within:
             return await handler(event, data)
         else:
-            await event.answer("⛔️ **خارج از ساعت کاری**\n\nکاربر گرامی، ساعت کاری سامانه از ۱۲:۰۰ ظهر الی ۲۲:۰۰ می‌باشد.")
+            if today_config and not today_config.get("enabled", True):
+                await event.answer("⛔️ **تعطیل**\n\nامروز تعطیل می‌باشد.")
+            else:
+                sh = today_config.get("startHour", 12)
+                sm = today_config.get("startMin", 0)
+                eh = today_config.get("endHour", 22)
+                em = today_config.get("endMin", 0)
+                await event.answer(
+                    f"⛔️ **خارج از ساعت کاری**\n\n"
+                    f"ساعت کاری امروز: {sh:02d}:{sm:02d} الی {eh:02d}:{em:02d}"
+                )
             return
 
 router.message.middleware(WorkingHoursMiddleware())
@@ -351,11 +361,6 @@ async def admin_approve_bulk(message: types.Message, bot: Bot):
         
     except Exception as e:
         logging.error(f"[ADMIN_APPROVE_BULK] خطا: {e}")
-        try:
-            from bug_reporter import report_bug
-            await report_bug(bot, where="admin_approve_bulk", error=e, notify_admin=False)
-        except Exception:
-            pass
         await message.answer(f"⚠️ خطا در تایید درخواست: {e}")
 
 
@@ -410,11 +415,6 @@ async def admin_reject_bulk(message: types.Message, bot: Bot):
         
     except Exception as e:
         logging.error(f"[ADMIN_REJECT_BULK] خطا: {e}")
-        try:
-            from bug_reporter import report_bug
-            await report_bug(bot, where="admin_reject_bulk", error=e, notify_admin=False)
-        except Exception:
-            pass
         await message.answer(f"⚠️ خطا در رد درخواست: {e}")
 
 
@@ -708,7 +708,38 @@ async def process_main_menu(message: types.Message, state: FSMContext):
         if not cart:
             await message.answer("🛒 سبد خرید شما خالی است.", reply_markup=main_menu_kb)
             return
-            
+
+        # بررسی معافیت از پرداخت
+        if await is_exempt_user(message.from_user.id):
+            total_sum = sum(item['fee'] for item in cart)
+            await state.update_data(total_payment_sum=total_sum)
+            queue_position = runtime_state.job_queue.qsize()
+            queue_note = f"\n📊 موقعیت شما در صف: **{queue_position + 1}**" if queue_position > 0 else "\n▶️ پردازش بلافاصله آغاز می‌شود."
+            await message.answer(
+                f"✅ **معافیت از پرداخت**\n\n"
+                f"شما در لیست کاربران معاف هستید."
+                f"\nتعداد {len(cart)} استعلام در صف پردازش قرار گرفت.{queue_note}",
+                reply_markup=restart_kb
+            )
+            for item in cart:
+                await log_event(
+                    "پرداخت", item['query_type'], message.from_user.full_name, message.from_user.id,
+                    tracking_code=item['tracking_code'],
+                    doc_name=f"{item.get('doc_category')} - {item.get('doc_subcategory')}" if item.get('doc_subcategory') else item.get('doc_category'),
+                    payment_status="معاف از پرداخت"
+                )
+                await runtime_state.job_queue.put({
+                    'user_id': message.from_user.id,
+                    'query_type': item['query_type'],
+                    'tracking_code': item['tracking_code'],
+                    'doc_category': item.get('doc_category'),
+                    'doc_subcategory': item.get('doc_subcategory'),
+                    'doc_type': f"{item.get('doc_category')} - {item.get('doc_subcategory')}" if item.get('doc_subcategory') else item.get('doc_category'),
+                    'need_attachments': item.get('need_attachments', False)
+                })
+            await state.clear()
+            return
+
         total_sum = sum(item['fee'] for item in cart)
         await state.update_data(total_payment_sum=total_sum)
         
@@ -1014,7 +1045,35 @@ async def confirm_opt_process(message: types.Message, state: FSMContext, bot: Bo
             'total_attachments': data.get('total_attachments', 0)
         }
         await state.update_data(cart=[item])
-        
+
+        # بررسی معافیت از پرداخت (تک‌موردی)
+        if await is_exempt_user(message.from_user.id):
+            queue_position = runtime_state.job_queue.qsize()
+            queue_note = f"\n📊 موقعیت شما در صف: **{queue_position + 1}**" if queue_position > 0 else "\n▶️ پردازش بلافاصله آغاز می‌شود."
+            await message.answer(
+                f"✅ **معافیت از پرداخت**\n\n"
+                f"شما در لیست کاربران معاف هستید."
+                f"\nاستعلام در صف پردازش قرار گرفت.{queue_note}",
+                reply_markup=restart_kb
+            )
+            await log_event(
+                "پرداخت", data.get('query_type'), message.from_user.full_name, message.from_user.id,
+                tracking_code=data.get('tracking_code'),
+                doc_name=f"{data.get('doc_category')} - {data.get('doc_subcategory')}" if data.get('doc_subcategory') else data.get('doc_category'),
+                payment_status="معاف از پرداخت"
+            )
+            await runtime_state.job_queue.put({
+                'user_id': message.from_user.id,
+                'query_type': data.get('query_type'),
+                'tracking_code': data.get('tracking_code'),
+                'doc_category': data.get('doc_category'),
+                'doc_subcategory': data.get('doc_subcategory'),
+                'doc_type': f"{data.get('doc_category')} - {data.get('doc_subcategory')}" if data.get('doc_subcategory') else data.get('doc_category'),
+                'need_attachments': data.get('need_attachments', False)
+            })
+            await state.clear()
+            return
+
         payment_msg = (
             f"💳 **فاکتور پرداخت:**\n\n"
             f"🔹 نوع استعلام: **{data.get('query_type')}**\n"

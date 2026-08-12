@@ -879,6 +879,13 @@ async def click_apply_all_with_retry(
     """
     کلیک روی «تایید همه» (#btnApplyAll) با تلاش مجدد.
 
+    از ۴ روش فال‌بک برای فعال‌سازی AngularJS استفاده می‌کند:
+      ۱. scope_direct: angular.element(btn).scope().actions.applyAllAttachment() + $apply
+      ۲. scope_eval: scope.$eval('actions.applyAllAttachment()') + $apply
+      ۳. ng_click_eval: خواندن خاصیت ng-click و $eval آن + $apply
+      ۴. mouse_events: dispatch مousedown/mouseup/click + $apply روی rootScope
+      ۵. فال‌بک ساده: btn.click()
+
     اگر خطای ورود همزمان ظاهر شود:
       - مدیر لاگین مجدد می‌کند
       - سپس دوباره #btnApplyAll کلیک می‌شود
@@ -888,10 +895,79 @@ async def click_apply_all_with_retry(
       - همان مراحل حذف و ثبت مجدد تکرار می‌شود
     """
     for attempt in range(max_retries):
-        await page.evaluate('''() => {
+        # ⭐ قبل از کلیک: صبر کن Angular آرام شود
+        await wait_for_angular_idle(page)
+        await asyncio.sleep(2)
+
+        # ⭐ ۴ روش فال‌بک AngularJS + فال‌بک ساده
+        clicked = await page.evaluate('''() => {
             const btn = document.querySelector('#btnApplyAll');
-            if (btn && !btn.disabled) btn.click();
+            if (!btn || btn.disabled) return 'disabled_or_missing';
+
+            // روش ۱: scope_direct — فراخوانی مستقیم تابع Angular
+            try {
+                if (typeof angular !== 'undefined') {
+                    const ngEl = angular.element(btn);
+                    if (ngEl && ngEl.scope) {
+                        const scope = ngEl.scope();
+                        if (scope && scope.actions && typeof scope.actions.applyAllAttachment === 'function') {
+                            scope.$apply(() => { scope.actions.applyAllAttachment(); });
+                            return 'method_1_scope_direct';
+                        }
+                    }
+                }
+            } catch(e) { console.log('[ApplyAll] Method 1 failed:', e); }
+
+            // روش ۲: scope_eval
+            try {
+                if (typeof angular !== 'undefined') {
+                    const ngEl = angular.element(btn);
+                    if (ngEl && ngEl.scope) {
+                        const scope = ngEl.scope();
+                        if (scope) {
+                            scope.$apply(() => { scope.$eval('actions.applyAllAttachment()'); });
+                            return 'method_2_scope_eval';
+                        }
+                    }
+                }
+            } catch(e) { console.log('[ApplyAll] Method 2 failed:', e); }
+
+            // روش ۳: ng_click_eval — خواندن خاصیت ng-click و اجرای آن
+            try {
+                if (typeof angular !== 'undefined') {
+                    const ngEl = angular.element(btn);
+                    if (ngEl && ngEl.scope) {
+                        const scope = ngEl.scope();
+                        const ngClick = btn.getAttribute('ng-click');
+                        if (ngClick && scope) {
+                            scope.$apply(() => { scope.$eval(ngClick); });
+                            return 'method_3_ng_click_eval';
+                        }
+                    }
+                }
+            } catch(e) { console.log('[ApplyAll] Method 3 failed:', e); }
+
+            // روش ۴: mouse_events + $apply روی rootScope
+            try {
+                btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                if (typeof angular !== 'undefined') {
+                    const rootScope = angular.element(document).scope();
+                    if (rootScope) rootScope.$apply();
+                }
+                return 'method_4_mouse_events';
+            } catch(e) { console.log('[ApplyAll] Method 4 failed:', e); }
+
+            // فال‌بک ساده
+            btn.click();
+            return 'fallback_simple_click';
         }''')
+
+        _log(prefix, f"اعمال همه: کلیک با روش {clicked} (تلاش {attempt+1}/{max_retries})")
+
+        # ⭐ بعد از کلیک: صبر برای پاسخ سامانه
+        await asyncio.sleep(5)
 
         if bot and user_id:
             had_expiry = await check_and_handle_expiry(page, bot, user_id)
@@ -899,13 +975,44 @@ async def click_apply_all_with_retry(
                 _log(prefix, "نشست حین اعمال همه تمدید شد — تلاش مجدد")
                 continue
         else:
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
+        # ⭐ انتظار برای ناپدید شدن blockUI / لودینگ / progress
+        for _w in range(60):
+            still_loading = await page.evaluate('''() => {
+                const blockUI = document.querySelector('.blockUI');
+                if (blockUI && window.getComputedStyle(blockUI).display !== 'none') return true;
+                const progressBar = document.querySelector('.progress-bar.active, .progress-bar.progress-bar-animated');
+                if (progressBar) {
+                    const rect = progressBar.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) return true;
+                }
+                const loading = document.querySelector('.loading');
+                if (loading && window.getComputedStyle(loading).display !== 'none') return true;
+                return false;
+            }''')
+            if not still_loading:
+                break
+            await asyncio.sleep(1)
+
+        # بررسی تایید موفقیت
         confirmed = await page.evaluate(f'''() => {{
             const alerts = Array.from(document.querySelectorAll('[ng-bind-html]'));
             return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت تایید شد")).length >= {expected_count};
         }}''')
         if confirmed:
+            _log(prefix, f"اعمال همه: تایید متنی دریافت شد ✓")
+            return True
+
+        # بررسی پاپ‌آپ موفقیت (sa-success)
+        success_popup = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const icon = popup.querySelector('.sa-icon.sa-success');
+            return icon && window.getComputedStyle(icon).display !== 'none';
+        }''')
+        if success_popup:
+            _log(prefix, f"اعمال همه: پاپ‌آپ موفقیت ظاهر شد ✓")
             return True
 
         # بررسی پاپ‌آپ خطا
@@ -915,18 +1022,38 @@ async def click_apply_all_with_retry(
             _log(prefix, f"خطا در اعمال همه (تلاش {attempt+1}): {error_text} (نوع: {error_type})", 'warning')
 
             if error_type == "session":
-                # خطای ورود همزمان — بعد از لاگین مجدد، فقط دوباره تلاش کن
                 _log(prefix, "خطای ورود همزمان در اعمال همه — بعد از لاگین مجدد مجدداً تلاش می‌کنیم")
                 await asyncio.sleep(3)
                 continue
             else:
-                # خطای دیگر — فراخوان‌کننده باید حذف و ثبت مجدد انجام دهد
                 _log(prefix, f"خطای غیر از ورود همزمان — فراخوان‌کننده باید حذف و ثبت مجدد انجام دهد")
                 return False
 
-        # هیچ پاپ‌آپ خطایی نیست → اعمال با موفقیت انجام شده
-        _log(prefix, f"اعمال همه: بدون خطا (تایید متنی یافت نشد ولی popup خطا هم نبود) — موفق")
-        return True
+        # هیچ پاپ‌آپ خطایی نیست و neither تایید متنی → دوباره بررسی با انتظار بیشتر
+        _log(prefix, f"اعمال همه: پاسخ فوری یافت نشد، انتظار بیشتر...", 'debug')
+        await asyncio.sleep(5)
+
+        # بررسی مجدد
+        confirmed2 = await page.evaluate(f'''() => {{
+            const alerts = Array.from(document.querySelectorAll('[ng-bind-html]'));
+            return alerts.filter(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت تایید شد")).length >= {expected_count};
+        }}''')
+        if confirmed2:
+            _log(prefix, f"اعمال همه: تایید متنی بعد از انتظار بیشتر دریافت شد ✓")
+            return True
+
+        success_popup2 = await page.evaluate('''() => {
+            const popup = document.querySelector('.sweet-alert.showSweetAlert');
+            if (!popup) return false;
+            const icon = popup.querySelector('.sa-icon.sa-success');
+            return icon && window.getComputedStyle(icon).display !== 'none';
+        }''')
+        if success_popup2:
+            _log(prefix, f"اعمال همه: پاپ‌آپ موفقیت بعد از انتظار بیشتر ✓")
+            return True
+
+        # هیچ چیزی پیدا نشد → احتمالاً کلیک اصلاً کار نکرده
+        _log(prefix, f"اعمال همه: هیچ پاسخی دریافت نشد (تلاش {attempt+1})", 'warning')
 
     return False
 
@@ -1081,13 +1208,60 @@ async def resilient_upload_attachment(
             await asyncio.sleep(3)
 
             # ─── مرحله ۵: کلیک آپلود همه (#btnUploadAll) ───
-            await page.evaluate('''() => {
+            # ⭐ استفاده از AngularJS $apply مثل _upload_proxy_document
+            clicked_method = await page.evaluate('''() => {
                 const btn = document.querySelector('#btnUploadAll');
-                if (btn && !btn.disabled) btn.click();
-            }''')
+                if (!btn || btn.disabled) return 'disabled_or_missing';
 
-            # ⭐ مرحله ۵.۱: بررسی فوری خطای ورود همزمان
-            await asyncio.sleep(3)
+                // روش اصلی: AngularJS $apply
+                try {
+                    if (typeof angular !== 'undefined') {
+                        const ngEl = angular.element(btn);
+                        if (ngEl && ngEl.scope) {
+                            ngEl.scope().$apply(() => { btn.click(); });
+                            return 'angular_apply';
+                        }
+                    }
+                } catch(e) {}
+
+                // فال‌بک: کلیک ساده + dispatch
+                btn.click();
+                btn.dispatchEvent(new Event('click', { bubbles: true }));
+                return 'fallback_click';
+            }''')
+            _log(prefix, f"آپلود همه: کلیک با روش {clicked_method}")
+
+            # ⭐ انتظار واقعی برای شروع و اتمام آپلود
+            # منتظر blockUI یا نوار لودینگ یا تغییر وضعیت دکمه می‌مانیم
+            upload_started = False
+            for _wait_i in range(15):  # حداکثر ۱۵ ثانیه
+                await asyncio.sleep(1)
+                ui_state = await page.evaluate('''() => {
+                    const blockUI = document.querySelector('.blockUI');
+                    if (blockUI && window.getComputedStyle(blockUI).display !== 'none') return 'blockui';
+                    const bars = document.querySelectorAll('.progress-bar.progress-bar-striped.progress-bar-animated');
+                    for (const bar of bars) {
+                        const rect = bar.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) return 'progress_bar';
+                    }
+                    // بررسی اینکه دکمه آپلود همه غیرفعال شده (یعنی آپلود شروع شده)
+                    const btn = document.querySelector('#btnUploadAll');
+                    if (btn && btn.disabled) return 'btn_disabled';
+                    // بررسی اینکه alert موفقیت ظاهر شده
+                    const alerts = Array.from(document.querySelectorAll('.alert-success [ng-bind-html]'));
+                    const upload_ok = alerts.some(el => el.innerText && el.innerText.includes("پیوست مورد نظر با موفقیت ثبت گردید"));
+                    if (upload_ok) return 'upload_confirmed';
+                    return null;
+                }''')
+                if ui_state:
+                    upload_started = True
+                    _log(prefix, f"آپلود همه: وضعیت تشخیص داده شد = {ui_state}")
+                    if ui_state == 'upload_confirmed':
+                        break
+                    break  # اگر blockUI یا progress_bar یا btn_disabled → آپلود شروع شده
+
+            if not upload_started:
+                _log(prefix, f"آپلود همه: هیچ علامتی از شروع آپلود دریافت نشد — ممکن است کلیک کار نکرده باشد", 'warning')
             is_concurrent = await detect_concurrent_login_popup(page)
             if is_concurrent:
                 _log(prefix, f"خطای ورود همزمان بعد از آپلود همه [{doc_title}]!", 'error')

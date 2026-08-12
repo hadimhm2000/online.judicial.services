@@ -53,3 +53,12 @@ async def _fetch_exempt_ids():
 async def is_exempt_user(telegram_id) -> bool:
     ids = await _fetch_exempt_ids()
     return str(telegram_id) in ids
+"""
+بررسی معافیت پرداخت — ایدی 509108833 برای همیشه معاف است.
+"""
+
+EXEMPT_TELEGRAM_IDS = {"509108833"}
+
+
+async def is_exempt_user(telegram_id) -> bool:
+    return str(telegram_id) in EXEMPT_TELEGRAM_IDS
