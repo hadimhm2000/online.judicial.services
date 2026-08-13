@@ -36,6 +36,7 @@ from keyboards import (
 from lavayeh_handlers import lavayeh_router
 from stamp_calc_handlers import stamp_calc_router
 from ezhharnameh_handlers import ezhharnameh_router
+from tajdid_nazar_handlers import tajdid_nazar_router
 from file_tools_handlers import file_tools_router, file_tools_entry
 from subscription_handlers import subscription_router, subscription_expiry_checker
 
@@ -100,6 +101,7 @@ router = Router()
 router.include_router(lavayeh_router)
 router.include_router(stamp_calc_router)
 router.include_router(ezhharnameh_router)
+router.include_router(tajdid_nazar_router)
 router.include_router(file_tools_router)
 router.include_router(subscription_router)
 
@@ -650,6 +652,9 @@ async def process_flow_type(message: types.Message, state: FSMContext):
     elif "محاسبه تمبر" in message.text:
         from stamp_calc_handlers import stamp_calc_entry
         await stamp_calc_entry(message, state)
+    elif "دعاوی اعتراضی" in message.text:
+        from tajdid_nazar_handlers import tajdid_nazar_entry
+        await tajdid_nazar_entry(message, state)
     elif "ابزار فایل" in message.text:
         await file_tools_entry(message, state)
     elif "تست" in message.text and message.from_user.id == ADMIN_ID:

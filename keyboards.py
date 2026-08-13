@@ -10,7 +10,8 @@ flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="1️⃣ استعلام (تک درخواست)"), KeyboardButton(text="🧪 تست")],
         [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)"), KeyboardButton(text="📝 ثبت لایحه")],
-        [KeyboardButton(text="📋 ثبت اظهارنامه"), KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
+        [KeyboardButton(text="📋 ثبت اظهارنامه"), KeyboardButton(text="⚖️ دعاوی اعتراضی")],
+        [KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
         [KeyboardButton(text="🛠 ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)")],
     ], resize_keyboard=True)
 
@@ -647,6 +648,146 @@ test_mode_att_title_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+# =========================================================
+# کیبوردهای بخش دعاوی اعتراضی
+# =========================================================
+
+TN_CASE_TYPES = [
+    "تجدیدنظرخواهی", "واخواهی", "فرجام خواهی",
+    "اعاده دادرسی مدنی", "اعاده دادرسی کیفری",
+    "اعتراض ثالث", "اعتراض به قرار دادسرا"
+]
+
+tn_case_type_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="تجدیدنظرخواهی"), KeyboardButton(text="واخواهی")],
+        [KeyboardButton(text="فرجام خواهی"), KeyboardButton(text="اعاده دادرسی مدنی")],
+        [KeyboardButton(text="اعاده دادرسی کیفری"), KeyboardButton(text="اعتراض ثالث")],
+        [KeyboardButton(text="اعتراض به قرار دادسرا")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+    ],
+    resize_keyboard=True
+)
+
+tn_doc_type_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="حکم"), KeyboardButton(text="قرار")],
+    ],
+    resize_keyboard=True
+)
+
+tn_amount_type_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❓ مبلغ دقیق را نمی‌دانم")],
+        [KeyboardButton(text="🚫 خواسته غیر مالی است")],
+        [KeyboardButton(text="💰 مبلغ را می‌دانم و می‌خواهم وارد شود")],
+    ],
+    resize_keyboard=True
+)
+
+tn_insolvency_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="بله"), KeyboardButton(text="خیر")],
+    ],
+    resize_keyboard=True
+)
+
+tn_extra_text_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⏭ رد شدن")],
+    ],
+    resize_keyboard=True
+)
+
+tn_more_witnesses_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ بله، کدملی شخص دیگری را دارم")],
+        [KeyboardButton(text="✅ خیر، ادامه مراحل")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ],
+    resize_keyboard=True
+)
+
+tn_confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ تایید و شروع ثبت")],
+        [KeyboardButton(text="✏️ ویرایش اطلاعات")],
+    ],
+    resize_keyboard=True
+)
+
+tn_edit_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔢 ویرایش اطلاعات دادنامه")],
+        [KeyboardButton(text="👤 ویرایش تجدیدنظرخواه")],
+        [KeyboardButton(text="👥 ویرایش تجدیدنظرخوانده")],
+        [KeyboardButton(text="👁 ویرایش شهود/مطلعین")],
+        [KeyboardButton(text="📄 ویرایش شرح متن")],
+        [KeyboardButton(text="📝 ویرایش توضیحات جداگانه")],
+        [KeyboardButton(text="🖼 ویرایش مدارک")],
+        [KeyboardButton(text="🔙 بازگشت به پیش‌نمایش")],
+    ],
+    resize_keyboard=True
+)
+
+tn_reason_more_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ بله، مورد دیگری هم هست")],
+        [KeyboardButton(text="✅ خیر، ادامه مراحل")],
+    ],
+    resize_keyboard=True
+)
+
+tn_amount_confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ تایید")],
+    ],
+    resize_keyboard=True
+)
+
+
+def create_tn_appellant_person_type_kb(exclude: list = None):
+    """کیبورد نوع شخص تجدیدنظرخواه — همان قوانین اظهارکننده اظهارنامه"""
+    exclude = exclude or []
+    available = [p for p in ["شخص حقیقی", "شخص حقوقی", "وکیل"] if p not in exclude]
+    keyboard = []
+    for i in range(0, len(available), 2):
+        row = [KeyboardButton(text=available[i])]
+        if i + 1 < len(available):
+            row.append(KeyboardButton(text=available[i + 1]))
+        keyboard.append(row)
+    keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def create_tn_appellee_person_type_kb(exclude: list = None, show_finish: bool = None):
+    """کیبورد نوع شخص تجدیدنظرخوانده — حقیقی و حقوقی"""
+    exclude = exclude or []
+    available = [p for p in ["شخص حقیقی", "شخص حقوقی"] if p not in exclude]
+    keyboard = []
+    for i in range(0, len(available), 2):
+        row = [KeyboardButton(text=available[i])]
+        if i + 1 < len(available):
+            row.append(KeyboardButton(text=available[i + 1]))
+        keyboard.append(row)
+    show_finish = bool(exclude) if show_finish is None else show_finish
+    if show_finish:
+        keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+def create_tn_reasons_kb(remaining_reasons: list, selected: list = None):
+    """کیبورد پویا برای انتخاب جهات اعاده دادرسی"""
+    selected = selected or []
+    keyboard = []
+    for i in range(0, len(remaining_reasons), 2):
+        row = [KeyboardButton(text=remaining_reasons[i])]
+        if i + 1 < len(remaining_reasons):
+            row.append(KeyboardButton(text=remaining_reasons[i + 1]))
+        keyboard.append(row)
+    keyboard.append([KeyboardButton(text="✅ خیر، ادامه مراحل")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 test_mode_att_more_kb = ReplyKeyboardMarkup(
     keyboard=[

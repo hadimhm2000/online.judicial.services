@@ -335,7 +335,9 @@ async def process_lavayeh_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "متن", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
-            lavayeh_text_html = _text_to_editor_html(lavayeh_text)
+            # استفاده از HTML ورد در صورت وجود، در غیر اینصورت تبدیل متنی
+            stored_html = data.get("lavayeh_text_html", "")
+            lavayeh_text_html = stored_html if stored_html else _text_to_editor_html(lavayeh_text)
             await sana_page.evaluate('''(html) => {
                 const editor = document.querySelector('[contenteditable="true"][ta-bind]');
                 if (editor) {

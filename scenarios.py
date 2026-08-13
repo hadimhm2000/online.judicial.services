@@ -553,37 +553,35 @@ async def _process_test_attachments(data: dict, bot: Bot):
         if upload_result["success"]:
             await bot.send_message(
                 user_id,
-                f"✅ **تست منضمات موفق بود!**\n\n"
-                f"🏷 گروه‌های موفق: {len(upload_result['successful_groups'])}",
-                parse_mode="Markdown"
+                f"✅ تست منضمات موفق بود!\n\n"
+                f"🏷 گروه‌های موفق: {len(upload_result['successful_groups'])}"
             )
             await bot.send_message(
                 ADMIN_ID,
-                f"🧪 **تست منضمات موفق**\n"
-                f"کد: `{tracking_code}` | نوع: {category}\n"
-                f"گروه‌ها: {len(upload_result['successful_groups'])} موفق",
-                parse_mode="Markdown"
+                f"🧪 تست منضمات موفق\n"
+                f"کد: {tracking_code} | نوع: {category}\n"
+                f"گروه‌ها: {len(upload_result['successful_groups'])} موفق"
             )
         else:
             failed = upload_result["failed_groups"][0] if upload_result["failed_groups"] else {}
+            failed_title = failed.get('title', '?')
+            failed_error = failed.get('error', 'نامشخص')
             await bot.send_message(
                 user_id,
-                f"❌ **تست منضمات ناموفق**\n\n"
-                f"عنوان مشکل‌دار: {failed.get('title', '?')}\n"
-                f"خطا: {failed.get('error', 'نامشخص')}",
-                parse_mode="Markdown"
+                f"❌ تست منضمات ناموفق\n\n"
+                f"عنوان مشکل‌دار: {failed_title}\n"
+                f"خطا: {failed_error}"
             )
             await bot.send_message(
                 ADMIN_ID,
-                f"❌ **تست منضمات ناموفق**\n"
-                f"کد: `{tracking_code}` | نوع: {category}\n"
-                f"خطا: {failed.get('error', 'نامشخص')}",
-                parse_mode="Markdown"
+                f"❌ تست منضمات ناموفق\n"
+                f"کد: {tracking_code} | نوع: {category}\n"
+                f"خطا: {failed_error}"
             )
 
     except Exception as e:
         logging.error(f"[TEST-ATT] خطا در تست منضمات: {e}", exc_info=True)
-        await bot.send_message(user_id, f"❌ خطا در تست منضمات: `{str(e)[:200]}`")
+        await bot.send_message(user_id, f"❌ خطا در تست منضمات: {str(e)[:200]}")
     finally:
         # پاکسازی فایل‌های دانلود‌شده
         for path in downloaded_paths:
@@ -621,6 +619,17 @@ async def process_task(data, bot: Bot):
     if task_type == "EZHHARNAMEH_SUBMIT":
         from ezhharnameh_scenario import process_ezhharnameh_task
         await process_ezhharnameh_task(data, bot)
+        return
+
+    # ── سناریوهای دعاوی اعتراضی ────────────────────────────────────────
+    TN_TASK_TYPES = [
+        "TN_APPEAL", "TN_REHEARING", "TN_SUPREME",
+        "TN_CIVIL_REVIEW", "TN_CRIMINAL_REVIEW",
+        "TN_THIRD_PARTY", "TN_PROSECUTOR_OBJECTION",
+    ]
+    if task_type in TN_TASK_TYPES:
+        from tajdid_nazar_scenario import process_tajdid_nazar_task
+        await process_tajdid_nazar_task(data, bot)
         return
 
     # ── سناریوی ارسال کد امضا ─────────────────────────────────────────────

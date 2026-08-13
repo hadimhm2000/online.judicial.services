@@ -233,6 +233,41 @@ async def prepare_files_for_upload(
     return prepared, errors
 
 
+async def download_images_from_telegram(
+    bot: Bot,
+    file_ids: list,
+    user_id: int,
+    prefix: str = "UPLOAD",
+) -> List[str]:
+    """
+    دانلود مجموعه‌ای از فایل‌های تلگرام (file_id) به‌صورت فایل‌های محلی
+    و فشرده‌سازی آن‌ها — همان الگویی که در لایحه/اظهارنامه/اعلام وکالت
+    (`_download_images_from_telegram`) استفاده می‌شود، اینجا به‌صورت
+    عمومی و مشترک قرار گرفته تا سایر ماژول‌ها (مثل تست منضمات در
+    scenarios.py) هم بتوانند از آن استفاده کنند.
+
+    بازگشت: لیست مسیرهای محلی فایل‌های دانلودشده (فقط مواردی که موفق بودند).
+    """
+    paths: List[str] = []
+    for i, file_id in enumerate(file_ids):
+        try:
+            file_info = await bot.get_file(file_id)
+            ext = "jpg"
+            if file_info.file_path:
+                ext = file_info.file_path.split(".")[-1].lower()
+                if ext not in ("jpg", "jpeg", "png"):
+                    ext = "jpg"
+
+            path = f"attach_img_{user_id}_{i}_{int(time.time()*1000)}.{ext}"
+            await bot.download_file(file_info.file_path, path)
+            path = _compress_image(path)
+            paths.append(path)
+        except Exception as e:
+            _log(prefix, f"خطا در دانلود تصویر #{i} برای کاربر {user_id}: {e}", 'error')
+
+    return paths
+
+
 # =========================================================
 # ۲. تشخیص نوار لودینگ آبی سامانه ثنا + دیاگنوستیک
 # =========================================================
@@ -1095,8 +1130,11 @@ async def click_upload_all_with_retry(
                     if (ngEl && ngEl.scope) {
                         const scope = ngEl.scope();
                         if (scope && scope.actions && typeof scope.actions.addMultipleDocumentFile === 'function') {
+                            const uploadQueue = (scope.viewModel && scope.viewModel.directivesApiSingleUpload)
+                                || scope.directivesApiSingleUpload
+                                || (scope.$parent && scope.$parent.viewModel && scope.$parent.viewModel.directivesApiSingleUpload);
                             scope.$apply(() => {
-                                scope.actions.addMultipleDocumentFile(scope.directivesApiSingleUpload || viewModel.directivesApiSingleUpload);
+                                scope.actions.addMultipleDocumentFile(uploadQueue);
                             });
                             return 'method_1_scope_direct';
                         }

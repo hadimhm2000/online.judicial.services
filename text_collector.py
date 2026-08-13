@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import os
 import time
 import logging
 from typing import Dict, Callable, Awaitable, Any
@@ -123,3 +124,89 @@ def check_image_limit(current_count: int) -> bool:
     بازگشت: True اگر هنوز جا دارد، False اگر پر شده.
     """
     return current_count < MAX_IMAGES_PER_TITLE
+
+
+async def process_docx_input(
+    message,
+    user_id: int,
+    chat_id: int,
+    state,
+    bot,
+    on_complete: Callable,
+    text_state_key: str = "",
+    html_state_key: str = "",
+    extra_state_updates: dict = None,
+    processing_msg: str = "⏳ در حال پردازش فایل ورد...",
+):
+    """
+    دریافت فایل .docx از تلگرام، استخراج متن و HTML،
+    و فراخوانی on_complete با نتایج.
+
+    on_complete(final_text: str, final_html: str, state, bot, chat_id, was_editing: bool)
+
+    در state ذخیره می‌شود:
+      - text_state_key: متن خام (برای پیش‌نمایش تلگرام)
+      - html_state_key: HTML با فرمت (برای ادیتور سامانه)
+    """
+    from docx_parser import (
+        download_docx_from_telegram,
+        validate_docx,
+        docx_to_html,
+        docx_to_plain_text,
+    )
+
+    await bot.send_message(chat_id, processing_msg)
+
+    # دانلود فایل
+    filepath = await download_docx_from_telegram(bot, message.document.file_id, user_id)
+    if not filepath:
+        await bot.send_message(chat_id, "❌ خطا در دانلود فایل. لطفاً دوباره تلاش کنید.")
+        return
+
+    # اعتبارسنجی
+    is_valid, error_msg = validate_docx(filepath)
+    if not is_valid:
+        await bot.send_message(chat_id, f"❌ {error_msg}")
+        # حذف فایل نامعتبر
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return
+
+    # استخراج HTML و متن خام
+    try:
+        html_content = docx_to_html(filepath)
+        plain_text = docx_to_plain_text(filepath)
+    except Exception as e:
+        logger.error(f"خطا در پارس ورد (user={user_id}): {e}")
+        await bot.send_message(chat_id, "❌ خطا در خواندن فایل ورد. لطفاً مطمئن شوید فایل معتبر است.")
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+        return
+
+    # حذف فایل موقت
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+    if not plain_text.strip():
+        await bot.send_message(chat_id, "❌ فایل ورد خالی است.")
+        return
+
+    # ذخیره در state
+    state_updates = {}
+    if text_state_key:
+        state_updates[text_state_key] = plain_text
+    if html_state_key:
+        state_updates[html_state_key] = html_content
+    if extra_state_updates:
+        state_updates.update(extra_state_updates)
+    await state.update_data(**state_updates)
+
+    # فراخوانی callback
+    char_count = len(plain_text)
+    await on_complete(plain_text, html_content, state, bot, chat_id, False, char_count)

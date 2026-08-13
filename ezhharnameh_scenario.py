@@ -417,7 +417,9 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "شرح", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
-            ezhhar_text_html = _text_to_editor_html(ezhhar_text)
+            # استفاده از HTML ورد در صورت وجود، در غیر اینصورت تبدیل متنی
+            stored_html = data.get("ezhhar_text_html", "")
+            ezhhar_text_html = stored_html if stored_html else _text_to_editor_html(ezhhar_text)
             await sana_page.evaluate('''(html) => {
                 const editor = document.querySelector('[contenteditable="true"][ta-bind]');
                 if (editor) {

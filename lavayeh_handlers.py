@@ -1151,7 +1151,7 @@ async def lavayeh_get_person_type(message: Message, state: FSMContext):
         if await _maybe_return_to_preview(data, message, state):
             return
         await message.answer(
-            "📄 **شرح متن لایحه:**\n\nلطفاً متن کامل لایحه خود را ارسال فرمایید.",
+            "📄 **شرح متن لایحه:**\n\nلطفاً متن کامل لایحه خود را ارسال فرمایید.\n\n💡 همچنین می‌توانید فایل .docx را ارسال کنید (با حفظ فرمت بولد و ...).",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="Markdown"
         )
@@ -1636,6 +1636,32 @@ async def _ask_lavayeh_text_ealam(message: Message, state: FSMContext):
 
 @lavayeh_router.message(Form.ealam_vakalaht_text)
 async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # ── پشتیبانی فایل ورد ──────────────────────────────────────
+    if message.document and message.document.file_name and message.document.file_name.lower().endswith(".docx"):
+        from text_collector import process_docx_input
+
+        async def _on_ealam_docx_complete(final_text, final_html, st, b, cid, was_editing, char_count):
+            await st.update_data(lavayeh_text=final_text, lavayeh_text_html=final_html, lavayeh_attachments=[])
+            await b.send_message(cid, f"✅ متن لایحه اعلام وکالت از فایل ورد دریافت شد ({char_count} کاراکتر).")
+            await _ask_attachment_title(message, st, is_first=True)
+
+        await process_docx_input(
+            message=message,
+            user_id=user_id,
+            chat_id=chat_id,
+            state=state,
+            bot=bot,
+            on_complete=_on_ealam_docx_complete,
+            text_state_key="lavayeh_text",
+            html_state_key="lavayeh_text_html",
+            extra_state_updates={"lavayeh_attachments": []},
+            processing_msg="⏳ در حال پردازش فایل ورد...",
+        )
+        return
+
     text = message.text or ""
     if text == "✅ ادامه مراحل":
         # کاربر دکمه «ادامه مراحل» را زده (از مرحله تمبر غیرمالی آمده)
@@ -1643,16 +1669,13 @@ async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext, bot: Bo
         await _ask_lavayeh_text_ealam(message, state)
         return
     if not text:
-        await message.answer("⚠️ لطفاً متن را به صورت متن ارسال فرمایید.")
+        await message.answer("⚠️ لطفاً متن را به صورت متن ارسال فرمایید \nیا فایل .docx ارسال نمایید.")
         return
 
     from text_collector import collect_text_part
 
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
     async def _on_ealam_text_complete(final_text, st, b, cid, was_editing):
-        await st.update_data(lavayeh_text=final_text, lavayeh_attachments=[])
+        await st.update_data(lavayeh_text=final_text, lavayeh_text_html="", lavayeh_attachments=[])
         await b.send_message(
             cid,
             f"✅ متن لایحه اعلام وکالت دریافت شد ({len(final_text)} کاراکتر).",
@@ -1675,26 +1698,50 @@ async def ealam_in_lavayeh_get_text(message: Message, state: FSMContext, bot: Bo
 # ══════════════════════════════════════════════════════════════════════════════
 @lavayeh_router.message(Form.lavayeh_text)
 async def lavayeh_get_text(message: Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # ── پشتیبانی فایل ورد ──────────────────────────────────────
+    if message.document and message.document.file_name and message.document.file_name.lower().endswith(".docx"):
+        from text_collector import process_docx_input
+
+        async def _on_docx_complete(final_text, final_html, st, b, cid, was_editing, char_count):
+            await st.update_data(lavayeh_text=final_text, lavayeh_text_html=final_html, lavayeh_attachments=[])
+            await b.send_message(cid, f"✅ متن لایحه از فایل ورد دریافت شد ({char_count} کاراکتر).")
+            await _ask_attachment_title(message, st, is_first=True)
+
+        await process_docx_input(
+            message=message,
+            user_id=user_id,
+            chat_id=chat_id,
+            state=state,
+            bot=bot,
+            on_complete=_on_docx_complete,
+            text_state_key="lavayeh_text",
+            html_state_key="lavayeh_text_html",
+            extra_state_updates={"lavayeh_attachments": []},
+            processing_msg="⏳ در حال پردازش فایل ورد...",
+        )
+        return
+
     if not message.text:
-        await message.answer("⚠️ لطفاً شرح متن لایحه را به صورت متن ارسال فرمایید.")
+        await message.answer("⚠️ لطفاً شرح متن لایحه را به صورت متن ارسال فرمایید \nیا فایل .docx ارسال نمایید.")
         return
 
     from text_collector import collect_text_part
 
     data = await state.get_data()
     is_editing = data.get("_is_editing")
-    user_id = message.from_user.id
-    chat_id = message.chat.id
 
     async def _on_text_complete(final_text, st, b, cid, was_editing):
         """بعد از جمع‌آوری کامل متن، ادامه جریان را انجام می‌دهد."""
         if was_editing:
-            await st.update_data(lavayeh_text=final_text)
+            await st.update_data(lavayeh_text=final_text, lavayeh_text_html="")
             d = await st.get_data()
             if await _maybe_return_to_preview(d, message, st):
                 return
         else:
-            await st.update_data(lavayeh_text=final_text, lavayeh_attachments=[])
+            await st.update_data(lavayeh_text=final_text, lavayeh_text_html="", lavayeh_attachments=[])
 
         await b.send_message(
             cid,
@@ -1748,7 +1795,7 @@ async def lavayeh_get_attachment_title(message: Message, state: FSMContext):
     if text == "🔙 بازگشت":
         # بازگشت به مرحله متن لایحه
         await message.answer(
-            "📄 **شرح متن لایحه:**\n\nلطفاً متن کامل لایحه خود را ارسال فرمایید.",
+            "📄 **شرح متن لایحه:**\n\nلطفاً متن کامل لایحه خود را ارسال فرمایید.\n\n💡 همچنین می‌توانید فایل .docx را ارسال کنید (با حفظ فرمت بولد و ...).",
             reply_markup=ReplyKeyboardRemove(),
             parse_mode="Markdown"
         )
@@ -1966,6 +2013,7 @@ async def lavayeh_confirm_handler(message: Message, state: FSMContext):
                 "ealam_stamp_amount": data.get("ealam_stamp_amount", 0),
                 "ealam_stamp_type": data.get("ealam_stamp_type", ""),
                 "ealam_lavayeh_text": data.get("lavayeh_text", ""),
+                "ealam_lavayeh_text_html": data.get("lavayeh_text_html", ""),
                 "ealam_attachments": data.get("lavayeh_attachments", []),
                 "lavayeh_tracking_code": data.get("lavayeh_tracking_code", ""),
                 "lavayeh_province": data.get("lavayeh_province", ""),
@@ -1989,6 +2037,7 @@ async def lavayeh_confirm_handler(message: Message, state: FSMContext):
                 "lavayeh_row_number": data.get("lavayeh_row_number"),
                 "lavayeh_persons": data.get("lavayeh_persons", []),
                 "lavayeh_text": data.get("lavayeh_text"),
+                "lavayeh_text_html": data.get("lavayeh_text_html", ""),
                 "lavayeh_attachments": data.get("lavayeh_attachments", []),
                 # اطلاعات شماره بایگانی (در صورت انتخاب این روش)
                 "tracking_method": data.get("tracking_method", "case_number"),

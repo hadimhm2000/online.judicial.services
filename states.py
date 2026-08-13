@@ -158,11 +158,48 @@ class Form(StatesGroup):
     waiting_for_disrupted_retry = State()  # منتظر تصمیم کاربر برای تکرار بدون پرداخت
 
     # =========================================================
+    # State های بخش دعاوی اعتراضی
+    # =========================================================
+    tn_case_type = State()
+    tn_judge_no = State()
+    tn_file_no = State()
+    tn_file_no_row = State()
+    tn_judge_date = State()
+    tn_province = State()
+    tn_doc_type = State()
+    tn_amount_type = State()
+    tn_amount = State()
+    tn_insolvency = State()
+    tn_appellant_person_type = State()
+    tn_appellant_company_id = State()
+    tn_appellant_representative_type = State()
+    tn_appellant_national_id = State()
+    tn_appellant_more = State()
+    tn_appellee_person_type = State()
+    tn_appellee_company_id = State()
+    tn_appellee_national_id = State()
+    tn_appellee_more = State()
+    tn_witness_national_id = State()
+    tn_more_witnesses = State()
+    tn_text = State()
+    tn_extra_text = State()
+    tn_attachment_title = State()
+    tn_images = State()
+    tn_attachment_images = State()
+    tn_attachment_more = State()
+    tn_reason_select = State()
+    tn_more_reasons = State()
+    tn_confirm = State()
+    tn_edit_choice = State()
+    tn_sana_error_action = State()
+    tn_sana_error_new_national_id = State()
+
+    # =========================================================
     # State های بخش تست مدیر (منضمات / امضا)
     # =========================================================
-    test_mode_tracking_code = State()      # منتظر دریافت کدرهگیری جهت تست
-    test_mode_doc_type = State()           # انتخاب لایحه یا اظهارنامه
-    test_mode_section_select = State()     # انتخاب بخش تست: منضمات یا امضا
-    test_mode_attachment_title = State()   # دریافت عنوان مدرک در حالت تست
-    test_mode_attachment_images = State()  # دریافت تصاویر مدرک در حالت تست
-    test_mode_attachment_more = State()    # آیا مدرک دیگری هم هست؟
+    test_mode_tracking_code = State()
+    test_mode_doc_type = State()
+    test_mode_section_select = State()
+    test_mode_attachment_title = State()
+    test_mode_attachment_images = State()
+    test_mode_attachment_more = State()

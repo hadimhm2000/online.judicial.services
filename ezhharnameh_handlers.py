@@ -489,17 +489,60 @@ async def ezhhar_subject_handler(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════════════════
 @ezhharnameh_router.message(Form.ezhhar_text)
 async def ezhhar_text_handler(message: Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # ── پشتیبانی فایل ورد ──────────────────────────────────────
+    if message.document and message.document.file_name and message.document.file_name.lower().endswith(".docx"):
+        from text_collector import process_docx_input
+
+        async def _on_ezhhar_docx_complete(final_text, final_html, st, b, cid, was_editing, char_count):
+            await st.update_data(ezhhar_text=final_text, ezhhar_text_html=final_html, ezhhar_attachments=[], ezhhar_images=[])
+
+            data = await st.get_data()
+            declarants = data.get("ezhhar_declarants", [])
+            has_legal = any(p.get("person_type") == "شخص حقوقی" for p in declarants)
+
+            if has_legal:
+                await b.send_message(
+                    cid,
+                    "**مرحله ۵ — مدارک:**\n\n"
+                    "⚠️ **توجه مهم:** چون اظهارکننده شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
+                    "📸 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید.\n"
+                    "_(مثلاً: روزنامه رسمی، آگهی تأسیس، وکالت‌نامه رسمی)_",
+                    parse_mode="Markdown"
+                )
+                await st.update_data(
+                    _ezhhar_mandatory_proxy_sent=False,
+                    ezhhar_images=[],
+                    _ezhhar_current_attachment_title="مدرک نمایندگی"
+                )
+                await st.set_state(Form.ezhhar_attachment_images)
+            else:
+                await _ask_ezhhar_attachment(message, st, is_first=True)
+
+        await process_docx_input(
+            message=message,
+            user_id=user_id,
+            chat_id=chat_id,
+            state=state,
+            bot=bot,
+            on_complete=_on_ezhhar_docx_complete,
+            text_state_key="ezhhar_text",
+            html_state_key="ezhhar_text_html",
+            extra_state_updates={"ezhhar_attachments": [], "ezhhar_images": []},
+            processing_msg="⏳ در حال پردازش فایل ورد...",
+        )
+        return
+
     if not message.text:
-        await message.answer("⚠️ لطفاً شرح متن را به صورت **متن** ارسال فرمایید.")
+        await message.answer("⚠️ لطفاً شرح متن را به صورت متن ارسال فرمایید.\nیا فایل .docx ارسال نمایید.")
         return
 
     from text_collector import collect_text_part
 
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
     async def _on_ezhhar_text_complete(final_text, st, b, cid, was_editing):
-        await st.update_data(ezhhar_text=final_text, ezhhar_attachments=[], ezhhar_images=[])
+        await st.update_data(ezhhar_text=final_text, ezhhar_text_html="", ezhhar_attachments=[], ezhhar_images=[])
 
         data = await st.get_data()
         declarants = data.get("ezhhar_declarants", [])
@@ -859,6 +902,7 @@ async def ezhhar_confirm_handler(message: Message, state: FSMContext, bot: Bot):
             "ezhhar_addressees": data.get("ezhhar_addressees", []),
             "ezhhar_subject": data.get("ezhhar_subject", "سایر"),
             "ezhhar_text": data.get("ezhhar_text", ""),
+            "ezhhar_text_html": data.get("ezhhar_text_html", ""),
             "ezhhar_attachments": data.get("ezhhar_attachments", []),
         })
 

@@ -216,7 +216,8 @@ async def process_ealam_vakalaht_task(data: dict, bot: Bot):
             await _click_step_label(sana_page, "متن", bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
 
-            await _fill_text_editor(sana_page, lavayeh_text, bot, user_id)
+            stored_html = data.get("ealam_lavayeh_text_html", "")
+            await _fill_text_editor(sana_page, lavayeh_text, bot, user_id, stored_html=stored_html)
             await resilient_sleep(sana_page, 2, bot, user_id)
 
             # ── ۸. ثبت موقت ──────────────────────────────────────────────
@@ -799,8 +800,9 @@ async def _click_add_lawyer_save(page, bot: Bot, user_id: int):
         logging.warning(f"[EALAM] دکمه ثبت موقت پیدا نشد")
 
 
-async def _fill_text_editor(page, text: str, bot: Bot, user_id: int):
-    text_html = _text_to_editor_html(text)
+async def _fill_text_editor(page, text: str, bot: Bot, user_id: int, stored_html: str = ""):
+    # استفاده از HTML ورد در صورت وجود، در غیر اینصورت تبدیل متنی
+    text_html = stored_html if stored_html else _text_to_editor_html(text)
     await page.evaluate('''(html) => {
         const editor = document.querySelector('[contenteditable="true"][ta-bind]');
         if (editor) {

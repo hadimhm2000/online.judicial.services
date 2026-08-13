@@ -355,6 +355,32 @@ async def _ask_lavayeh_text(message: Message, state: FSMContext):
 # ══════════════════════════════════════════════════════════════════════════════
 @ealam_router.message(Form.ealam_vakalaht_text)
 async def ealam_get_text(message: Message, state: FSMContext, bot: Bot):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    # ── پشتیبانی فایل ورد ──────────────────────────────────────
+    if message.document and message.document.file_name and message.document.file_name.lower().endswith(".docx"):
+        from text_collector import process_docx_input
+
+        async def _on_ealam_docx_complete(final_text, final_html, st, b, cid, was_editing, char_count):
+            await st.update_data(ealam_lavayeh_text=final_text, ealam_lavayeh_text_html=final_html, ealam_attachments=[])
+            await b.send_message(cid, f"✅ متن اعلام وکالت از فایل ورد دریافت شد ({char_count} کاراکتر).")
+            await _ask_attachment(message, st, is_first=True)
+
+        await process_docx_input(
+            message=message,
+            user_id=user_id,
+            chat_id=chat_id,
+            state=state,
+            bot=bot,
+            on_complete=_on_ealam_docx_complete,
+            text_state_key="ealam_lavayeh_text",
+            html_state_key="ealam_lavayeh_text_html",
+            extra_state_updates={"ealam_attachments": []},
+            processing_msg="⏳ در حال پردازش فایل ورد...",
+        )
+        return
+
     text = message.text or ""
 
     # دکمه «ادامه مراحل» برای دعوی غیر مالی
@@ -363,16 +389,13 @@ async def ealam_get_text(message: Message, state: FSMContext, bot: Bot):
         return
 
     if not text:
-        await message.answer("⚠️ لطفاً متن لایحه را به صورت متن ارسال فرمایید.")
+        await message.answer("⚠️ لطفاً متن لایحه را به صورت متن ارسال فرمایید.\nیا فایل .docx ارسال نمایید.")
         return
 
     from text_collector import collect_text_part
 
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
     async def _on_ealam_text_complete(final_text, st, b, cid, was_editing):
-        await st.update_data(ealam_lavayeh_text=final_text, ealam_attachments=[])
+        await st.update_data(ealam_lavayeh_text=final_text, ealam_lavayeh_text_html="", ealam_attachments=[])
         await b.send_message(
             cid,
             f"✅ متن اعلام وکالت دریافت شد ({len(final_text)} کاراکتر).",
@@ -609,6 +632,7 @@ async def ealam_confirm_handler(message: Message, state: FSMContext, bot: Bot):
             "ealam_stamp_amount": data.get("ealam_stamp_amount", 0),
             "ealam_stamp_type": data.get("ealam_stamp_type", ""),
             "ealam_lavayeh_text": data.get("ealam_lavayeh_text", ""),
+            "ealam_lavayeh_text_html": data.get("ealam_lavayeh_text_html", ""),
             "ealam_attachments": data.get("ealam_attachments", []),
             # اطلاعات لایحه برای ناوبری سامانه
             "lavayeh_tracking_code": data.get("lavayeh_tracking_code", ""),
