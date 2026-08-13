@@ -399,6 +399,201 @@ async def wait_for_manual_login(bot: Bot):
         return False
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TEST_ATTACHMENTS — تست بخش منضمات بدون ایجاد کدرهگیری جدید
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _process_test_attachments(data: dict, bot: Bot):
+    """
+    تست بخش منضمات: ناوبری به پرونده، ورود به تب منضمات و آپلود مدارک.
+    از همان حلقه resilient_upload_attachment_groups استفاده می‌کند.
+    """
+    sana_page = runtime_state.sana_page
+    user_id = data['user_id']
+    tracking_code = data.get('tracking_code')
+    category = data.get('doc_category')
+    test_attachments = data.get('test_attachments', [])
+
+    downloaded_paths = []
+
+    try:
+        success = await goto_url_with_retry(
+            sana_page, "https://sakha2.adliran.ir/Offices/Index", bot, user_id
+        )
+        if not success:
+            await bot.send_message(user_id, "❌ خطا در اتصال به سامانه.")
+            return
+
+        await human_delay(4.0, 6.0)
+
+        # ── ناوبری به بخش مورد نظر ─────────────────────────────────────
+        if category == "لایحه":
+            await safe_click_by_text(sana_page, "ارایه و پیگیری لایحه", bot, user_id)
+        elif category == "اظهارنامه":
+            await safe_click_by_text(sana_page, "ارایه و پیگیری اظهارنامه", bot, user_id)
+        await resilient_sleep(sana_page, 5, bot, user_id)
+
+        # ── تنظیم رادیو و ورود کدرهگیری ──────────────────────────────
+        if category == "لایحه":
+            radio_clicked = await sana_page.evaluate('''() => {
+                const radio = document.querySelector('#rdbGetPetition');
+                if (radio) { radio.click(); return true; }
+                return false;
+            }''')
+            if not radio_clicked:
+                await safe_click_by_text(sana_page, "جستجوی لایحه", bot, user_id)
+            await resilient_sleep(sana_page, 4, bot, user_id)
+
+        try:
+            await sana_page.wait_for_selector('#txtPetitionNo, #billNo', timeout=15000)
+        except Exception:
+            await bot.send_message(user_id, "❌ صفحه کارتابل لود نشد.")
+            return
+
+        if category == "لایحه":
+            await safe_type(sana_page, '#billNo', tracking_code, bot, user_id)
+        else:
+            selector = '#txtPetitionNo, #billNo, input[name="txtPetitionNo"], input[name="billNo"]'
+            await safe_type(sana_page, selector, tracking_code, bot, user_id)
+        await resilient_sleep(sana_page, 2, bot, user_id)
+
+        # ── کلیک دکمه جستجو ───────────────────────────────────────────
+        if category == "لایحه":
+            await sana_page.evaluate('''() => {
+                const btn = document.querySelector('#btnGetJSSBill');
+                if (btn) { btn.click(); return; }
+            }''')
+        else:
+            await sana_page.evaluate('''() => {
+                const exactBtn = document.querySelector('#btnGetJSSPetition');
+                if (exactBtn) { exactBtn.click(); return; }
+                const btns = Array.from(document.querySelectorAll('button'));
+                const searchBtn = btns.find(b => b.innerText && b.innerText.includes("جستجو"));
+                if (searchBtn) searchBtn.click();
+            }''')
+
+        await asyncio.sleep(3)
+        await wait_for_horizontal_loading_bar(sana_page, bot, user_id, timeout=60)
+
+        # ── بستن پاپ‌آپ‌ها ────────────────────────────────────────────
+        await sana_page.evaluate('''() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const closeBtn = btns.find(b =>
+                (b.innerText && b.innerText.trim() === "بستن") || b.classList.contains("confirm")
+            );
+            if(closeBtn) closeBtn.click();
+        }''')
+        await resilient_sleep(sana_page, 2, bot, user_id)
+
+        if (
+            await sana_page.locator(".alert-danger").is_visible()
+            or await sana_page.locator('text="اطلاعاتی یافت نشد"').is_visible()
+        ):
+            await bot.send_message(user_id, f"❌ پرونده‌ای با کد `{tracking_code}` یافت نگردید.")
+            return
+
+        # ── ورود به تب منضمات ────────────────────────────────────────
+        mozamatat_exists = await sana_page.evaluate('''() => {
+            const tags = ['button', 'a', 'label', 'span', 'li', 'h5', 'div', 'td'];
+            for (let tag of tags) {
+                const elements = Array.from(document.querySelectorAll(tag));
+                const target = elements.find(el => el.innerText && el.innerText.trim().includes("منضمات"));
+                if (target) {
+                    const rect = target.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) return true;
+                }
+            }
+            return false;
+        }''')
+
+        if not mozamatat_exists:
+            await bot.send_message(user_id, "📄 این درخواست فاقد بخش منضمات است.")
+            return
+
+        await safe_click_by_text(sana_page, "منضمات", bot, user_id)
+        await resilient_sleep(sana_page, 5, bot, user_id)
+
+        # ── دانلود تصاویر از تلگرام و آماده‌سازی گروه‌ها ──────────────
+        if not test_attachments:
+            await bot.send_message(user_id, "⚠️ هیچ مدرکی برای آپلود ارسال نشده است.")
+            return
+
+        await bot.send_message(user_id, "📥 در حال دانلود تصاویر از تلگرام...")
+
+        from upload_helpers import download_images_from_telegram
+
+        groups_with_paths = []
+        for group in test_attachments:
+            group_title = group.get("title", "مستندات")
+            group_file_ids = group.get("images", [])
+            if not group_file_ids:
+                continue
+            group_paths = await download_images_from_telegram(bot, group_file_ids, user_id)
+            downloaded_paths.extend(group_paths)
+            groups_with_paths.append({"title": group_title, "paths": group_paths})
+
+        if not groups_with_paths:
+            await bot.send_message(user_id, "⚠️ هیچ تصویری برای آپلود وجود ندارد.")
+            return
+
+        total_imgs = sum(len(g["paths"]) for g in groups_with_paths)
+        await bot.send_message(
+            user_id,
+            f"✅ {total_imgs} تصویر دانلود شد. در حال آپلود به سامانه..."
+        )
+
+        # ── آپلود منضمات با همان حلقه اصلی ──────────────────────────
+        from upload_helpers import resilient_upload_attachment_groups
+
+        upload_result = await resilient_upload_attachment_groups(
+            sana_page, groups_with_paths, bot, user_id,
+            prefix="TEST",
+        )
+
+        if upload_result["success"]:
+            await bot.send_message(
+                user_id,
+                f"✅ **تست منضمات موفق بود!**\n\n"
+                f"🏷 گروه‌های موفق: {len(upload_result['successful_groups'])}",
+                parse_mode="Markdown"
+            )
+            await bot.send_message(
+                ADMIN_ID,
+                f"🧪 **تست منضمات موفق**\n"
+                f"کد: `{tracking_code}` | نوع: {category}\n"
+                f"گروه‌ها: {len(upload_result['successful_groups'])} موفق",
+                parse_mode="Markdown"
+            )
+        else:
+            failed = upload_result["failed_groups"][0] if upload_result["failed_groups"] else {}
+            await bot.send_message(
+                user_id,
+                f"❌ **تست منضمات ناموفق**\n\n"
+                f"عنوان مشکل‌دار: {failed.get('title', '?')}\n"
+                f"خطا: {failed.get('error', 'نامشخص')}",
+                parse_mode="Markdown"
+            )
+            await bot.send_message(
+                ADMIN_ID,
+                f"❌ **تست منضمات ناموفق**\n"
+                f"کد: `{tracking_code}` | نوع: {category}\n"
+                f"خطا: {failed.get('error', 'نامشخص')}",
+                parse_mode="Markdown"
+            )
+
+    except Exception as e:
+        logging.error(f"[TEST-ATT] خطا در تست منضمات: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ خطا در تست منضمات: `{str(e)[:200]}`")
+    finally:
+        # پاکسازی فایل‌های دانلود‌شده
+        for path in downloaded_paths:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+
 async def process_task(data, bot: Bot):
     sana_page = runtime_state.sana_page
     browser_context = runtime_state.browser_context
@@ -446,6 +641,11 @@ async def process_task(data, bot: Bot):
     # ── سناریوی ثبت کد امضا اظهارنامه ────────────────────────────────────
     if task_type == "EZHHARNAMEH_SUBMIT_SIGN":
         await _process_ezhharnameh_submit_sign(data, bot)
+        return
+
+    # ── سناریوی تست منضمات (مدیر) ─────────────────────────────────────────
+    if task_type == "TEST_ATTACHMENTS":
+        await _process_test_attachments(data, bot)
         return
 
     max_task_attempts = 3

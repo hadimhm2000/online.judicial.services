@@ -557,7 +557,41 @@ async def process_ezhharnameh_task(data: dict, bot: Bot):
                                 await asyncio.sleep(1)
                             else:
                                 logging.warning(f"[EZHHAR] دکمه «پیوست جدید» پیدا نشد")
-                        await _upload_other_attachment(sana_page, group["title"], group["paths"], bot, user_id)
+
+                        # ⭐ استفاده از _upload_attachment_with_retry به‌جای _upload_other_attachment
+                        # این تابع retry محلی انجام می‌دهد و اگر نشد، کل ثبت را ری‌استارت نمی‌کند
+                        upload_result = await _upload_attachment_with_retry(
+                            sana_page,
+                            group["title"],
+                            group["paths"],
+                            bot,
+                            user_id,
+                            bill_no=bill_no,
+                            max_retries=3,
+                        )
+
+                        # اگر خطای کدنویسی بود (مثل module_missing) — توقف کامل
+                        if not upload_result["success"]:
+                            error_type = upload_result.get("error_type")
+                            if error_type in ("module_missing", "code_error"):
+                                logging.error(
+                                    f"[EZHHAR] خطای کدنویسی در آپلود — توقف کل فرآیند. "
+                                    f"خطا: {upload_result.get('error')}"
+                                )
+                                # ذخیره در incomplete_tasks برای پیگیری بعدی
+                                if bill_no:
+                                    runtime_state.incomplete_tasks[f"ezhhar:{bill_no}"] = {
+                                        "bill_no": bill_no, "user_id": user_id, "type": "ezhhar",
+                                        "last_completed_step": "ثبت موقت", "next_step": "منضمات",
+                                        "task_data": data, "created_at": time.time(),
+                                        "attachment_groups": remaining_groups[idx:],
+                                    }
+                                return  # توقف کل process_ezhharnameh_task بدون retry
+
+                            # خطای غیر کدنویسی — ادامه با گروه بعدی
+                            logging.warning(
+                                f"[EZHHAR] آپلود گروه [{group['title']}] ناموفق، ادامه با گروه بعدی"
+                            )
 
                 # پاکسازی فایل‌های موقت
                 for group in groups_with_paths:
@@ -1573,23 +1607,185 @@ async def _upload_electronic_vakalaht(page, contract_number: str, lawyer_amount_
             pass
 
 
-async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int):
-    """آپلود سایر ضمائم (مقاوم — از upload_helpers)"""
-    from upload_helpers import resilient_upload_attachment
+async def _upload_other_attachment(page, title: str, image_paths: list, bot: Bot, user_id: int) -> dict:
+    """
+    آپلود سایر ضمائم (مقاوم — از upload_helpers).
+
+    ⭐ تغییر مهم: این تابع هیچ‌وقت Exception نمی‌اندازد.
+    - اگر upload_helpers موجود نباشد (ModuleNotFoundError) → error_type='module_missing'
+    - اگر خطای کدنویسی رخ دهد → error_type='code_error'
+    - اگر آپلود شکست خورد → error_type از upload_helpers
+
+    بازگشت:
+        {
+            "success": bool,
+            "error": str|None,
+            "error_type": str|None,  # 'module_missing', 'code_error', 'session', 'timeout', 'general'
+        }
+    """
+    result = {"success": False, "error": None, "error_type": None}
 
     if not image_paths:
-        return
+        result["success"] = True  # هیچ فایلی نیست — موفق فرض کن
+        return result
 
-    result = await resilient_upload_attachment(
-        page, title, image_paths, bot, user_id,
-        prefix="EZHHAR",
-    )
+    try:
+        from upload_helpers import resilient_upload_attachment
+    except ImportError as e:
+        # ⭐ خطای کدنویسی — نباید retry شود
+        result["error"] = f"ModuleNotFoundError: upload_helpers پیدا نشد — {e}"
+        result["error_type"] = "module_missing"
+        logging.error(f"[EZHHAR] {result['error']}")
+        await bot.send_message(
+            ADMIN_ID,
+            f"🚨 [EZHHAR] خطای کدنویسی: فایل upload_helpers.py روی سرور موجود نیست!\n"
+            f"کاربر: {user_id} | عنوان پیوست: {title}\n"
+            f"خطا: {e}"
+        )
+        return result
+    except Exception as e:
+        result["error"] = f"خطا در import upload_helpers: {e}"
+        result["error_type"] = "code_error"
+        logging.error(f"[EZHHAR] {result['error']}")
+        return result
 
-    if not result["success"]:
-        logging.error(f"[EZHHAR] آپلود سایر ضمائم [{title}] ناموفق: {result.get('error')}")
-        await bot.send_message(ADMIN_ID, f"❌ [EZHHAR] آپلود پیوست {title} ناموفق | کاربر: {user_id}")
-    else:
-        logging.info(f"[EZHHAR] آپلود سایر ضمائم [{title}] موفق")
+    try:
+        upload_result = await resilient_upload_attachment(
+            page, title, image_paths, bot, user_id,
+            prefix="EZHHAR",
+        )
+
+        if upload_result["success"]:
+            logging.info(f"[EZHHAR] آپلود سایر ضمائم [{title}] موفق")
+            result["success"] = True
+            return result
+
+        # آپلود ناموفق — بدون raise، فقط گزارش
+        result["error"] = upload_result.get("error", "نامشخص")
+        result["error_type"] = upload_result.get("error_type", "unknown")
+        logging.error(
+            f"[EZHHAR] آپلود سایر ضمائم [{title}] ناموفق: {result['error']} (نوع: {result['error_type']})"
+        )
+        await bot.send_message(
+            ADMIN_ID,
+            f"❌ [EZHHAR] آپلود پیوست [{title}] ناموفق\n"
+            f"کاربر: {user_id} | خطا: {result['error'][:200]}\n"
+            f"نوع خطا: {result['error_type']}"
+        )
+        return result
+
+    except Exception as e:
+        # هر استثنای غیرمنتظره — بدون raise
+        result["error"] = f"استثنا در آپلود: {e}"
+        result["error_type"] = "code_error"
+        logging.error(f"[EZHHAR] {result['error']}", exc_info=True)
+        return result
+
+
+async def _upload_attachment_with_retry(
+    page,
+    title: str,
+    image_paths: list,
+    bot: Bot,
+    user_id: int,
+    bill_no: str = None,
+    max_retries: int = 3,
+) -> dict:
+    """
+    آپلود یک ضمیمه با retry محلی — بدون این‌که کل ثبت از اول شروع شود.
+
+    ⭐ تفاوت کلیدی با نسخه‌ی قبل:
+    - قبلاً اگر _upload_other_attachment Exception می‌انداخت، کل process_ezhharnameh_task
+      از اول شروع می‌شد (goto Offices/Index → کلیک «ارایه و پیگیری» → ...)
+    - حالا: فقط این ضمیمه retry می‌شود، و اگر واقعاً نشد، به کاربر/مدیر گزارش می‌دهد
+      و ادامه می‌دهد (نه این‌که کل ثبت را ری‌استارت کند)
+
+    retry فقط در این موارد انجام می‌شود:
+    - error_type == 'session' (خطای ورود همزمان — لاگین مجدد + retry)
+    - error_type == 'timeout' (تایم‌اوت — retry با تأخیر بیشتر)
+
+    retry انجام نمی‌شود در:
+    - error_type == 'module_missing' (خطای کدنویسی — باید فایل کپی شود)
+    - error_type == 'code_error' (خطای کدنویسی)
+    - error_type در ('validation', 'file_size', 'file_type', 'page_count') (خطای فایل)
+    """
+    last_result = {"success": False, "error": None, "error_type": None}
+
+    for attempt in range(1, max_retries + 1):
+        logging.info(f"[EZHHAR] ─── آپلود ضمیمه [{title}] — تلاش {attempt}/{max_retries} ───")
+
+        last_result = await _upload_other_attachment(page, title, image_paths, bot, user_id)
+
+        if last_result["success"]:
+            return last_result
+
+        error_type = last_result.get("error_type", "unknown")
+        error_msg = last_result.get("error", "نامشخص")
+
+        # تصمیم‌گیری برای retry
+        should_retry = error_type in ("session", "timeout", "general", "unknown")
+        is_code_error = error_type in ("module_missing", "code_error")
+
+        if is_code_error:
+            # خطای کدنویسی — هیچ فایده‌ای ندارد retry کنیم
+            logging.error(
+                f"[EZHHAR] خطای کدنویسی در آپلود [{title}] — بدون retry: {error_msg}"
+            )
+            # اطلاع به کاربر
+            await bot.send_message(
+                user_id,
+                f"⚠️ **خطای فنی در آپلود پیوست**\n\n"
+                f"عنوان: {title}\n"
+                f"کد رهگیری: `{bill_no or 'نامشخص'}`\n\n"
+                f"لطفاً به پشتیبانی اطلاع دهید.\n"
+                f"📞 واتساپ: 09306186888",
+                parse_mode="Markdown"
+            )
+            return last_result
+
+        if not should_retry:
+            # خطای فایل/اعتبارسنجی — retry فایده‌ای ندارد
+            logging.error(
+                f"[EZHHAR] خطای غیرقابل-retry در آپلود [{title}] (نوع: {error_type}): {error_msg}"
+            )
+            return last_result
+
+        if attempt < max_retries:
+            logging.warning(
+                f"[EZHHAR] آپلود [{title}] ناموفق (تلاش {attempt}/{max_retries}) — retry بعد از تأخیر..."
+            )
+            # تأخیر تصاعدی: ۱۰، ۲۰، ۳۰ ثانیه
+            await asyncio.sleep(10 * attempt)
+            # اطمینان از بازگشت به فهرست قبل از retry
+            try:
+                from browser_helpers import soft_click_if_exists
+                await soft_click_if_exists(page, "بازگشت به فهرست")
+                await asyncio.sleep(3)
+            except Exception:
+                pass
+        else:
+            logging.error(
+                f"[EZHHAR] آپلود [{title}] بعد از {max_retries} تلاش ناموفق — توقف"
+            )
+            # اطلاع به کاربر + مدیر
+            await bot.send_message(
+                user_id,
+                f"⚠️ **آپلود پیوست ناموفق**\n\n"
+                f"عنوان: {title}\n"
+                f"کد رهگیری: `{bill_no or 'نامشخص'}`\n"
+                f"خطا: {error_msg[:200]}\n\n"
+                f"لطفاً به پشتیبانی اطلاع دهید.\n"
+                f"📞 واتساپ: 09306186888",
+                parse_mode="Markdown"
+            )
+            await bot.send_message(
+                ADMIN_ID,
+                f"❌ [EZHHAR] آپلود [{title}] ناموفق بعد از {max_retries} تلاش\n"
+                f"کاربر: {user_id} | کد: {bill_no}\n"
+                f"خطا: {error_msg[:200]}"
+            )
+
+    return last_result
 
 
 async def _click_preparation(page, bot: Bot, user_id: int, max_retries: int = 3) -> bool:

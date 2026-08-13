@@ -156,3 +156,13 @@ class Form(StatesGroup):
     # State های بخش بازیابی پس از قطعی سامانه
     # =========================================================
     waiting_for_disrupted_retry = State()  # منتظر تصمیم کاربر برای تکرار بدون پرداخت
+
+    # =========================================================
+    # State های بخش تست مدیر (منضمات / امضا)
+    # =========================================================
+    test_mode_tracking_code = State()      # منتظر دریافت کدرهگیری جهت تست
+    test_mode_doc_type = State()           # انتخاب لایحه یا اظهارنامه
+    test_mode_section_select = State()     # انتخاب بخش تست: منضمات یا امضا
+    test_mode_attachment_title = State()   # دریافت عنوان مدرک در حالت تست
+    test_mode_attachment_images = State()  # دریافت تصاویر مدرک در حالت تست
+    test_mode_attachment_more = State()    # آیا مدرک دیگری هم هست؟

@@ -1,0 +1,41 @@
+--- /mnt/user-data/uploads/upload_helpers.py	2026-08-13 11:31:07.161545000 +0000
++++ /mnt/user-data/outputs/upload_helpers.py	2026-08-13 11:32:26.488073596 +0000
+@@ -815,7 +815,22 @@
+     user_id: int = None,
+     prefix: str = "UPLOAD",
+ ) -> bool:
+-    """حذف کامل یک ردیف پیوست (editDocument → حذف فایل‌ها → بازگشت → removeDocument)."""
++    """
++    حذف کامل یک ردیف پیوست (editDocument → حذف فایل‌ها → removeDocument).
++
++    ⭐ اصلاح مهم: بین «حذف تمام فایل‌های ردیف» و «زدن دکمه سطل‌زباله
++    (removeDocument) همان ردیف» هیچ کلیک بازگشتی لازم نیست، چون جدول
++    ردیف‌ها (Model.theJSSPetitionDocument) و نمای ویرایش (editDocument)
++    هر دو در همان صفحه‌ی منضمات هستند — بدون ناوبری صفحه.
++
++    قبلاً اینجا `soft_click_if_exists(page, "بازگشت به فهرست")` صدا زده
++    می‌شد. تنها دکمه‌ای با این متن در کل صفحه #btnGotoMainPage
++    (actions.gotoMainStep) است که کاربر را کاملاً از صفحه‌ی منضمات به
++    فهرست اصلی مراحل خارج می‌کند — و باعث می‌شد جدول ردیف‌ها و فرم‌های
++    بعدی (#attachmentType، #btnSaveDoc) دیگر پیدا نشوند (دقیقاً همان
++    علت لاگ خطای «ردیف برای حذف پیدا نشد» + «ذخیره سند: پاسخی دریافت
++    نشد»). این کلیک حذف شده است.
++    """
+     _log(prefix, f"شروع حذف کامل ردیف [{title}]...")
+ 
+     try:
+@@ -848,10 +863,11 @@
+         files_deleted = await delete_all_files_in_row(page, bot, user_id, prefix)
+         _log(prefix, f"{files_deleted} فایل از ردیف [{title}] حذف شد")
+ 
+-        await soft_click_if_exists(page, "بازگشت به فهرست")
+-        await asyncio.sleep(3)
++        # ⭐ بدون کلیک «بازگشت به فهرست» — همان صفحه، فقط بستن پاپ‌آپ باقی‌مانده
++        # و اطمینان از آرام‌شدن Angular قبل از جست‌وجوی دکمه حذف ردیف
+         await close_any_popup(page)
+-        await asyncio.sleep(1)
++        await wait_for_angular_idle(page)
++        await asyncio.sleep(1.5)
+ 
+         row_deleted = await delete_document_row_by_title(page, title, prefix)
+         if not row_deleted:

@@ -8,11 +8,9 @@ accept_rules_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ قوا
 
 flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="1️⃣ استعلام (تک درخواست)")],
-        [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)")],
-        [KeyboardButton(text="📝 ثبت لایحه")],
-        [KeyboardButton(text="📋 ثبت اظهارنامه")],
-        [KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
+        [KeyboardButton(text="1️⃣ استعلام (تک درخواست)"), KeyboardButton(text="🧪 تست")],
+        [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)"), KeyboardButton(text="📝 ثبت لایحه")],
+        [KeyboardButton(text="📋 ثبت اظهارنامه"), KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
         [KeyboardButton(text="🛠 ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)")],
     ], resize_keyboard=True)
 
@@ -608,6 +606,52 @@ subscription_kb = ReplyKeyboardMarkup(
 disrupted_retry_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔄 تلاش مجدد (بدون پرداخت هزینه)")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+# =========================================================
+# کیبوردهای بخش تست مدیر (منضمات / امضا)
+# =========================================================
+
+test_mode_doc_type_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 لایحه"), KeyboardButton(text="📋 اظهارنامه")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+test_mode_section_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📎 تست بخش منضمات")],
+        [KeyboardButton(text="✍️ تست بخش امضا")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+test_mode_att_title_kb_first = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)"), KeyboardButton(text="⏭ رد کردن (بدون مدرک)")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+test_mode_att_title_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔹 عنوان مهم نیست (صرفا درج شود مستندات)")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+test_mode_att_more_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ بله، عنوان و مدرک دیگر دارم")],
+        [KeyboardButton(text="✅ خیر، ادامه بده")],
         [KeyboardButton(text="❌ انصراف")],
     ],
     resize_keyboard=True

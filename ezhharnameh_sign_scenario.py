@@ -312,7 +312,7 @@ async def _extract_persons_from_table(page) -> list:
     """
     return await page.evaluate('''() => {
         const rows = Array.from(document.querySelectorAll(
-            'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            'table tbody tr[ng-repeat*="thePetitionPersonSignableList"]'
         ));
         if (rows.length === 0) return [];
 
@@ -463,7 +463,7 @@ async def send_ezhhar_sign_code_for_person(
     for attempt in range(3):
         clicked = await sana_page.evaluate(f'''(idx) => {{
             const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+                'table tbody tr[ng-repeat*="thePetitionPersonSignableList"]'
             ));
             if (rows.length <= idx) return false;
             const btn = rows[idx].querySelector('button[ng-click*="sendTempPassword"]');
@@ -487,6 +487,12 @@ async def send_ezhhar_sign_code_for_person(
             await _close_any_popup(sana_page)
             logging.info(f"[EZHHAR_SIGN] کد قبلاً ارسال شده برای ردیف {row_idx}")
             return True
+
+        elif popup_result == "service_delay":
+            await _close_any_popup(sana_page)
+            logging.warning(f"[EZHHAR_SIGN] تاخیر در اجرای سرویس برای ردیف {row_idx} (تلاش {attempt+1}) — صبر ۱۵ ثانیه و تکرار")
+            await asyncio.sleep(15)
+            continue
 
         else:
             await _close_any_popup(sana_page)
@@ -634,7 +640,7 @@ async def _check_sign_table_exists(page) -> bool:
     """بررسی وجود جدول امضا"""
     return await page.evaluate('''() => {
         const rows = Array.from(document.querySelectorAll(
-            'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+            'table tbody tr[ng-repeat*="thePetitionPersonSignableList"]'
         ));
         return rows.length > 0;
     }''')
@@ -715,6 +721,9 @@ async def _wait_for_popup_result(page, timeout_sec: int = 55) -> str:
                 if (text.includes("10 دقیقه") || text.includes("۱۰ دقیقه")) {
                     return "already_sent";
                 }
+                if (text.includes("تاخیر") || text.includes("تأخیر")) {
+                    return "service_delay";
+                }
                 return "error";
             }
             return null;
@@ -741,7 +750,7 @@ async def _enter_code_and_sign(
             const idx = args.idx;
             const code = args.code;
             const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+                'table tbody tr[ng-repeat*="thePetitionPersonSignableList"]'
             ));
             if (rows.length <= idx) return false;
             const inp = rows[idx].querySelector('input[id^="txtTempPassword"]');
@@ -773,7 +782,7 @@ async def _enter_code_and_sign(
 
         clicked = await page.evaluate(f'''(idx) => {{
             const rows = Array.from(document.querySelectorAll(
-                'table tbody tr[ng-repeat*="theBillPersonSignableList"]'
+                'table tbody tr[ng-repeat*="thePetitionPersonSignableList"]'
             ));
             if (rows.length <= idx) return false;
             const btn = rows[idx].querySelector(
@@ -806,6 +815,11 @@ async def _enter_code_and_sign(
             await _close_any_popup(page)
             logging.info(f"[EZHHAR_SIGN] امضا در ثنا ثبت نیست — ردیف {row_idx}")
             return {"success": False, "error": "sana_not_registered"}
+        elif popup_result == "service_delay":
+            await _close_any_popup(page)
+            logging.warning(f"[EZHHAR_SIGN] تاخیر در اجرای سرویس — ردیف {row_idx} (تلاش {attempt+1}) — صبر ۱۵ ثانیه و تکرار")
+            await asyncio.sleep(15)
+            continue
         else:
             await _close_any_popup(page)
             logging.warning(f"[EZHHAR_SIGN] امضای ردیف {row_idx} ناموفق: {popup_result} (تلاش {attempt+1})")
@@ -829,13 +843,14 @@ async def _enter_code_and_sign(
 async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
     """
     منتظر پاپ‌آپ نتیجه امضا.
-    Returns: "success" | "wrong_code" | "sana_not_registered" | "error" | "timeout"
+    Returns: "success" | "wrong_code" | "sana_not_registered" | "service_delay" | "error" | "timeout"
 
     پیام‌های مورد انتظار:
       - موفق (آیکون سبز): "امضاء با موفقیت در صفحه چاپ درج گردید"
       - موفق (آیکون زرد/هشدار): "امضاء « name » در صفحه ی چاپ درج شده است"
       - خطا (آیکون قرمز): "خطای سرویس ثنا   : رمز موقت نادرست است"
       - خطا: "امضای شخص فلان در سامانه ثنا درج نشده است"
+      - خطا: "خطا: تاخیر در اجرای سرویس" → تکرار همان مرحله
     """
     for _ in range(timeout_sec * 2):
         result = await page.evaluate('''() => {
@@ -865,6 +880,10 @@ async def _wait_for_sign_popup(page, timeout_sec: int = 55) -> str:
                 // تشخیص خطای "امضای شخص ... در سامانه ثنا درج نشده است"
                 if (text.includes("در سامانه ثنا درج نشده")) {
                     return "sana_not_registered";
+                }
+                // تاخیر در اجرای سرویس — باید بستن پاپ‌آپ و تکرار همان مرحله
+                if (text.includes("تاخیر") || text.includes("تأخیر")) {
+                    return "service_delay";
                 }
                 return "error";
             }
