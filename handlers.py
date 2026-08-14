@@ -635,13 +635,13 @@ async def rules_accepted(message: types.Message, state: FSMContext):
 @router.message(Form.waiting_for_flow_type)
 async def process_flow_type(message: types.Message, state: FSMContext):
     if not message.text: return
-    if "تک‌درخواست" in message.text or "تک درخواست" in message.text:
+    if ("تک‌درخواست" in message.text or "تک درخواست" in message.text or ("استعلام" in message.text and "چند" not in message.text)):
         await state.update_data(flow_type="single", cart=[])
         await message.answer("سپاسگزاریم.\nلطفاً نوع خدمت را انتخاب نمایید:", reply_markup=main_menu_kb)
         await state.set_state(Form.main_menu)
-    elif "سبد خرید" in message.text:
+    elif "چند مورد همزمان" in message.text or "سبد خرید" in message.text:
         await state.update_data(flow_type="cart", cart=[])
-        await message.answer("🛒 **حالت سبد خرید فعال شد.**\nلطفاً نوع استعلام اول خود را انتخاب نمایید:", reply_markup=main_menu_kb)
+        await message.answer("📦 **حالت استعلام چند موردی فعال شد.**\nلطفاً نوع استعلام اول خود را انتخاب نمایید:", reply_markup=main_menu_kb)
         await state.set_state(Form.main_menu)
     elif "ثبت لایحه" in message.text:
         from lavayeh_handlers import lavayeh_entry
@@ -666,12 +666,6 @@ async def process_flow_type(message: types.Message, state: FSMContext):
             parse_mode="Markdown"
         )
         await state.set_state(Form.test_mode_tracking_code)
-    elif "2️⃣" in message.text or "شماره تماس" in message.text:
-        await message.answer("📞 لطفاً شماره تماس مورد نظر را ارسال فرمایید:\n(با فرمت 09 آغاز شود)", reply_markup=back_only_kb)
-        await state.set_state(Form.waiting_for_phone_number)
-    elif "3️⃣" in message.text or "کدملی" in message.text or "کد ملی" in message.text:
-        await message.answer("👤 لطفاً کد ملی مورد نظر را ارسال فرمایید:\n(یک عدد ۱۰ رقمی)", reply_markup=back_only_kb)
-        await state.set_state(Form.waiting_for_national_id)
 
 async def _show_cart(message: types.Message, state: FSMContext):
     data = await state.get_data()

@@ -8,12 +8,11 @@ accept_rules_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ قوا
 
 flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="2️⃣ استعلام براساس شماره تماس"), KeyboardButton(text="3️⃣ استعلام براساس کدملی")],
-        [KeyboardButton(text="1️⃣ استعلام (تک درخواست)"), KeyboardButton(text="🧪 تست")],
-        [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)"), KeyboardButton(text="📝 ثبت لایحه")],
-        [KeyboardButton(text="📋 ثبت اظهارنامه"), KeyboardButton(text="⚖️ دعاوی اعتراضی")],
-        [KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
-        [KeyboardButton(text="🛠 ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)")],
+        [KeyboardButton(text="🔍 استعلام"), KeyboardButton(text="📦 استعلام (چند مورد همزمان)")],
+        [KeyboardButton(text="✍️ ثبت لایحه"), KeyboardButton(text="📄 ثبت اظهارنامه")],
+        [KeyboardButton(text="⚖️ دعاوی اعتراضی"), KeyboardButton(text="💰 محاسبه تمبر")],
+        [KeyboardButton(text="🔧 ابزار فایل")],
+        [KeyboardButton(text="🧪 تست")],
     ], resize_keyboard=True)
 
 # =========================================================

@@ -163,7 +163,8 @@ class Form(StatesGroup):
     tn_case_type = State()
     tn_judge_no = State()
     tn_file_no = State()
-    tn_file_no_row = State()
+    # tn_file_no_row حذف شد
+    tn_order_no = State()  # شماره قرار (فقط اعتراض به قرار دادسرا)
     tn_judge_date = State()
     tn_province = State()
     tn_doc_type = State()
@@ -195,6 +196,16 @@ class Form(StatesGroup):
     tn_sana_error_new_national_id = State()
 
     # =========================================================
+
+    # State های بخش اخذ امضای الکترونیک دعاوی اعتراضی
+    tn_sign_ready = State()
+    tn_sign_person_select = State()
+    tn_sign_code_input = State()
+    tn_sign_resend_prompt = State()
+    tn_sign_later_prompt = State()
+    tn_sign_wrong_code_wait = State()
+    tn_sign_no_action_timeout = State()
+
     # State های بخش تست مدیر (منضمات / امضا)
     # =========================================================
     test_mode_tracking_code = State()
