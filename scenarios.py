@@ -621,6 +621,12 @@ async def process_task(data, bot: Bot):
         await process_ezhharnameh_task(data, bot)
         return
 
+    # ── سناریوی ثبت دعاوی چک ──────────────────────────────────────────────
+    if task_type == "CHECK_SUBMIT":
+        from check_scenario import process_check_task
+        await process_check_task(data, bot)
+        return
+
     # ── سناریوهای دعاوی اعتراضی ────────────────────────────────────────
     TN_TASK_TYPES = [
         "TN_APPEAL", "TN_REHEARING", "TN_SUPREME",

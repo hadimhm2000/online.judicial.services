@@ -12,6 +12,7 @@ flow_type_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)")],
         [KeyboardButton(text="📝 ثبت لایحه")],
         [KeyboardButton(text="📋 ثبت اظهارنامه")],
+        [KeyboardButton(text="🏦 ثبت دعاوی چک")],
         [KeyboardButton(text="🧮 محاسبه تمبر مالیاتی وکیل")],
         [KeyboardButton(text="🛠 ابزار فایل (کاهش حجم عکس / تبدیل PDF به عکس)")],
     ], resize_keyboard=True)
@@ -606,3 +607,61 @@ subscription_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+# =========================================================
+# کیبوردهای بخش ثبت دعاوی چک
+# =========================================================
+
+check_choice_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📊 دانلود فایل اکسل و ثبت دسته‌جمعی")],
+        [KeyboardButton(text="1️⃣ ثبت تکی (روال عادی)")],
+        [KeyboardButton(text="🔙 بازگشت به منوی اصلی")],
+    ], resize_keyboard=True)
+
+check_request_title_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="صدور اجرائیه چک"), KeyboardButton(text="مطالبه وجه چک")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True)
+
+check_edit_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 ویرایش عنوان خواسته")],
+        [KeyboardButton(text="💰 ویرایش مبلغ چک")],
+        [KeyboardButton(text="📄 ویرایش عنوان خواسته (متن)")],
+        [KeyboardButton(text="🔢 ویرایش کدرهگیری")],
+        [KeyboardButton(text="👤 ویرایش خواهان(ها)")],
+        [KeyboardButton(text="👥 ویرایش خوانده(ها)")],
+        [KeyboardButton(text="🔍 ویرایش مطلع/گواه")],
+        [KeyboardButton(text="📋 ویرایش شرح متن")],
+        [KeyboardButton(text="🖼 ویرایش تصاویر چک")],
+        [KeyboardButton(text="🏛 ویرایش صلاحیت دادگاه")],
+        [KeyboardButton(text="🔙 بازگشت به پیش‌نمایش")],
+    ], resize_keyboard=True)
+
+check_confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ تایید و شروع ثبت")],
+        [KeyboardButton(text="✏️ ویرایش اطلاعات")],
+    ], resize_keyboard=True)
+
+check_extra_text_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⏭ رد شدن (بدون توضیحات اضافی)")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True)
+
+check_more_images_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ تصویر چک بعدی یا مدرک دیگری نیز دارم")],
+        [KeyboardButton(text="✅ ندارم و ادامه مراحل")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True)
+
+check_docx_option_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📄 ارسال فایل ورد (Word)")],
+        [KeyboardButton(text="⏭ رد شدن (بدون فایل ورد)")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True)

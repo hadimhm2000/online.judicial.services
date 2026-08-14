@@ -10,8 +10,8 @@ flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔍 استعلام"), KeyboardButton(text="📦 استعلام (چند مورد همزمان)")],
         [KeyboardButton(text="✍️ ثبت لایحه"), KeyboardButton(text="📄 ثبت اظهارنامه")],
-        [KeyboardButton(text="⚖️ دعاوی اعتراضی"), KeyboardButton(text="💰 محاسبه تمبر")],
-        [KeyboardButton(text="🔧 ابزار فایل")],
+        [KeyboardButton(text="⚖️ دعاوی اعتراضی"), KeyboardButton(text="🏦 ثبت دادخواست چک")],
+        [KeyboardButton(text="💰 محاسبه تمبر"), KeyboardButton(text="🔧 ابزار فایل")],
         [KeyboardButton(text="🧪 تست")],
     ], resize_keyboard=True)
 
@@ -838,6 +838,71 @@ test_mode_att_more_kb = ReplyKeyboardMarkup(
         [KeyboardButton(text="➕ بله، عنوان و مدرک دیگر دارم")],
         [KeyboardButton(text="✅ خیر، ادامه بده")],
         [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+# =========================================================
+# کیبوردهای بخش ثبت دعاوی چک
+# =========================================================
+
+check_choice_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="1️⃣ ثبت تکی (روال عادی)")],
+        [KeyboardButton(text="📊 دانلود فایل اکسل و ثبت دسته‌جمعی")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ],
+    resize_keyboard=True
+)
+
+check_request_title_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="صدور اجرائیه چک"), KeyboardButton(text="مطالبه وجه چک")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ],
+    resize_keyboard=True
+)
+
+check_confirm_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ تایید و شروع ثبت"), KeyboardButton(text="✏️ ویرایش اطلاعات")],
+        [KeyboardButton(text="❌ انصراف")],
+    ],
+    resize_keyboard=True
+)
+
+check_edit_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📝 ویرایش عنوان خواسته"), KeyboardButton(text="💰 ویرایش مبلغ چک")],
+        [KeyboardButton(text="📄 ویرایش عنوان خواسته (متن)"), KeyboardButton(text="🔢 ویرایش کدرهگیری")],
+        [KeyboardButton(text="👤 ویرایش خواهان(ها)"), KeyboardButton(text="👥 ویرایش خوانده(ها)")],
+        [KeyboardButton(text="🔍 ویرایش مطلع/گواه"), KeyboardButton(text="📋 ویرایش شرح متن")],
+        [KeyboardButton(text="🖼 ویرایش تصاویر چک"), KeyboardButton(text="🏛 ویرایش صلاحیت دادگاه")],
+        [KeyboardButton(text="🔙 بازگشت به پیش‌نمایش")],
+    ],
+    resize_keyboard=True
+)
+
+check_extra_text_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ بله، توضیحات اضافی دارم")],
+        [KeyboardButton(text="❌ خیر، ادامه بده")],
+    ],
+    resize_keyboard=True
+)
+
+check_more_images_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ بله، تصویر یا مدرک دیگری دارم")],
+        [KeyboardButton(text="✅ خیر، ادامه به انتخاب دادگاه")],
+    ],
+    resize_keyboard=True
+)
+
+check_docx_option_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📎 ارسال فایل ورد (.docx)")],
+        [KeyboardButton(text="⌨️ تایپ مستقیم متن")],
     ],
     resize_keyboard=True
 )

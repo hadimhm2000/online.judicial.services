@@ -214,3 +214,33 @@ class Form(StatesGroup):
     test_mode_attachment_title = State()
     test_mode_attachment_images = State()
     test_mode_attachment_more = State()
+
+    # =========================================================
+    # State های بخش ثبت دعاوی چک
+    # =========================================================
+    check_request_type = State()          # انتخاب تکی یا دسته‌جمعی
+    check_bulk_input_method = State()     # انتخاب نوع فایل (اکسل)
+    check_bulk_file_upload = State()      # دریافت فایل اکسل
+    check_request_title = State()         # انتخاب عنوان خواسته (صدور اجرائیه / مطالبه وجه)
+    check_amount = State()                # مبلغ چک به ریال
+    check_khasteh_title = State()         # عنوان خواسته (ویرایش متن پیشنهادی)
+    check_tracking_no = State()           # کدرهگیری چک
+    check_plaintiff_person_type = State() # نوع شخصیت خواهان
+    check_plaintiff_company_id = State()  # شناسه ملی شرکت خواهان
+    check_plaintiff_representative_type = State()  # سمت نماینده خواهان
+    check_plaintiff_national_id = State() # کدملی خواهان
+    check_plaintiff_more = State()        # افزودن خواهان دیگر
+    check_defendant_person_type = State() # نوع شخصیت خوانده
+    check_defendant_company_id = State()  # شناسه ملی شرکت خوانده
+    check_defendant_representative_type = State()  # سمت نماینده خوانده
+    check_defendant_national_id = State() # کدملی خوانده
+    check_defendant_more = State()        # افزودن خوانده دیگر
+    check_witness_national_id = State()   # کدملی مطلع/گواه
+    check_more_witnesses = State()        # افزودن مطلع دیگر
+    check_text = State()                  # شرح متن دادخواست
+    check_extra_text = State()            # توضیحات جداگانه برای مقام قضائی
+    check_images = State()                # دریافت تصاویر چک (حداکثر ۳)
+    check_more_images = State()           # آیا تصویر یا مدرک دیگری دارید؟
+    check_branch_code = State()           # انتخاب صلاحیت دادگاه (شعبه)
+    check_confirm = State()               # پیش‌نمایش و تایید
+    check_edit_choice = State()           # انتخاب بخش ویرایش

@@ -39,6 +39,7 @@ from ezhharnameh_handlers import ezhharnameh_router
 from tajdid_nazar_handlers import tajdid_nazar_router
 from file_tools_handlers import file_tools_router, file_tools_entry
 from subscription_handlers import subscription_router, subscription_expiry_checker
+from check_handlers import check_router
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,7 @@ router.include_router(ezhharnameh_router)
 router.include_router(tajdid_nazar_router)
 router.include_router(file_tools_router)
 router.include_router(subscription_router)
+router.include_router(check_router)
 
 
 # ── نگهبان: مسدودسازی کاربرانی که فاکتور لایحه کنسل‌شده را پرداخت نکرده‌اند ──
@@ -655,6 +657,9 @@ async def process_flow_type(message: types.Message, state: FSMContext):
     elif "دعاوی اعتراضی" in message.text:
         from tajdid_nazar_handlers import tajdid_nazar_entry
         await tajdid_nazar_entry(message, state)
+    elif "دادخواست چک" in message.text:
+        from check_handlers import check_entry
+        await check_entry(message, state)
     elif "ابزار فایل" in message.text:
         await file_tools_entry(message, state)
     elif "تست" in message.text and message.from_user.id == ADMIN_ID:
