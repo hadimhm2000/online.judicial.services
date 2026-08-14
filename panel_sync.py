@@ -85,15 +85,15 @@ async def register_case_to_panel(
             ) as resp:
                 if resp.status == 200 or resp.status == 201:
                     data = await resp.json()
+                    if data.get("_duplicate"):
+                        logger.info(
+                            f"[PANEL_SYNC] Case تکراری شناسایی شد: type={service_type} "
+                            f"user={telegram_id} tracking={tracking_code}"
+                        )
+                        return data
                     logger.info(
                         f"[PANEL_SYNC] Case ثبت شد: id={data.get('id', '?')} "
                         f"type={service_type} user={telegram_id} tracking={tracking_code}"
-                    )
-                    return data
-                elif resp.status == 200 and data.get("_duplicate"):
-                    logger.info(
-                        f"[PANEL_SYNC] Case تکراری شناسایی شد: type={service_type} "
-                        f"user={telegram_id} tracking={tracking_code}"
                     )
                     return data
                 else:

@@ -887,6 +887,19 @@ async def process_task(data, bot: Bot):
                         except Exception:
                             pass
 
+                # ── ثبت استعلام شماره تماس در پنل ادمین ──
+                try:
+                    await register_inquiry_to_panel(
+                        user_id=user_id,
+                        full_name=data.get('full_name', ''),
+                        tracking_code=phone_number,
+                        doc_category="شماره تماس",
+                        fee=data.get('payment_fee', 0),
+                        result_summary=f"استعلام شماره تماس - {len(persons)} نفر یافت شد"
+                    )
+                except Exception as panel_err:
+                    logger.warning(f"خطا در ثبت استعلام شماره تماس: {panel_err}")
+
                 await sana_page.goto("https://sakha2.adliran.ir/Offices/Index")
                 await bot.send_message(ADMIN_ID, f"✅ پردازش موبایل {phone_number} تمام شد.")
                 return
@@ -947,6 +960,19 @@ async def process_task(data, bot: Bot):
                     await bot.send_message(
                         user_id, f"❌ ساخت PDF برای کدملی `{national_id}` ناموفق بود."
                     )
+
+                # ── ثبت استعلام کد ملی در پنل ادمین ──
+                try:
+                    await register_inquiry_to_panel(
+                        user_id=user_id,
+                        full_name=data.get('full_name', ''),
+                        tracking_code=national_id,
+                        doc_category="کد ملی",
+                        fee=data.get('payment_fee', 0),
+                        result_summary=f"استعلام کد ملی - {national_id}"
+                    )
+                except Exception as panel_err:
+                    logger.warning(f"خطا در ثبت استعلام کد ملی: {panel_err}")
 
                 await sana_page.goto("https://sakha2.adliran.ir/Offices/Index")
                 await bot.send_message(ADMIN_ID, f"✅ پردازش کد ملی {national_id} تمام شد.")

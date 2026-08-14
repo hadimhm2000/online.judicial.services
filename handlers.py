@@ -642,11 +642,11 @@ async def rules_accepted(message: types.Message, state: FSMContext):
 async def process_flow_type(message: types.Message, state: FSMContext):
     if not message.text: return
     if ("تک‌درخواست" in message.text or "تک درخواست" in message.text or ("استعلام" in message.text and "چند" not in message.text)):
-        await state.update_data(flow_type="single", cart=[])
+        await state.update_data(flow_type="single", cart=[], full_name=message.from_user.full_name)
         await message.answer("سپاسگزاریم.\nلطفاً نوع خدمت را انتخاب نمایید:", reply_markup=main_menu_kb)
         await state.set_state(Form.main_menu)
     elif "چند مورد همزمان" in message.text or "سبد خرید" in message.text:
-        await state.update_data(flow_type="cart", cart=[])
+        await state.update_data(flow_type="cart", cart=[], full_name=message.from_user.full_name)
         await message.answer("📦 **حالت استعلام چند موردی فعال شد.**\nلطفاً نوع استعلام اول خود را انتخاب نمایید:", reply_markup=main_menu_kb)
         await state.set_state(Form.main_menu)
     elif "ثبت لایحه" in message.text:
@@ -760,7 +760,9 @@ async def process_main_menu(message: types.Message, state: FSMContext):
                     'doc_category': item.get('doc_category'),
                     'doc_subcategory': item.get('doc_subcategory'),
                     'doc_type': f"{item.get('doc_category')} - {item.get('doc_subcategory')}" if item.get('doc_subcategory') else item.get('doc_category'),
-                    'need_attachments': item.get('need_attachments', False)
+                    'need_attachments': item.get('need_attachments', False),
+                    'full_name': message.from_user.full_name,
+                    'payment_fee': item.get('fee', 0),
                 })
             await state.clear()
             return
