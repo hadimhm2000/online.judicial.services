@@ -48,6 +48,8 @@ import {
   Trash2,
   Loader2,
   Wrench,
+  PenLine,
+  XCircle,
 } from 'lucide-react';
 import {
   Sheet,
@@ -73,6 +75,7 @@ export interface CaseItem {
   fee: number;
   feeStatus: string;
   isInReadyToSend: boolean;
+  hasSignature: boolean;
   errorDetails: string | null;
   errorStep: string | null;
   lastCompletedStep: string | null;
@@ -87,7 +90,7 @@ export interface CaseItem {
   rowNumber: string | null;
 }
 
-type ColumnKey = 'name' | 'serviceType' | 'status' | 'fee' | 'feeStatus' | 'branch' | 'date' | 'trackingCode' | 'actions';
+type ColumnKey = 'name' | 'serviceType' | 'status' | 'fee' | 'feeStatus' | 'branch' | 'date' | 'trackingCode' | 'signature' | 'actions';
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
   name: 'نام کاربر',
@@ -98,6 +101,7 @@ const COLUMN_LABELS: Record<ColumnKey, string> = {
   branch: 'شعبه / استان',
   date: 'تاریخ',
   trackingCode: 'کد پیگیری',
+  signature: 'امضا',
   actions: 'عملیات',
 };
 
@@ -110,6 +114,7 @@ const DEFAULT_COLUMN_VISIBILITY: Record<ColumnKey, boolean> = {
   branch: true,
   date: true,
   trackingCode: true,
+  signature: true,
   actions: true,
 };
 
@@ -135,6 +140,8 @@ function loadColumnVisibility(): Record<ColumnKey, boolean> {
   const defaults = { ...DEFAULT_COLUMN_VISIBILITY };
   if (isMobileWidth()) {
     defaults.branch = false;
+    defaults.signature = false;
+    defaults.trackingCode = false;
   }
   return defaults;
 }
@@ -599,6 +606,11 @@ const CasesTableMemo = React.memo(function CasesTable({
                     </button>
                   </TableHead>
                 )}
+                {columnVisibility.signature && (
+                  <TableHead className="px-3 py-3 text-xs font-semibold text-center">
+                    {'امضا'}
+                  </TableHead>
+                )}
                 {showConfirmButton && (
                   <TableHead className="px-3 py-3 text-xs font-semibold text-center">
                     {'تأیید ارسال'}
@@ -655,7 +667,7 @@ const CasesTableMemo = React.memo(function CasesTable({
                     <TableCell className="px-3 py-3">
                       <div>
                         <p className="font-medium text-sm hover:text-primary transition-colors" onClick={(e) => { e.stopPropagation(); onUserClick?.(c); }}>{c.fullName}</p>
-                        <p className="text-[11px] text-muted-foreground font-mono" dir="ltr">
+                        <p className="text-[11px] text-blue-600 dark:text-blue-400 font-mono font-medium" dir="ltr" onClick={(e) => { e.stopPropagation(); onUserClick?.(c); }}>
                           ID: {c.telegramId}
                         </p>
                       </div>
@@ -768,6 +780,23 @@ const CasesTableMemo = React.memo(function CasesTable({
                       <p className="text-[10px] text-muted-foreground/70 nums-align">
                         {formatDate(c.createdAt)}
                       </p>
+                    </TableCell>
+                  )}
+                  {columnVisibility.signature && (
+                    <TableCell className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                      {c.serviceType === 'INQUIRY' ? (
+                        <span className="text-[10px] text-muted-foreground">{'—'}</span>
+                      ) : c.hasSignature ? (
+                        <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px] gap-1">
+                          <PenLine className="h-3 w-3" />
+                          {'دارای امضا'}
+                        </Badge>
+                      ) : (
+                        <Badge className="bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300 text-[10px] gap-1">
+                          <XCircle className="h-3 w-3" />
+                          {'بدون امضا'}
+                        </Badge>
+                      )}
                     </TableCell>
                   )}
                   {showConfirmButton && (

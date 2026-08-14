@@ -1,3 +1,4 @@
+@'
 import { db } from '@/lib/db';
 import { NextResponse } from 'next/server';
 
@@ -17,13 +18,13 @@ export async function GET() {
       unpaidRevenue,
     ] = await Promise.all([
       db.case.count(),
-      db.case.count({ where: { status: 'COMPLETED' } }),
-      db.case.count({ where: { status: 'INCOMPLETE' } }),
-      db.case.count({ where: { feeStatus: 'UNPAID' } }),
-      db.case.count({ where: { isInReadyToSend: true } }),
-      db.case.count({ where: { status: 'FAILED' } }),
-      db.case.count({ where: { status: 'CANCELLED' } }),
-      db.case.count({ where: { status: 'PROCESSING' } }),
+      db.case.count({ where: { status: 'COMPLETED', serviceType: { not: 'INQUIRY' } } }),
+      db.case.count({ where: { status: 'INCOMPLETE', serviceType: { not: 'INQUIRY' } } }),
+      db.case.count({ where: { feeStatus: 'UNPAID', serviceType: { not: 'INQUIRY' } } }),
+      db.case.count({ where: { isInReadyToSend: true, serviceType: { not: 'INQUIRY' } } }),
+      db.case.count({ where: { status: 'FAILED', serviceType: { not: 'INQUIRY' } } }),
+      db.case.count({ where: { status: 'CANCELLED', serviceType: { not: 'INQUIRY' } } }),
+      db.case.count({ where: { status: 'PROCESSING', serviceType: { not: 'INQUIRY' } } }),
       db.case.count({
         where: {
           createdAt: {
@@ -41,13 +42,11 @@ export async function GET() {
       }),
     ]);
 
-    // Service type breakdown
     const serviceBreakdown = await db.case.groupBy({
       by: ['serviceType'],
       _count: { id: true },
     });
 
-    // Daily cases for the last 7 days
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);
     const dailyCases = await db.case.groupBy({
       by: ['createdAt'],
@@ -75,3 +74,4 @@ export async function GET() {
     return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 500 });
   }
 }
+'@ | Set-Content -Path "src\app\api\admin\stats\route.ts" -Encoding UTF8

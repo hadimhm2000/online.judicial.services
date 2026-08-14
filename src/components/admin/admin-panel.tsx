@@ -16,7 +16,7 @@ import {
   Search, Download, Filter,
   LayoutDashboard, FileCheck2, FileWarning, CreditCard, Send, AlertTriangle, ListChecks, XCircle, Activity,
   ChevronDown, ChevronLeft, CalendarDays, ArrowUp, Zap, ClipboardCheck, Check, Paperclip,
-  Settings, Users, FileSpreadsheet, Printer, Keyboard,
+  Settings, Users, FileSpreadsheet, Printer, Keyboard, Sun, Moon, MessageSquare,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -82,23 +82,26 @@ interface TabConfig {
   badgeColor?: string;
   showConfirm?: boolean;
   showIntervention?: boolean;
+  isServiceType?: string;
+  excludeInquiry?: boolean;
 }
 
 const TABS: TabConfig[] = [
-  { key: 'all', label: 'همه پرونده‌ها', icon: LayoutDashboard, apiParam: '' },
-  { key: 'completed', label: 'ثبت شده', icon: FileCheck2, apiParam: 'COMPLETED', badgeColor: 'bg-emerald-500' },
-  { key: 'incomplete', label: 'ناقص', icon: FileWarning, apiParam: 'INCOMPLETE', badgeColor: 'bg-amber-500', showIntervention: true },
-  { key: 'unpaid', label: 'پرداخت نشده', icon: CreditCard, apiParam: 'PENDING_PAYMENT', badgeColor: 'bg-rose-500' },
+  { key: 'all', label: 'همه پرونده‌ها', icon: LayoutDashboard, apiParam: '', excludeInquiry: true },
+  { key: 'inquiry', label: 'استعلامات', icon: Search, apiParam: '', badgeColor: 'bg-blue-500', isServiceType: 'INQUIRY' },
+  { key: 'completed', label: 'ثبت شده', icon: FileCheck2, apiParam: 'COMPLETED', badgeColor: 'bg-emerald-500', excludeInquiry: true },
+  { key: 'incomplete', label: 'ناقص', icon: FileWarning, apiParam: 'INCOMPLETE', badgeColor: 'bg-amber-500', showIntervention: true, excludeInquiry: true },
+  { key: 'unpaid', label: 'پرداخت نشده', icon: CreditCard, apiParam: 'PENDING_PAYMENT', badgeColor: 'bg-rose-500', excludeInquiry: true },
   { key: 'ready', label: 'آماده ارسال', icon: Send, apiParam: '', badgeColor: 'bg-sky-500', showConfirm: true },
-  { key: 'failed', label: 'شکست خورده', icon: AlertTriangle, apiParam: 'FAILED', badgeColor: 'bg-red-500', showIntervention: true },
-  { key: 'cancelled', label: 'لغو شده', icon: XCircle, apiParam: 'CANCELLED' },
+  { key: 'failed', label: 'شکست خورده', icon: AlertTriangle, apiParam: 'FAILED', badgeColor: 'bg-red-500', showIntervention: true, excludeInquiry: true },
+  { key: 'cancelled', label: 'لغو شده', icon: XCircle, apiParam: 'CANCELLED', excludeInquiry: true },
 ];
 
 const SHORTCUTS = [
   { key: 'R', label: 'بروزرسانی' },
   { key: '/ یا S', label: 'جستجو' },
   { key: 'F', label: 'فیلتر' },
-  { key: '1-7', label: 'تب‌ها' },
+  { key: '1-8', label: 'تب‌ها' },
   { key: 'Esc', label: 'خروج تمام صفحه' },
 ];
 
@@ -241,8 +244,10 @@ export default function AdminPanel() {
       const params = new URLSearchParams();
       if (tab?.apiParam) params.set('status', tab.apiParam);
       if (activeTab === 'ready') params.set('readyToSend', 'true');
+      if (tab?.isServiceType) params.set('serviceType', tab.isServiceType);
+      if (tab?.excludeInquiry) params.set('excludeInquiry', 'true');
       if (search) params.set('search', search);
-      if (serviceFilter !== 'all') params.set('serviceType', serviceFilter);
+      if (serviceFilter !== 'all' && activeTab !== 'inquiry') params.set('serviceType', serviceFilter);
       if (dateFrom) params.set('dateFrom', dateFrom);
       if (dateTo) params.set('dateTo', dateTo);
       if (sortBy) params.set('sortBy', sortBy);
@@ -415,6 +420,8 @@ export default function AdminPanel() {
       const params = new URLSearchParams();
       if (tab?.apiParam) params.set('status', tab.apiParam);
       if (activeTab === 'ready') params.set('readyToSend', 'true');
+      if (tab?.isServiceType) params.set('serviceType', tab.isServiceType);
+      if (tab?.excludeInquiry) params.set('excludeInquiry', 'true');
       if (search) params.set('search', search);
       params.set('limit', '1000');
       const res = await fetch(`/api/admin/cases?${params}`);
@@ -434,6 +441,34 @@ export default function AdminPanel() {
   };
 
   const handlePrint = () => window.print();
+
+  const handleConfirmSendAll = useCallback(async () => {
+    setBatchConfirmSending(true);
+    try {
+      // Fetch ALL ready-to-send case IDs (not just selected ones)
+      const params = new URLSearchParams();
+      params.set('readyToSend', 'true');
+      params.set('limit', '1000');
+      const res = await fetch(`/api/admin/cases?${params}`);
+      if (!res.ok) { toast.error('خطا در دریافت لیست'); return; }
+      const data = await res.json();
+      const allIds = (data.cases as CaseItem[]).map((c: CaseItem) => c.id);
+      if (allIds.length === 0) { toast.error('موردی برای ارسال وجود ندارد'); return; }
+
+      const batchRes = await fetch('/api/admin/cases/batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: allIds, action: 'CONFIRM_SEND_ALL' }),
+      });
+      if (batchRes.ok) {
+        const batchData = await batchRes.json();
+        toast.success(batchData.message || `${new Intl.NumberFormat('fa-IR').format(allIds.length)} پرونده تأیید و ارسال شد`);
+        setBatchConfirmDone(true); setTimeout(() => setBatchConfirmDone(false), 3000);
+        setShowConfetti(true); setSelectedIds(new Set());
+        fetchCases(); fetchStats(); fetchActivityCount();
+      } else { toast.error('خطا در تأیید دسته‌ای'); }
+    } catch { toast.error('خطا در ارتباط با سرور'); }
+    finally { setBatchConfirmSending(false); }
+  }, [fetchCases, fetchStats, fetchActivityCount]);
 
   const handleBatchConfirmSend = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -558,6 +593,7 @@ export default function AdminPanel() {
                       : tab.key === 'unpaid' ? stats.unpaid
                       : tab.key === 'failed' ? stats.failed
                       : tab.key === 'ready' ? stats.readyToSend
+                      : tab.key === 'inquiry' ? (stats.serviceBreakdown?.find((s: { serviceType: string }) => s.serviceType === 'INQUIRY')?._count?.id || 0)
                       : 0
                     : 0;
                   const hasNonZeroBadge = badgeValue > 0;
@@ -575,6 +611,11 @@ export default function AdminPanel() {
                           {tab.key === 'incomplete' && stats.incomplete}
                           {tab.key === 'unpaid' && stats.unpaid}
                           {tab.key === 'failed' && stats.failed}
+                        </Badge>
+                      )}
+                      {stats && tab.key === 'inquiry' && (
+                        <Badge className={cn('h-5 min-w-5 px-1.5 text-[10px] font-bold rounded-full text-white bg-blue-500', hasNonZeroBadge && 'animate-badge-pulse')}>
+                          {stats.serviceBreakdown?.find((s: { serviceType: string }) => s.serviceType === 'INQUIRY')?._count?.id || 0}
                         </Badge>
                       )}
                       {stats && tab.key === 'ready' && (
@@ -759,18 +800,29 @@ export default function AdminPanel() {
                 <div className="h-10 w-10 rounded-full bg-sky-100 dark:bg-sky-900/30 flex items-center justify-center shrink-0"><ClipboardCheck className="h-5 w-5 text-sky-600" /></div>
                 <div>
                   <p className="text-sm font-bold text-sky-700 dark:text-sky-300">{new Intl.NumberFormat('fa-IR').format(stats.readyToSend)} {'پرونده برای ارسال آماده است'}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{'آیتم‌های مورد نظر را انتخاب کنید و دکمه تایید و ارسال را بزنید'}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{'آیتم‌های مورد نظر را انتخاب کنید یا همه را یکجا ارسال کنید'}</p>
                 </div>
               </div>
-              {selectedIds.size > 0 && (
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs font-medium text-sky-600 dark:text-sky-400">{new Intl.NumberFormat('fa-IR').format(selectedIds.size)} {'انتخاب شده'}</span>
-                  <Button size="sm" className={cn('h-10 gap-2 text-xs shadow-md', batchConfirmDone ? 'bg-emerald-500' : 'bg-sky-600 hover:bg-sky-700')} onClick={handleBatchConfirmSend} disabled={batchConfirmSending}>
-                    {batchConfirmSending ? <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : batchConfirmDone ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
-                    {batchConfirmDone ? 'انجام شد!' : 'تایید و ارسال'}
-                  </Button>
-                </div>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  size="sm"
+                  className="h-10 gap-2 text-xs shadow-md bg-gradient-to-l from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white"
+                  onClick={handleConfirmSendAll}
+                  disabled={batchConfirmSending}
+                >
+                  {batchConfirmSending ? <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Send className="h-4 w-4" />}
+                  {'تایید و ارسال همه'}
+                </Button>
+                {selectedIds.size > 0 && (
+                  <>
+                    <span className="text-xs font-medium text-sky-600 dark:text-sky-400">{new Intl.NumberFormat('fa-IR').format(selectedIds.size)} {'انتخاب شده'}</span>
+                    <Button size="sm" className={cn('h-10 gap-2 text-xs shadow-md', batchConfirmDone ? 'bg-emerald-500' : 'bg-sky-600 hover:bg-sky-700')} onClick={handleBatchConfirmSend} disabled={batchConfirmSending}>
+                      {batchConfirmSending ? <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : batchConfirmDone ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                      {batchConfirmDone ? 'انجام شد!' : 'تایید انتخاب‌شده‌ها'}
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -797,7 +849,7 @@ export default function AdminPanel() {
           <span className="flex items-center gap-1"><kbd className="kbd-shortcut">R</kbd>بروزرسانی</span>
           <span className="flex items-center gap-1"><kbd className="kbd-shortcut">/</kbd>جستجو</span>
           <span className="flex items-center gap-1"><kbd className="kbd-shortcut">F</kbd>فیلتر</span>
-          <span className="flex items-center gap-1"><kbd className="kbd-shortcut">1-7</kbd>تب‌ها</span>
+          <span className="flex items-center gap-1"><kbd className="kbd-shortcut">1-8</kbd>تب‌ها</span>
         </div>
       </main>
 
@@ -864,12 +916,13 @@ export default function AdminPanel() {
         { id: 'export-excel', label: 'خروجی Excel', icon: FileSpreadsheet, group: 'خروجی', onSelect: () => handleExport('excel') },
         { id: 'print', label: 'چاپ', icon: Printer, group: 'خروجی', onSelect: handlePrint },
         { id: 'tab-all', label: 'همه پرونده‌ها', icon: LayoutDashboard, shortcut: '1', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('all') },
-        { id: 'tab-completed', label: 'ثبت شده', icon: FileCheck2, shortcut: '2', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('completed') },
-        { id: 'tab-incomplete', label: 'ناقص', icon: FileWarning, shortcut: '3', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('incomplete') },
-        { id: 'tab-unpaid', label: 'پرداخت نشده', icon: CreditCard, shortcut: '4', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('unpaid') },
-        { id: 'tab-ready', label: 'آماده ارسال', icon: Send, shortcut: '5', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('ready') },
-        { id: 'tab-failed', label: 'شکست خورده', icon: AlertTriangle, shortcut: '6', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('failed') },
-        { id: 'tab-cancelled', label: 'لغو شده', icon: XCircle, shortcut: '7', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('cancelled') },
+        { id: 'tab-inquiry', label: 'استعلامات', icon: Search, shortcut: '2', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('inquiry') },
+        { id: 'tab-completed', label: 'ثبت شده', icon: FileCheck2, shortcut: '3', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('completed') },
+        { id: 'tab-incomplete', label: 'ناقص', icon: FileWarning, shortcut: '4', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('incomplete') },
+        { id: 'tab-unpaid', label: 'پرداخت نشده', icon: CreditCard, shortcut: '5', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('unpaid') },
+        { id: 'tab-ready', label: 'آماده ارسال', icon: Send, shortcut: '6', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('ready') },
+        { id: 'tab-failed', label: 'شکست خورده', icon: AlertTriangle, shortcut: '7', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('failed') },
+        { id: 'tab-cancelled', label: 'لغو شده', icon: XCircle, shortcut: '8', group: 'تب‌های داشبورد', onSelect: () => handleTabChange('cancelled') },
         { id: 'toggle-charts', label: stats && showCharts ? 'مخفی کردن نمودارها' : 'نمایش نمودارها', icon: ListChecks, group: 'تنظیمات', onSelect: () => setShowCharts(v => !v) },
         { id: 'toggle-theme', label: theme === 'dark' ? 'حالت روشن' : 'حالت تاریک', icon: theme === 'dark' ? Sun : Moon, group: 'تنظیمات', onSelect: () => setTheme(theme === 'dark' ? 'light' : 'dark') },
         { id: 'activity', label: 'تاریخچه فعالیت‌ها', icon: Activity, group: 'تنظیمات', onSelect: () => setActivityOpen(true) },
