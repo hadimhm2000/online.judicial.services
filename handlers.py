@@ -666,6 +666,12 @@ async def process_flow_type(message: types.Message, state: FSMContext):
             parse_mode="Markdown"
         )
         await state.set_state(Form.test_mode_tracking_code)
+    elif "2️⃣" in message.text or "شماره تماس" in message.text:
+        await message.answer("📞 لطفاً شماره تماس مورد نظر را ارسال فرمایید:\n(با فرمت 09 آغاز شود)", reply_markup=back_only_kb)
+        await state.set_state(Form.waiting_for_phone_number)
+    elif "3️⃣" in message.text or "کدملی" in message.text or "کد ملی" in message.text:
+        await message.answer("👤 لطفاً کد ملی مورد نظر را ارسال فرمایید:\n(یک عدد ۱۰ رقمی)", reply_markup=back_only_kb)
+        await state.set_state(Form.waiting_for_national_id)
 
 async def _show_cart(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -1191,6 +1197,8 @@ async def test_mode_doc_type(message: types.Message, state: FSMContext):
         doc_type = "لایحه"
     elif "اظهارنامه" in message.text:
         doc_type = "اظهارنامه"
+    elif "اعتراضی" in message.text:
+        doc_type = "دعاوی اعتراضی"
     else:
         await message.answer("لطفاً یکی از گزینه‌های بالا را انتخاب کنید:", reply_markup=test_mode_doc_type_kb)
         return
@@ -1234,6 +1242,11 @@ async def test_mode_section_select(message: types.Message, state: FSMContext):
             parse_mode="Markdown"
         )
         await state.set_state(Form.test_mode_attachment_title)
+
+    elif "ثبت کامل" in message.text and "اعتراضی" in message.text:
+        # تست ثبت کامل دعوی اعتراضی — ورود به فلوی دعاوی اعتراضی
+        from tajdid_nazar_handlers import tajdid_nazar_entry
+        await tajdid_nazar_entry(message, state)
 
     elif "امضا" in message.text:
         await message.answer(

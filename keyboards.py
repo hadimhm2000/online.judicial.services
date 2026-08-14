@@ -8,6 +8,7 @@ accept_rules_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ قوا
 
 flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
+        [KeyboardButton(text="2️⃣ استعلام براساس شماره تماس"), KeyboardButton(text="3️⃣ استعلام براساس کدملی")],
         [KeyboardButton(text="1️⃣ استعلام (تک درخواست)"), KeyboardButton(text="🧪 تست")],
         [KeyboardButton(text="🛒 ثبت سبد خرید (چند استعلام همزمان)"), KeyboardButton(text="📝 ثبت لایحه")],
         [KeyboardButton(text="📋 ثبت اظهارنامه"), KeyboardButton(text="⚖️ دعاوی اعتراضی")],
@@ -619,6 +620,7 @@ disrupted_retry_kb = ReplyKeyboardMarkup(
 test_mode_doc_type_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📝 لایحه"), KeyboardButton(text="📋 اظهارنامه")],
+        [KeyboardButton(text="⚖️ دعاوی اعتراضی")],
         [KeyboardButton(text="❌ انصراف")],
     ],
     resize_keyboard=True
@@ -628,6 +630,7 @@ test_mode_section_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📎 تست بخش منضمات")],
         [KeyboardButton(text="✍️ تست بخش امضا")],
+        [KeyboardButton(text="⚖️ تست ثبت کامل دعوی اعتراضی")],
         [KeyboardButton(text="❌ انصراف")],
     ],
     resize_keyboard=True
@@ -717,19 +720,33 @@ tn_confirm_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-tn_edit_kb = ReplyKeyboardMarkup(
-    keyboard=[
+def create_tn_edit_kb(labels: dict = None, has_reasons: bool = False, has_appellee: bool = True) -> ReplyKeyboardMarkup:
+    """کیبورد داینامیک ویرایش - برچسب‌ها بر اساس نوع دعوی"""
+    labels = labels or {}
+    appellant_label = labels.get("appellant", "تجدیدنظرخواه")
+    appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
+    witness_label = labels.get("witness_step", "مطلع/گواه")
+
+    keyboard = [
         [KeyboardButton(text="🔢 ویرایش اطلاعات دادنامه")],
-        [KeyboardButton(text="👤 ویرایش تجدیدنظرخواه")],
-        [KeyboardButton(text="👥 ویرایش تجدیدنظرخوانده")],
-        [KeyboardButton(text="👁 ویرایش شهود/مطلعین")],
+        [KeyboardButton(text=f"👤 ویرایش {appellant_label}")],
+    ]
+    if has_appellee:
+        keyboard.append([KeyboardButton(text=f"👥 ویرایش {appellee_label}")])
+    keyboard.append([KeyboardButton(text=f"👁 ویرایش {witness_label}")])
+    keyboard.extend([
         [KeyboardButton(text="📄 ویرایش شرح متن")],
         [KeyboardButton(text="📝 ویرایش توضیحات جداگانه")],
         [KeyboardButton(text="🖼 ویرایش مدارک")],
-        [KeyboardButton(text="🔙 بازگشت به پیش‌نمایش")],
-    ],
-    resize_keyboard=True
-)
+    ])
+    if has_reasons:
+        keyboard.append([KeyboardButton(text="⚖️ ویرایش جهات")])
+    keyboard.append([KeyboardButton(text="🔙 بازگشت به پیش‌نمایش")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+# Legacy alias (backward compat)
+tn_edit_kb = create_tn_edit_kb()
 
 tn_reason_more_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -788,6 +805,34 @@ def create_tn_reasons_kb(remaining_reasons: list, selected: list = None):
         keyboard.append(row)
     keyboard.append([KeyboardButton(text="✅ خیر، ادامه مراحل")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# کیبوردهای بخش امضای دعاوی اعتراضی
+# ═══════════════════════════════════════════════════════════════
+tn_sign_ready_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="✅ آماده‌ام، کد امضا ارسال شود")]],
+    resize_keyboard=True
+)
+
+tn_sign_resend_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔄 ارسال مجدد کد")],
+        [KeyboardButton(text="⏳ فعلاً امضا نمی‌کنم")],
+    ],
+    resize_keyboard=True
+)
+
+tn_sign_later_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔄 ثبت امضا در حال حاضر")],
+        [KeyboardButton(text="❌ انصراف و ادامه بدون امضا")],
+    ],
+    resize_keyboard=True
+)
+
+tn_sign_try_again_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="🔄 تلاش مجدد")]], resize_keyboard=True)
 
 test_mode_att_more_kb = ReplyKeyboardMarkup(
     keyboard=[

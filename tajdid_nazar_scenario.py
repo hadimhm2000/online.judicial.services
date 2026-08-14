@@ -517,7 +517,7 @@ async def process_tajdid_nazar_task(data: dict, bot: Bot):
     case_type = data.get("case_type", "")
     judge_no = data.get("tn_judge_no", "")
     file_no = data.get("tn_file_no", "")
-    file_row = data.get("tn_file_no_row", "1")
+    # ردیف فرعی حذف شد — مقدار پیش‌فرض ۱
     judge_date = data.get("tn_judge_date", "")
     province = data.get("tn_province", "")
     doc_type = data.get("tn_doc_type", "حکم")
@@ -537,6 +537,7 @@ async def process_tajdid_nazar_task(data: dict, bot: Bot):
     only_real = has_real and not has_legal and not has_lawyer
 
     needs_reasons = case_type in ("اعاده دادرسی مدنی", "اعاده دادرسی کیفری")
+    is_prosecutor = case_type == "اعتراض به قرار دادسرا"
 
     # نام‌های step
     appellant_step = APPELLANT_STEP_MAP.get(case_type, "تجديدنظرخواه")
@@ -627,17 +628,6 @@ async def process_tajdid_nazar_task(data: dict, bot: Bot):
             }}''')
             await asyncio.sleep(1)
 
-            # ردیف فرعی
-            await sana_page.evaluate(f'''() => {{
-                const inp = document.querySelector('input[ng-model*="RowNumber"]');
-                if (inp) {{
-                    inp.value = "{file_row}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
-            await asyncio.sleep(1)
-
             # تاریخ دادنامه
             await sana_page.evaluate(f'''() => {{
                 const inps = document.querySelectorAll('input[persian-datepicker-popup]');
@@ -675,34 +665,36 @@ async def process_tajdid_nazar_task(data: dict, bot: Bot):
             }}''')
             await asyncio.sleep(1)
 
-            # حکم یا قرار
-            if doc_type == "قرار":
-                await sana_page.evaluate('''() => {
-                    const rdb = document.querySelector('input[value="1"]');
-                    if (rdb) rdb.click();
-                }''')
+            # حکم یا قرار + مبلغ + اعسار (فقط برای غیر اعتراض به قرار دادسرا)
+            if not is_prosecutor:
+                # حکم یا قرار
+                if doc_type == "قرار":
+                    await sana_page.evaluate('''() => {
+                        const rdb = document.querySelector('input[value="1"]');
+                        if (rdb) rdb.click();
+                    }''')
+                    await asyncio.sleep(1)
+
+                # مبلغ
+                amount_str = str(amount) if amount > 0 else "1"
+                await sana_page.evaluate(f'''() => {{{{
+                    const inp = document.querySelector('input[ng-model*="Amount"]');
+                    if (inp) {{{{
+                        inp.value = "{amount_str}";
+                        inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                        inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    }}}}
+                }}''')
                 await asyncio.sleep(1)
 
-            # مبلغ
-            amount_str = str(amount) if amount > 0 else "1"
-            await sana_page.evaluate(f'''() => {{
-                const inp = document.querySelector('input[ng-model*="Amount"]');
-                if (inp) {{
-                    inp.value = "{amount_str}";
-                    inp.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                    inp.dispatchEvent(new Event("change", {{ bubbles: true }}));
-                }}
-            }}''')
-            await asyncio.sleep(1)
-
-            # اعسار
-            if insolvency:
-                await sana_page.evaluate('''() => {
-                    const rdb = document.querySelector('input[ng-model*="IsInsolvency"]');
-                    if (rdb) rdb.click();
-                }''')
-                await asyncio.sleep(1)
-
+                # اعسار
+                if insolvency:
+                    await sana_page.evaluate('''() => {
+                        const rdb = document.querySelector('input[ng-model*="IsInsolvency"]');
+                        if (rdb) rdb.click();
+                    }''')
+                    await asyncio.sleep(1)
+                
             # ── ۶. مرحله «تجدیدنظرخواه» ──────────────────────────
             await _click_step_label(sana_page, appellant_step, bot, user_id)
             await resilient_sleep(sana_page, 4, bot, user_id)
@@ -723,23 +715,24 @@ async def process_tajdid_nazar_task(data: dict, bot: Bot):
                                             person_role="appellant", person_index=idx)
                 await resilient_sleep(sana_page, 10, bot, user_id)
 
-            # ── ۷. مرحله «تجدیدنظرخوانده» ────────────────────────
-            await _click_step_label(sana_page, appellee_step, bot, user_id)
-            await resilient_sleep(sana_page, 4, bot, user_id)
+            # ── ۷. مرحله تجدیدنظرخوانده (فقط برای غیر اعتراض به قرار دادسرا)
+            if not is_prosecutor:
+                await _click_step_label(sana_page, appellee_step, bot, user_id)
+                await resilient_sleep(sana_page, 4, bot, user_id)
 
-            for idx, person in enumerate(appellees):
-                ptype = person.get("person_type", "شخص حقیقی")
+                for idx, person in enumerate(appellees):
+                    ptype = person.get("person_type", "شخص حقیقی")
 
-                await _click_add_btn(sana_page, bot, user_id)
-                await resilient_sleep(sana_page, 3, bot, user_id)
+                    await _click_add_btn(sana_page, bot, user_id)
+                    await resilient_sleep(sana_page, 3, bot, user_id)
 
-                if ptype == "شخص حقوقی":
-                    await _fill_legal_person(sana_page, person, bot, user_id,
-                                              person_role="appellee", person_index=idx)
-                else:
-                    await _fill_real_person(sana_page, person["national_id"], bot, user_id,
-                                            person_role="appellee", person_index=idx)
-                await resilient_sleep(sana_page, 10, bot, user_id)
+                    if ptype == "شخص حقوقی":
+                        await _fill_legal_person(sana_page, person, bot, user_id,
+                                                  person_role="appellee", person_index=idx)
+                    else:
+                        await _fill_real_person(sana_page, person["national_id"], bot, user_id,
+                                                person_role="appellee", person_index=idx)
+                    await resilient_sleep(sana_page, 10, bot, user_id)
 
             # ── ۸. مرحله شهود/مطلع ────────────────────────────────
             if witnesses:

@@ -47,6 +47,8 @@ from keyboards import (
     create_tn_appellant_person_type_kb,
     create_tn_appellee_person_type_kb,
     create_tn_reasons_kb,
+    create_tn_edit_kb,
+    tn_sign_ready_kb, tn_sign_resend_kb, tn_sign_later_kb, tn_sign_try_again_kb,
 )
 
 tajdid_nazar_router = Router()
@@ -63,6 +65,40 @@ _FA_AR = str.maketrans(
 
 def _to_en(text: str) -> str:
     return text.translate(_FA_AR).replace(" ", "").strip()
+
+
+def _validate_judge_no(code: str):
+    """اعتبارسنجی شماره دادنامه — مشابه validate_tracking_code لایحه.
+    سال‌های ۱۴۰۰ تا ۱۴۰۷ → ۱۸ رقمی
+    سال‌های ۹۹ و قبل‌تر → ۱۶ رقمی
+    """
+    if not code.isdigit():
+        return False, "⚠️ شماره دادنامه باید فقط شامل اعداد باشد."
+
+    # بررسی ۴ رقم اول برای سال‌های ۱۴۰۰ تا ۱۴۰۷
+    if len(code) >= 4:
+        first_four = int(code[:4])
+        if 1400 <= first_four <= 1407:
+            if len(code) == 18:
+                return True, code
+            return False, (
+                f"⚠️ شماره دادنامه با سال **{code[:4]}** باید **۱۸ رقمی** باشد.\n"
+                f"کد شما **{len(code)} رقمی** است. مجدداً وارد فرمایید:"
+            )
+
+    # بررسی دو رقم اول برای سال‌های ۹۹ و قبل‌تر
+    if len(code) >= 2:
+        first_two = int(code[:2])
+        if 0 <= first_two <= 99:
+            if len(code) == 16:
+                return True, code
+            return False, (
+                f"⚠️ شماره دادنامه باید **۱۶ رقمی** باشد.\n"
+                f"کد شما **{len(code)} رقمی** است. مجدداً وارد فرمایید:"
+            )
+
+    return False, "⚠️ شماره دادنامه نامعتبر است. لطفاً شماره صحیح را وارد فرمایید:"
+
 
 def _fmt(n: int) -> str:
     return f"{n:,}"
@@ -98,16 +134,20 @@ def _get_labels(case_type: str) -> dict:
     """بر اساس نوع دعوی، برچسب‌های فارسی مربوطه را برمی‌گرداند."""
     mapping = {
         "تجدیدنظرخواهی": {"appellant": "تجدیدنظرخواه", "appellee": "تجدیدنظرخوانده", "witness_step": "مطلع/گواه"},
-        "واخواهی": {"appellant": "واخواه", "appellee": "واخواه‌شده", "witness_step": "مطلع/گواه"},
-        "فرجام خواهی": {"appellant": "فرجام‌خواه", "appellee": "فرجام‌خواه‌شده", "witness_step": "مطلع/گواه"},
-        "اعاده دادرسی مدنی": {"appellant": "درخواست‌کننده", "appellee": "درخواست‌شونده", "witness_step": "مطلع/گواه"},
-        "اعاده دادرسی کیفری": {"appellant": "درخواست‌کننده", "appellee": "درخواست‌شونده", "witness_step": "سایر اشخاص"},
-        "اعتراض ثالث": {"appellant": "اعتراض‌کننده ثالث", "appellee": "معترض‌عنه", "witness_step": "مطلع/گواه"},
-        "اعتراض به قرار دادسرا": {"appellant": "اعتراض‌کننده", "appellee": "اعتراض‌شونده", "witness_step": "مطلع/گواه"},
+        "واخواهی": {"appellant": "واخواه", "appellee": "واخوانده", "witness_step": "مطلع/گواه"},
+        "فرجام خواهی": {"appellant": "فرجام‌خواه", "appellee": "فرجام‌خوانده", "witness_step": "مطلع/گواه"},
+        "اعاده دادرسی مدنی": {"appellant": "مقاضي اعاده دادرسي", "appellee": "طرف اعاده دادرسي", "witness_step": "مطلع/گواه"},
+        "اعاده دادرسی کیفری": {"appellant": "محكوم عليه", "appellee": "طرف اعاده دادرسي", "witness_step": "سایر اشخاص"},
+        "اعتراض ثالث": {"appellant": "معترض ثالث", "appellee": "طرف اعتراض ثالث", "witness_step": "مطلع/گواه"},
+        "اعتراض به قرار دادسرا": {"appellant": "درخواست دهنده", "appellee": "—", "witness_step": "مطلع/گواه", "skip_appellee": True},
     }
     return mapping.get(case_type, mapping["تجدیدنظرخواهی"])
 
 
+
+def _is_prosecutor_objection(case_type: str) -> bool:
+    """آیا دعوی از نوع اعتراض به قرار دادسرا است"""
+    return case_type == "اعتراض به قرار دادسرا"
 def _needs_reasons(case_type: str) -> bool:
     return case_type in ("اعاده دادرسی مدنی", "اعاده دادرسی کیفری")
 
@@ -182,7 +222,7 @@ async def tn_case_type_handler(message: Message, state: FSMContext):
     await message.answer(
         f"✅ **{matched}** انتخاب شد.\n\n"
         f"**مرحله ۱:** لطفاً **شماره دادنامه** را ارسال کنید.\n\n"
-        f"نکته: شماره دادنامه **۱۸ رقمی** است.",
+        f"نکته: شماره‌های **۱۴۰۰ تا ۱۴۰۷** باید **۱۸ رقمی** و شماره‌های **۹۹ و قبل‌تر** باید **۱۶ رقمی** باشند.",
         reply_markup=back_only_kb,
         parse_mode="Markdown"
     )
@@ -203,10 +243,13 @@ async def tn_judge_no_handler(message: Message, state: FSMContext):
         return
 
     judge_no = _to_en(message.text)
-    if not re.match(r"^[0-9]{18}$", judge_no):
-        await message.answer("⚠️ شماره دادنامه باید **۱۸ رقمی** و فقط شامل اعداد باشد:\n\nلطفاً مجدداً وارد فرمایید:",
+    # اعتبارسنجی ۱۶/۱۸ رقمی — مشابه لایحه
+    valid, result = _validate_judge_no(judge_no)
+    if not valid:
+        await message.answer(result,
                              reply_markup=back_only_kb, parse_mode="Markdown")
         return
+    judge_no = result
 
     await state.update_data(tn_judge_no=judge_no)
     await message.answer(
@@ -219,7 +262,7 @@ async def tn_judge_no_handler(message: Message, state: FSMContext):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# مرحله ۳ — شماره پرونده و ردیف فرعی
+# مرحله ۳ — شماره پرونده
 # ══════════════════════════════════════════════════════════════════════════════
 @tajdid_nazar_router.message(Form.tn_file_no)
 async def tn_file_no_handler(message: Message, state: FSMContext):
@@ -227,7 +270,7 @@ async def tn_file_no_handler(message: Message, state: FSMContext):
         return
     if message.text == "🔙 بازگشت":
         await message.answer(
-            "لطفاً **شماره دادنامه** را ارسال کنید (۱۸ رقمی):",
+            "لطفاً **شماره دادنامه** را ارسال کنید (۱۴۰۰ تا ۱۴۰۷: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی):",
             reply_markup=back_only_kb, parse_mode="Markdown"
         )
         await state.set_state(Form.tn_judge_no)
@@ -246,35 +289,7 @@ async def tn_file_no_handler(message: Message, state: FSMContext):
     await state.update_data(tn_file_no=file_no)
     await message.answer(
         f"✅ شماره پرونده `{file_no}` ثبت شد.\n\n"
-        f"لطفاً **ردیف فرعی** را وارد فرمایید:\n_(در صورت نداشتن ردیف فرعی، عدد ۱ را وارد کنید)_",
-        reply_markup=back_only_kb,
-        parse_mode="Markdown"
-    )
-    await state.set_state(Form.tn_file_no_row)
-
-
-@tajdid_nazar_router.message(Form.tn_file_no_row)
-async def tn_file_no_row_handler(message: Message, state: FSMContext):
-    if not message.text:
-        return
-    if message.text == "🔙 بازگشت":
-        await message.answer(
-            "لطفاً **شماره پرونده** را ارسال کنید:",
-            reply_markup=back_only_kb, parse_mode="Markdown"
-        )
-        await state.set_state(Form.tn_file_no)
-        return
-
-    row = _to_en(message.text)
-    if not row.isdigit() or int(row) < 1:
-        await message.answer("⚠️ ردیف فرعی باید یک عدد مثبت باشد:\n\nلطفاً مجدداً وارد فرمایید:",
-                             reply_markup=back_only_kb, parse_mode="Markdown")
-        return
-
-    await state.update_data(tn_file_no_row=row)
-    await message.answer(
-        f"✅ ردیف فرعی `{row}` ثبت شد.\n\n"
-        f"**مرحله ۳:** لطفاً **تاریخ تنظیم دادنامه** را ارسال کنید:\n_(مثال: 1403/09/15)_",
+        f"**مرحله ۳:** لطفاً **تاریخ تنظیم دادنامه** را ارسال فرمایید:\n_(مثال: 1403/09/15)_",
         reply_markup=back_only_kb,
         parse_mode="Markdown"
     )
@@ -290,10 +305,10 @@ async def tn_judge_date_handler(message: Message, state: FSMContext):
         return
     if message.text == "🔙 بازگشت":
         await message.answer(
-            "لطفاً **ردیف فرعی** را وارد فرمایید:",
+            "لطفاً **شماره پرونده** را ارسال فرمایید:",
             reply_markup=back_only_kb, parse_mode="Markdown"
         )
-        await state.set_state(Form.tn_file_no_row)
+        await state.set_state(Form.tn_file_no)
         return
 
     date_text = message.text.strip()
@@ -345,19 +360,70 @@ async def tn_province_handler(message: Message, state: FSMContext):
 
     await state.update_data(tn_province=matched_province)
     data = await state.get_data()
-    labels = data.get("tn_labels", {})
-    await message.answer(
-        f"✅ استان **{matched_province}** ثبت شد.\n\n"
-        f"**مرحله ۵:** آیا دادنامه **حکم** صادر شده است یا **قرار**؟",
-        reply_markup=tn_doc_type_kb,
-        parse_mode="Markdown"
-    )
-    await state.set_state(Form.tn_doc_type)
+    case_type = data.get("case_type", "")
+
+    if _is_prosecutor_objection(case_type):
+        await message.answer(
+            f"✅ استان **{matched_province}** ثبت شد.\n\n"
+            f"**مرحله ۵:** لطفاً **شماره قرار** را ارسال کنید.\n\n"
+            f"نکته: شماره‌های **۱۴۰۰ تا ۱۴۰۷** باید **۱۸ رقمی** و شماره‌های **۹۹ و قبل‌تر** باید **۱۶ رقمی** باشند.",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.tn_order_no)
+    else:
+        labels = data.get("tn_labels", {})
+        await message.answer(
+            f"✅ استان **{matched_province}** ثبت شد.\n\n"
+            f"**مرحله ۵:** آیا دادنامه **حکم** صادر شده است یا **قرار**؟",
+            reply_markup=tn_doc_type_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.tn_doc_type)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # مرحله ۶ — حکم یا قرار
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# مرحله ۵ — شماره قرار (فقط اعتراض به قرار دادسرا)
+# ══════════════════════════════════════════════════════════════════════════════
+@tajdid_nazar_router.message(Form.tn_order_no)
+async def tn_order_no_handler(message: Message, state: FSMContext):
+    if not message.text:
+        return
+    if message.text == "🔙 بازگشت":
+        await message.answer(
+            "لطفاً **نام استان** را انتخاب فرمایید:",
+            reply_markup=create_province_kb(),
+        )
+        await state.set_state(Form.tn_province)
+        return
+
+    order_no = _to_en(message.text)
+    valid, result = _validate_judge_no(order_no)
+    if not valid:
+        await message.answer(result,
+                             reply_markup=back_only_kb, parse_mode="Markdown")
+        return
+    order_no = result
+
+    await state.update_data(tn_judge_no=order_no, tn_doc_type="", tn_amount=0, tn_insolvency=False)
+
+    data = await state.get_data()
+    labels = data.get("tn_labels", {})
+    appellant_label = labels.get("appellant", "درخواست دهنده")
+
+    await message.answer(
+        f"✅ شماره قرار `{order_no}` ثبت شد.\n\n"
+        f"**مرحله ۶:** لطفاً **نوع شخصیت {appellant_label}** را انتخاب فرمایید:\n\n"
+        f"⚠️ توجه: اگر **وکیل** را انتخاب می‌کنید، باید حداقل یک **شخص حقیقی یا حقوقی** نیز اضافه کنید.",
+        reply_markup=create_tn_appellant_person_type_kb(),
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.tn_appellant_person_type)
+
+
 @tajdid_nazar_router.message(Form.tn_doc_type)
 async def tn_doc_type_handler(message: Message, state: FSMContext):
     text = (message.text or "").strip()
@@ -454,6 +520,8 @@ async def tn_insolvency_handler(message: Message, state: FSMContext):
         reply_markup=create_tn_appellant_person_type_kb(),
         parse_mode="Markdown"
     )
+    await state.set_state(Form.tn_appellant_person_type)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # مرحله ۸ — اشخاص تجدیدنظرخواه (شبیه اظهارکننده اظهارنامه)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -489,14 +557,49 @@ async def tn_appellant_person_type_handler(message: Message, state: FSMContext):
             )
             return
 
-        # رفتن به مرحله تجدیدنظرخوانده
-        appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
-        await message.answer(
-            f"**مرحله ۹:** لطفاً **نوع شخصیت {appellee_label}** را انتخاب فرمایید:",
-            reply_markup=create_tn_appellee_person_type_kb(),
-            parse_mode="Markdown",
-        )
-        await state.set_state(Form.tn_appellee_person_type)
+        # بررسی حالت ویرایش
+        if data.get("_tn_editing", False):
+            await state.update_data(_tn_editing=False)
+            await _go_to_tn_preview(message, state)
+            return
+
+        # بررسی آیا باید تجدیدنظرخوانده بپرسیم
+        case_type = data.get("case_type", "")
+        if _is_prosecutor_objection(case_type):
+            witness_label = labels.get("witness_step", "مطلع/گواه")
+            await message.answer(
+                f"**مرحله ۹:** در صورتی که **{witness_label}** دارید، کدملی شخص حقیقی را وارد فرمایید.\n\n"
+                f"⚠️ توجه: فقط **کدملی شخص حقیقی** قابل قبول است و شخص باید **ثبت‌نام ثنا** داشته باشد.\n\n"
+                f"در صورتی که {witness_label} ندارید، گزینه «خیر» را انتخاب فرمایید:",
+                reply_markup=tn_more_witnesses_kb,
+                parse_mode="Markdown",
+            )
+            await state.set_state(Form.tn_more_witnesses)
+        else:
+            # بررسی حالت ویرایش
+            if data.get("_tn_editing", False):
+                await state.update_data(_tn_editing=False)
+                await _go_to_tn_preview(message, state)
+                return
+
+            case_type = data.get("case_type", "")
+            if _is_prosecutor_objection(case_type):
+                witness_label = labels.get("witness_step", "مطلع/گواه")
+                await message.answer(
+                    f"**مرحله ۹:** در صورتی که **{witness_label}** دارید، کدملی شخص حقیقی را وارد فرمایید.\n\n"
+                    f"در صورتی که {witness_label} ندارید، گزینه «خیر» را انتخاب فرمایید:",
+                    reply_markup=tn_more_witnesses_kb,
+                    parse_mode="Markdown",
+                )
+                await state.set_state(Form.tn_more_witnesses)
+            else:
+                appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
+                await message.answer(
+                f"**مرحله ۹:** لطفاً **نوع شخصیت {appellee_label}** را انتخاب فرمایید:",
+                reply_markup=create_tn_appellee_person_type_kb(),
+                parse_mode="Markdown",
+            )
+            await state.set_state(Form.tn_appellee_person_type)
         return
 
     if text == "🔙 بازگشت":
@@ -691,13 +794,30 @@ async def tn_appellant_more_handler(message: Message, state: FSMContext):
             )
             return
 
-        appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
-        await message.answer(
-            f"**مرحله ۹:** لطفاً **نوع شخصیت {appellee_label}** را انتخاب فرمایید:",
-            reply_markup=create_tn_appellee_person_type_kb(),
-            parse_mode="Markdown",
-        )
-        await state.set_state(Form.tn_appellee_person_type)
+        # بررسی حالت ویرایش
+        if data.get("_tn_editing", False):
+            await state.update_data(_tn_editing=False)
+            await _go_to_tn_preview(message, state)
+            return
+
+        case_type = data.get("case_type", "")
+        if _is_prosecutor_objection(case_type):
+            witness_label = labels.get("witness_step", "مطلع/گواه")
+            await message.answer(
+                f"**مرحله ۹:** در صورتی که **{witness_label}** دارید، کدملی شخص حقیقی را وارد فرمایید.\n\n"
+                f"در صورتی که {witness_label} ندارید، گزینه «خیر» را انتخاب فرمایید:",
+                reply_markup=tn_more_witnesses_kb,
+                parse_mode="Markdown",
+            )
+            await state.set_state(Form.tn_more_witnesses)
+        else:
+            appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
+            await message.answer(
+                f"**مرحله ۹:** لطفاً **نوع شخصیت {appellee_label}** را انتخاب فرمایید:",
+                reply_markup=create_tn_appellee_person_type_kb(),
+                parse_mode="Markdown",
+            )
+            await state.set_state(Form.tn_appellee_person_type)
         return
 
     if text == "🔙 بازگشت":
@@ -757,6 +877,12 @@ async def tn_appellee_person_type_handler(message: Message, state: FSMContext):
                 f"⚠️ حداقل یک {appellee_label} باید اضافه شود.",
                 reply_markup=create_tn_appellee_person_type_kb(),
             )
+            return
+
+        # بررسی حالت ویرایش
+        if data.get("_tn_editing", False):
+            await state.update_data(_tn_editing=False)
+            await _go_to_tn_preview(message, state)
             return
 
         # رفتن به مرحله شهود/مطلع
@@ -1536,7 +1662,7 @@ def build_tn_preview(data: dict) -> str:
 
     judge_no = data.get("tn_judge_no", "")
     file_no = data.get("tn_file_no", "")
-    file_row = data.get("tn_file_no_row", "")
+    # ردیف فرعی حذف شد
     judge_date = data.get("tn_judge_date", "")
     province = data.get("tn_province", "")
     doc_type = data.get("tn_doc_type", "")
@@ -1579,22 +1705,37 @@ def build_tn_preview(data: dict) -> str:
         extra_preview = extra_text[:150] + "..." if len(extra_text) > 150 else extra_text
         extra_text_line = f"\\n📝 **توضیحات جداگانه:**\\n  {_escape_md(extra_preview)}\\n"
 
+    is_prosec = _is_prosecutor_objection(case_type)
     amount_str = f"{_fmt(amount)} ریال" if amount > 0 else "خیر"
     insolvency_str = "بله" if insolvency else "خیر"
 
+    if is_prosec:
+        info_section = (
+            f"📋 **اطلاعات قرار:**\\n"
+            f"  شماره قرار: `{judge_no}`\\n"
+            f"  شماره پرونده: `{file_no}`\\n"
+            f"  تاریخ: `{judge_date}`\\n"
+            f"  استان: {province}\\n"
+        )
+    else:
+        info_section = (
+            f"📋 **اطلاعات دادنامه:**\\n"
+            f"  شماره دادنامه: `{judge_no}`\\n"
+            f"  شماره پرونده: `{file_no}`\\n"
+            f"  تاریخ: `{judge_date}`\\n"
+            f"  استان: {province}\\n"
+            f"  نوع: **{doc_type}**\\n"
+            f"  مبلغ: {amount_str}\\n"
+            f"  اعسار: {insolvency_str}\\n"
+        )
+
+    appellee_section = "" if is_prosec else f"\\n👥 **{appellee_label}(ها):**\\n{appellees_text}\\n"
+
     return (
         f"⚖️ **پیش‌نمایش {case_type}:**\\n\\n"
-        f"📋 **اطلاعات دادنامه:**\\n"
-        f"  شماره دادنامه: `{judge_no}`\\n"
-        f"  شماره پرونده: `{file_no}`\\n"
-        f"  ردیف فرعی: `{file_row}`\\n"
-        f"  تاریخ: `{judge_date}`\\n"
-        f"  استان: {province}\\n"
-        f"  نوع: **{doc_type}**\\n"
-        f"  مبلغ: {amount_str}\\n"
-        f"  اعسار: {insolvency_str}\\n\\n"
+        f"{info_section}\\n"
         f"👤 **{appellant_label}(ها):**\\n{appellants_text}\\n\\n"
-        f"👥 **{appellee_label}(ها):**\\n{appellees_text}\\n\\n"
+        f"{appellee_section}\\n"
         f"👁 **{witness_label}(ها):**\\n{witnesses_text}\\n\\n"
         f"📄 **شرح متن:**\\n  {text_preview}\\n"
         f"{extra_text_line}"
@@ -1607,10 +1748,17 @@ def build_tn_preview(data: dict) -> str:
 async def _go_to_tn_preview(message: Message, state: FSMContext):
     data = await state.get_data()
     preview = build_tn_preview(data)
+    data = await state.get_data()
+    labels = data.get("tn_labels", {})
+    case_type = data.get("case_type", "")
+    has_reasons = _needs_reasons(case_type)
+    has_appellee = not _is_prosecutor_objection(case_type)
+    labels_with_case = {**labels, "case_type": case_type}
+    edit_kb = create_tn_edit_kb(labels=labels_with_case, has_reasons=has_reasons, has_appellee=has_appellee)
     try:
-        await message.answer(preview, reply_markup=tn_confirm_kb, parse_mode="Markdown")
+        await message.answer(preview, reply_markup=edit_kb, parse_mode="Markdown")
     except Exception:
-        await message.answer(preview, reply_markup=tn_confirm_kb)
+        await message.answer(preview, reply_markup=edit_kb)
     await state.set_state(Form.tn_confirm)
 
 
@@ -1644,14 +1792,14 @@ async def tn_confirm_handler(message: Message, state: FSMContext, bot: Bot):
             parse_mode="Markdown",
         )
 
-        await runtime_state.job_queue.put({
+        # ذخیره و رفتن به بخش امضا
+        await state.update_data(_tn_pending_dispatch={
             "user_id": user_id,
             "query_type": f"دعاوی_اعتراضی_{case_type}",
             "task_type": task_type,
             "case_type": case_type,
             "tn_judge_no": data.get("tn_judge_no", ""),
             "tn_file_no": data.get("tn_file_no", ""),
-            "tn_file_no_row": data.get("tn_file_no_row", ""),
             "tn_judge_date": data.get("tn_judge_date", ""),
             "tn_province": data.get("tn_province", ""),
             "tn_doc_type": data.get("tn_doc_type", ""),
@@ -1667,7 +1815,14 @@ async def tn_confirm_handler(message: Message, state: FSMContext, bot: Bot):
             "tn_reasons": data.get("tn_reasons", []),
         })
 
-        await state.clear()
+        await message.answer(
+            "✅ **تایید شد.**\n\n"
+            "🔐 در صورت تمایل به **امضای الکترونیک**، دکمه زیر را بزنید:\n"
+            "_(در غیر اینصورت چند لحظه صبر کنید تا ثبت خودکار انجام شود)_",
+            reply_markup=tn_sign_ready_kb,
+            parse_mode="Markdown",
+        )
+        await state.set_state(Form.tn_sign_ready)
         return
 
     if text == "✏️ ویرایش اطلاعات":
@@ -1693,6 +1848,7 @@ async def tn_edit_choice_handler(message: Message, state: FSMContext):
     text = message.text or ""
     data = await state.get_data()
     labels = data.get("tn_labels", {})
+    await state.update_data(_tn_editing=True)
     appellant_label = labels.get("appellant", "تجدیدنظرخواه")
     appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
     case_type = data.get("case_type", "")
@@ -1704,7 +1860,7 @@ async def tn_edit_choice_handler(message: Message, state: FSMContext):
     if text == "📋 ویرایش اطلاعات دادنامه":
         await state.update_data(tn_judge_no="")
         await message.answer(
-            "📋 لطفاً **شماره دادنامه** جدید را ارسال فرمایید (۱۸ رقمی):",
+            "📋 لطفاً **شماره دادنامه** جدید را ارسال فرمایید:\n\n_(۱۴۰۰ تا ۱۴۰۷: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_",
             reply_markup=back_only_kb,
             parse_mode="Markdown",
         )
