@@ -1,6 +1,3 @@
-cd "C:\apps\judicial-bot"
-
-@'
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
 import { appendNewCase } from '@/lib/google-sheets';
@@ -181,4 +178,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to create case' }, { status: 500 });
   }
 }
-'@ | Set-Content -Path "src\app\api\admin\cases\route.ts" -Encoding UTF8

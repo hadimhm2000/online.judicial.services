@@ -197,6 +197,11 @@ class Form(StatesGroup):
 
     # =========================================================
 
+    tn_appellant_vakalat_no = State()    # شماره قرارداد وکالت تجدیدنظرخواه
+    tn_appellee_vakalat_no = State()     # شماره قرارداد وکالت تجدیدنظرخوانده
+    check_plaintiff_vakalat_no = State() # شماره قرارداد وکالت خواهان چک
+    check_defendant_vakalat_no = State() # شماره قرارداد وکالت خوانده چک
+
     # State های بخش اخذ امضای الکترونیک دعاوی اعتراضی
     tn_sign_ready = State()
     tn_sign_person_select = State()
@@ -238,9 +243,14 @@ class Form(StatesGroup):
     check_witness_national_id = State()   # کدملی مطلع/گواه
     check_more_witnesses = State()        # افزودن مطلع دیگر
     check_text = State()                  # شرح متن دادخواست
+    check_text_input = State()       # دریافت متن تایپ‌شده یا فایل ورد
     check_extra_text = State()            # توضیحات جداگانه برای مقام قضائی
     check_images = State()                # دریافت تصاویر چک (حداکثر ۳)
     check_more_images = State()           # آیا تصویر یا مدرک دیگری دارید؟
+    check_check_next_images = State()    # تصویر چک بعدی
+    check_attachment_title = State()     # عنوان پیوست
+    check_attachment_images = State()    # تصاویر پیوست
+    check_attachment_more = State()      # آیا پیوست دیگری هست؟
     check_branch_code = State()           # انتخاب صلاحیت دادگاه (شعبه)
     check_confirm = State()               # پیش‌نمایش و تایید
     check_edit_choice = State()           # انتخاب بخش ویرایش

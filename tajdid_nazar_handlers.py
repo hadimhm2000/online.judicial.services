@@ -68,36 +68,15 @@ def _to_en(text: str) -> str:
 
 
 def _validate_judge_no(code: str):
-    """اعتبارسنجی شماره دادنامه — مشابه validate_tracking_code لایحه.
-    سال‌های ۱۴۰۰ تا ۱۴۰۷ → ۱۸ رقمی
-    سال‌های ۹۹ و قبل‌تر → ۱۶ رقمی
-    """
+    """اعتبارسنجی شماره دادنامه — همیشه ۱۸ رقمی."""
     if not code.isdigit():
         return False, "⚠️ شماره دادنامه باید فقط شامل اعداد باشد."
-
-    # بررسی ۴ رقم اول برای سال‌های ۱۴۰۰ تا ۱۴۰۷
-    if len(code) >= 4:
-        first_four = int(code[:4])
-        if 1400 <= first_four <= 1407:
-            if len(code) == 18:
-                return True, code
-            return False, (
-                f"⚠️ شماره دادنامه با سال **{code[:4]}** باید **۱۸ رقمی** باشد.\n"
-                f"کد شما **{len(code)} رقمی** است. مجدداً وارد فرمایید:"
-            )
-
-    # بررسی دو رقم اول برای سال‌های ۹۹ و قبل‌تر
-    if len(code) >= 2:
-        first_two = int(code[:2])
-        if 0 <= first_two <= 99:
-            if len(code) == 16:
-                return True, code
-            return False, (
-                f"⚠️ شماره دادنامه باید **۱۶ رقمی** باشد.\n"
-                f"کد شما **{len(code)} رقمی** است. مجدداً وارد فرمایید:"
-            )
-
-    return False, "⚠️ شماره دادنامه نامعتبر است. لطفاً شماره صحیح را وارد فرمایید:"
+    if len(code) != 18:
+        return False, (
+            f"⚠️ شماره دادنامه باید **۱۸ رقمی** باشد.\n"
+            f"کد شما **{len(code)} رقمی** است. مجدداً وارد فرمایید:"
+        )
+    return True, code
 
 
 def _fmt(n: int) -> str:
@@ -221,8 +200,8 @@ async def tn_case_type_handler(message: Message, state: FSMContext):
     await state.update_data(case_type=matched, tn_labels=labels)
     await message.answer(
         f"✅ **{matched}** انتخاب شد.\n\n"
-        f"**مرحله ۱:** لطفاً **شماره دادنامه** را ارسال کنید.\n\n"
-        f"نکته: شماره‌های **۱۴۰۰ تا ۱۴۰۷** باید **۱۸ رقمی** و شماره‌های **۹۹ و قبل‌تر** باید **۱۶ رقمی** باشند.",
+        f"**مرحله ۱:** لطفاً **شماره دادنامه** را ارسال کنید.\n"
+        f"_(شماره دادنامه باید ۱۸ رقمی باشد)_",
         reply_markup=back_only_kb,
         parse_mode="Markdown"
     )
@@ -254,7 +233,8 @@ async def tn_judge_no_handler(message: Message, state: FSMContext):
     await state.update_data(tn_judge_no=judge_no)
     await message.answer(
         f"✅ شماره دادنامه `{judge_no}` ثبت شد.\n\n"
-        f"**مرحله ۲:** لطفاً **شماره پرونده** را ارسال کنید.",
+        f"**مرحله ۲:** لطفاً **شماره پرونده** را ارسال کنید.\n\n"
+        f"نکته: شماره پرونده به همراه ردیف فرعی ارسال شود.",
         reply_markup=back_only_kb,
         parse_mode="Markdown"
     )
@@ -270,7 +250,7 @@ async def tn_file_no_handler(message: Message, state: FSMContext):
         return
     if message.text == "🔙 بازگشت":
         await message.answer(
-            "لطفاً **شماره دادنامه** را ارسال کنید (۱۴۰۰ تا ۱۴۰۷: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی):",
+            "لطفاً **شماره دادنامه** را ارسال کنید (۱۸ رقمی):",
             reply_markup=back_only_kb, parse_mode="Markdown"
         )
         await state.set_state(Form.tn_judge_no)
@@ -503,12 +483,14 @@ async def _ask_insolvency(message: Message, state: FSMContext):
 @tajdid_nazar_router.message(Form.tn_insolvency)
 async def tn_insolvency_handler(message: Message, state: FSMContext):
     text = (message.text or "").strip()
-    if text not in ("بله", "خیر"):
+    _is_yes = text.startswith("➕ بله") or text == "بله" or "شخص دیگری" in text
+    _is_no = text.startswith("✅ خیر") or text == "خیر" or "ادامه مراحل" in text
+    if not _is_yes and not _is_no:
         await message.answer("⚠️ لطفاً «بله» یا «خیر» را انتخاب فرمایید:",
                              reply_markup=tn_insolvency_kb)
         return
 
-    await state.update_data(tn_insolvency=(text == "بله"))
+    await state.update_data(tn_insolvency=_is_yes)
     data = await state.get_data()
     labels = data.get("tn_labels", {})
     appellant_label = labels.get("appellant", "تجدیدنظرخواه")
@@ -1054,7 +1036,7 @@ async def tn_more_witnesses_handler(message: Message, state: FSMContext):
     labels = data.get("tn_labels", {})
     witness_label = labels.get("witness_step", "مطلع/گواه")
 
-    if text == "خیر":
+    if text.startswith("✅ خیر") or text == "خیر" or "ادامه مراحل" in text:
         # رفتن به مرحله شرح متن
         await message.answer(
             "**مرحله ۱۱:** لطفاً **شرح متن** را به صورت کامل و تایپ‌شده ارسال فرمایید:\n\n"
@@ -1080,7 +1062,7 @@ async def tn_more_witnesses_handler(message: Message, state: FSMContext):
         await state.set_state(Form.tn_appellee_person_type)
         return
 
-    if text == "بله":
+    if text.startswith("➕ بله") or text == "بله" or "شخص دیگری" in text:
         await message.answer(
             f"🔢 لطفاً **کدملی {witness_label}** (شخص حقیقی) را وارد فرمایید:\n_(۱۰ رقمی)_\n\n"
             f"⚠️ شخص باید **ثبت‌نام ثنا** داشته باشد.",
@@ -1169,13 +1151,14 @@ async def tn_text_handler(message: Message, state: FSMContext, bot: Bot):
 
             data = await st.get_data()
             appellants = data.get("tn_appellants", [])
-            has_legal = any(p.get("person_type") == "شخص حقوقی" for p in appellants)
+            appellees = data.get("tn_appellees", [])
+            has_legal = any(p.get("person_type") == "شخص حقوقی" for p in appellants + appellees)
 
             if has_legal:
                 await b.send_message(
                     cid,
                     "**مرحله ۱۲ — مدارک:**\n\n"
-                    "⚠️ **توجه مهم:** چون تجدیدنظرخواه شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
+                    "⚠️ **توجه مهم:** چون شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
                     "📸 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید.\n"
                     "_(مثلاً: روزنامه رسمی، آگهی تأسیس، وکالت‌نامه رسمی)_",
                     parse_mode="Markdown",
@@ -1214,13 +1197,14 @@ async def tn_text_handler(message: Message, state: FSMContext, bot: Bot):
 
         data = await st.get_data()
         appellants = data.get("tn_appellants", [])
-        has_legal = any(p.get("person_type") == "شخص حقوقی" for p in appellants)
+        appellees = data.get("tn_appellees", [])
+        has_legal = any(p.get("person_type") == "شخص حقوقی" for p in appellants + appellees)
 
         if has_legal:
             await b.send_message(
                 cid,
                 "**مرحله ۱۲ — مدارک:**\n\n"
-                "⚠️ **توجه مهم:** چون تجدیدنظرخواه شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
+                "⚠️ **توجه مهم:** چون شخص **حقوقی** دارید، ارسال تصویر **مدرک نمایندگی اجباری** است.\n\n"
                 "📸 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید.\n"
                 "_(مثلاً: روزنامه رسمی، آگهی تأسیس، وکالت‌نامه رسمی)_",
                 parse_mode="Markdown",
@@ -1621,11 +1605,11 @@ async def tn_reason_select_handler(message: Message, state: FSMContext):
 async def tn_more_reasons_handler(message: Message, state: FSMContext):
     text = (message.text or "").strip()
 
-    if text == "بله":
+    if text.startswith("➕ بله") or text == "بله" or "مورد دیگری" in text:
         await _ask_tn_reasons(message, state)
         return
 
-    if text == "خیر" or text == "✅ اتمام انتخاب جهات":
+    if text.startswith("✅ خیر") or text == "خیر" or "ادامه مراحل" in text or text == "✅ اتمام انتخاب جهات":
         await _ask_tn_extra_text(message, state)
         return
 
@@ -1916,10 +1900,11 @@ async def tn_edit_choice_handler(message: Message, state: FSMContext):
         await state.update_data(tn_attachments=[], _tn_mandatory_proxy_sent=False)
         data = await state.get_data()
         appellants = data.get("tn_appellants", [])
-        has_legal = any(p.get("person_type") == "شخص حقوقی" for p in appellants)
+        appellees = data.get("tn_appellees", [])
+        has_legal = any(p.get("person_type") == "شخص حقوقی" for p in appellants + appellees)
         if has_legal:
             await message.answer(
-                "⚠️ چون تجدیدنظرخواه شخص **حقوقی** دارید، ارسال **مدرک نمایندگی اجباری** است.\n\n"
+                "⚠️ چون شخص **حقوقی** دارید، ارسال **مدرک نمایندگی اجباری** است.\n\n"
                 "لطفاً ابتدا عنوان مدرک نمایندگی را وارد کنید:",
                 reply_markup=ReplyKeyboardRemove(),
                 parse_mode="Markdown",

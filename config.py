@@ -46,6 +46,9 @@ PROXY_URL = os.environ.get("PROXY_URL", "")
 # تنظیمات را می‌خوانند. اگر روی همسرور است: http://localhost:3000
 ADMIN_PANEL_URL = os.environ.get("ADMIN_PANEL_URL", "http://localhost:3000")
 
+# آدرس API پنل ادمین — برای همگام‌سازی اشتراک‌ها و ...
+ADMIN_API_BASE = os.environ.get("ADMIN_API_BASE", "http://localhost:3000/api")
+
 # ================= تنظیمات مالی ربات =================
 CARD_NUMBER = "6219861936929354"
 ACCOUNT_NAME = "هادی منتظران"

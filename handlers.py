@@ -188,7 +188,9 @@ async def process_payment_receipt(message: types.Message, state: FSMContext, bot
                 'doc_category': doc_category, 
                 'doc_subcategory': doc_subcategory, 
                 'doc_type': doc_name,
-                'need_attachments': need_attachments
+                'need_attachments': need_attachments,
+                'full_name': message.from_user.full_name,
+                'payment_fee': item.get('fee', 0),
             })
             
         if os.path.exists(photo_path):
@@ -248,7 +250,9 @@ async def admin_approve_cart(callback: CallbackQuery, bot: Bot):
             'doc_category': doc_category, 
             'doc_subcategory': doc_subcategory, 
             'doc_type': doc_name,
-            'need_attachments': need_attachments
+            'need_attachments': need_attachments,
+            'full_name': user_data.get('full_name', ''),
+            'payment_fee': item.get('fee', 0),
         })
         
     await bot.send_message(
@@ -1090,7 +1094,9 @@ async def confirm_opt_process(message: types.Message, state: FSMContext, bot: Bo
                 'doc_category': data.get('doc_category'),
                 'doc_subcategory': data.get('doc_subcategory'),
                 'doc_type': f"{data.get('doc_category')} - {data.get('doc_subcategory')}" if data.get('doc_subcategory') else data.get('doc_category'),
-                'need_attachments': data.get('need_attachments', False)
+                'need_attachments': data.get('need_attachments', False),
+                'full_name': message.from_user.full_name,
+                'payment_fee': fee,
             })
             await state.clear()
             return

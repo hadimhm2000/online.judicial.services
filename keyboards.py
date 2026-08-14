@@ -893,10 +893,33 @@ check_extra_text_kb = ReplyKeyboardMarkup(
 
 check_more_images_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ بله، تصویر یا مدرک دیگری دارم")],
+        [KeyboardButton(text="➕ تصویر چک بعدی")],
+        [KeyboardButton(text="📎 تصویر یا مدرک دیگر دارم")],
         [KeyboardButton(text="✅ خیر، ادامه به انتخاب دادگاه")],
     ],
     resize_keyboard=True
+)
+
+check_attachment_title_kb_first = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔹 عنوان مهم نیست (سایر مستندات)"), KeyboardButton(text="⏭ رد کردن (بدون مدرک)")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True
+)
+
+check_attachment_title_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🔹 عنوان مهم نیست (سایر مستندات)")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True
+)
+
+check_attachment_more_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ بله، عنوان و مدرک دیگر دارم")],
+        [KeyboardButton(text="✅ خیر، ادامه به انتخاب دادگاه")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True
 )
 
 check_docx_option_kb = ReplyKeyboardMarkup(
@@ -906,3 +929,14 @@ check_docx_option_kb = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+
+def create_check_person_type_kb(show_finish: bool = False):
+    """کیبورد نوع شخصیت برای چک — همیشه حقیقی + حقوقی (بدون exclude)."""
+    keyboard = [
+        [KeyboardButton(text="شخص حقیقی"), KeyboardButton(text="شخص حقوقی")],
+        [KeyboardButton(text="📞 استعلام شماره تماس")],
+    ]
+    if show_finish:
+        keyboard.append([KeyboardButton(text="✅ اتمام و ادامه")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)

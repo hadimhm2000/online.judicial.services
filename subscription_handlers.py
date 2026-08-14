@@ -123,6 +123,16 @@ async def subscription_payment_receipt(message: Message, state: FSMContext, bot:
 
         # فعال‌سازی اشتراک
         runtime_state.activate_subscription(user_id)
+        # همگام‌سازی با پنل ادمین
+        try:
+            import aiohttp as _aiohttp
+            async def _sync_sub():
+                async with _aiohttp.ClientSession() as s:
+                    from config import ADMIN_API_BASE
+                    await s.post(f"{ADMIN_API_BASE}/subscriptions/activate", json={"user_id": user_id})
+            asyncio.create_task(_sync_sub())
+        except Exception:
+            pass
         sub = runtime_state.user_subscriptions[user_id]
         end_str = sub["end_date"].strftime("%Y/%m/%d %H:%M")
 
@@ -200,6 +210,16 @@ async def admin_approve_subscription(callback: CallbackQuery, bot: Bot):
 
     # فعال‌سازی اشتراک
     runtime_state.activate_subscription(user_id)
+    # همگام‌سازی با پنل ادمین
+    try:
+        import aiohttp as _aiohttp
+        async def _sync_sub():
+            async with _aiohttp.ClientSession() as s:
+                from config import ADMIN_API_BASE
+                await s.post(f"{ADMIN_API_BASE}/subscriptions/activate", json={"user_id": user_id})
+        asyncio.create_task(_sync_sub())
+    except Exception:
+        pass
     sub = runtime_state.user_subscriptions[user_id]
     end_str = sub["end_date"].strftime("%Y/%m/%d %H:%M")
 

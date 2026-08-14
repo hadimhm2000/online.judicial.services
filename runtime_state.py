@@ -10,6 +10,7 @@ browser_worker در scenarios.py) مقداردهی می‌شن؛ اگر با fro
 بگیری، همیشه مقدار None رو می‌بینی، نه مقدار واقعی و به‌روز.
 """
 import asyncio
+import os
 
 job_queue: asyncio.Queue = asyncio.Queue()
 login_event: asyncio.Event = asyncio.Event()
@@ -237,6 +238,7 @@ def activate_subscription(user_id: int):
         "end_date": now + datetime.timedelta(days=SUBSCRIPTION_DURATION_DAYS),
         "expiry_notified": False,
     }
+    _persist_subscriptions()
 
 
 def get_expired_subscriptions() -> list:
@@ -254,3 +256,47 @@ def mark_expiry_notified(user_id: int):
     """علامت‌گذاری ارسال اعلان انقضای اشتراک."""
     if user_id in user_subscriptions:
         user_subscriptions[user_id]["expiry_notified"] = True
+        _persist_subscriptions()
+
+
+# =========================================================
+# ذخیره‌ی دائمی اشتراک‌ها (بدون حذف پس از load)
+# =========================================================
+import json as _json
+_SUB_STORE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subscriptions_store.json")
+
+def _persist_subscriptions():
+    """ذخیره‌ی دائمی اشتراک‌ها در فایل مستقل (بدون حذف)."""
+    try:
+        data = {}
+        for uid, sub in user_subscriptions.items():
+            data[str(uid)] = {
+                "start_date": sub["start_date"].isoformat() if hasattr(sub["start_date"], "isoformat") else sub["start_date"],
+                "end_date": sub["end_date"].isoformat() if hasattr(sub["end_date"], "isoformat") else sub["end_date"],
+                "expiry_notified": sub.get("expiry_notified", False),
+            }
+        tmp = _SUB_STORE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _SUB_STORE)
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"[SUB-STORE] {e}")
+
+def _load_persisted_subscriptions():
+    """بارگذاری اشتراک‌های دائمی هنگام استارت."""
+    import datetime as _dt
+    if not os.path.exists(_SUB_STORE):
+        return
+    try:
+        with open(_SUB_STORE, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        for uid_str, info in data.items():
+            uid = int(uid_str)
+            try:
+                info["start_date"] = _dt.datetime.fromisoformat(info["start_date"])
+                info["end_date"] = _dt.datetime.fromisoformat(info["end_date"])
+            except Exception:
+                pass
+            user_subscriptions[uid] = info
+    except Exception as e:
+        import logging; logging.getLogger(__name__).error(f"[SUB-STORE load] {e}")

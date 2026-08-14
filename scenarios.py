@@ -12,6 +12,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 import runtime_state
 from config import ADMIN_ID, DEBUG_LOG_REQUESTS, FEES, get_fee
 from sheets import log_event
+from panel_sync import register_inquiry_to_panel
 from keyboards import admin_login_kb, confirm_single_kb, confirm_cart_kb
 from browser_helpers import (
     human_delay, force_click_by_text, soft_click_if_exists, human_type,
@@ -1168,6 +1169,20 @@ async def process_task(data, bot: Bot):
                             await bot.send_document(user_id, document=doc, caption=f"📄 استعلام کد پیگیری: `{tracking_code}`")
                             os.remove(pdf_path)
 
+                            # ── ثبت استعلام در پنل ادمین ──
+                            try:
+                                await register_inquiry_to_panel(
+                                    user_id=user_id,
+                                    full_name=data.get('full_name', ''),
+                                    tracking_code=tracking_code,
+                                    doc_category=category,
+                                    doc_subcategory=subcategory,
+                                    fee=data.get('payment_fee', 0),
+                                    result_summary=f"استعلام کد رهگیری - {doc_name}"
+                                )
+                            except Exception as panel_err:
+                                logger.warning(f"خطا در ثبت استعلام: {panel_err}")
+
                     except Exception as print_err:
                         logging.error(f"خطا در چاپ: {print_err}")
                         await bot.send_message(user_id, "⚠️ چاپ پرونده با خطا مواجه شد.")
@@ -1203,6 +1218,21 @@ async def process_task(data, bot: Bot):
                                     await bot.send_document(user_id, document=doc, caption=caption)
                                     os.remove(path)
                             await bot.send_message(user_id, "📄 این درخواست فاقد بخش منضمات است.")
+
+                            # ── ثبت استعلام در پنل ادمین ──
+                            try:
+                                await register_inquiry_to_panel(
+                                    user_id=user_id,
+                                    full_name=data.get('full_name', ''),
+                                    tracking_code=tracking_code,
+                                    doc_category=category,
+                                    doc_subcategory=subcategory,
+                                    fee=data.get('payment_fee', 0),
+                                    result_summary=f"استعلام بدون منضمات - {doc_name}"
+                                )
+                            except Exception as panel_err:
+                                logger.warning(f"خطا در ثبت استعلام: {panel_err}")
+
                             return
 
                         await safe_click_by_text(sana_page, "منضمات", bot, user_id)
@@ -1244,6 +1274,21 @@ async def process_task(data, bot: Bot):
                                     await bot.send_document(user_id, document=doc, caption=caption)
                                     os.remove(path)
                             await bot.send_message(user_id, "📄 این درخواست فاقد پیوست واقعی است.")
+
+                            # ── ثبت استعلام در پنل ادمین ──
+                            try:
+                                await register_inquiry_to_panel(
+                                    user_id=user_id,
+                                    full_name=data.get('full_name', ''),
+                                    tracking_code=tracking_code,
+                                    doc_category=category,
+                                    doc_subcategory=subcategory,
+                                    fee=data.get('payment_fee', 0),
+                                    result_summary=f"استعلام بدون پیوست واقعی - {doc_name}"
+                                )
+                            except Exception as panel_err:
+                                logger.warning(f"خطا در ثبت استعلام: {panel_err}")
+
                         else:
                             await bot.send_message(
                                 user_id,
@@ -1365,6 +1410,20 @@ async def process_task(data, bot: Bot):
                                             logging.error(f"خطا در ارسال {path}: {send_err}")
 
                                 await bot.send_message(user_id, "✅ استخراج منضمات کاملاً تمام شد.")
+
+                                # ── ثبت استعلام در پنل ادمین ──
+                                try:
+                                    await register_inquiry_to_panel(
+                                        user_id=user_id,
+                                        full_name=data.get('full_name', ''),
+                                        tracking_code=tracking_code,
+                                        doc_category=category,
+                                        doc_subcategory=subcategory,
+                                        fee=data.get('payment_fee', 0),
+                                        result_summary=f"استعلام با منضمات - {doc_name} - {len(real_rows)} پیوست"
+                                    )
+                                except Exception as panel_err:
+                                    logger.warning(f"خطا در ثبت استعلام: {panel_err}")
 
                             except Exception as loop_err:
                                 if "Session expired" in str(loop_err):

@@ -213,6 +213,7 @@ async def main():
     # ── بررسی کرش قبلی و بارگذاری حالت ──
     crashed, crash_data = was_crash()
     active_submitted, active_unsubmitted = load_into_runtime_state()
+    runtime_state._load_persisted_subscriptions()
     logging.info(
         f"[START] کرش قبلی: {crashed} | "
         f"کاربران ثبت‌شده: {len(active_submitted)} | "

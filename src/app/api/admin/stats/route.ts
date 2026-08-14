@@ -1,4 +1,3 @@
-@'
 import { db } from '@/lib/db';
 import { NextResponse } from 'next/server';
 
@@ -74,4 +73,3 @@ export async function GET() {
     return NextResponse.json({ error: 'Failed to fetch stats' }, { status: 500 });
   }
 }
-'@ | Set-Content -Path "src\app\api\admin\stats\route.ts" -Encoding UTF8
