@@ -6,13 +6,28 @@ new_lavayeh_request_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="ث�
 back_only_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🔙 بازگشت")]], resize_keyboard=True)
 accept_rules_kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✅ قوانین و مقررات را تایید می‌نمایم")]], resize_keyboard=True)
 
+# آیدی مدیر مجاز به مشاهده بخش تست
+TEST_VISIBLE_USER_ID = 509108833
+
+def get_flow_type_kb(user_id: int) -> ReplyKeyboardMarkup:
+    """کیبورد منوی اصلی — دکمه تست فقط برای کاربر مجاز."""
+    rows = [
+        [KeyboardButton(text="🔍 استعلام"), KeyboardButton(text="📦 استعلام (چند مورد همزمان)")],
+        [KeyboardButton(text="✍️ ثبت لایحه"), KeyboardButton(text="📄 ثبت اظهارنامه")],
+        [KeyboardButton(text="⚖️ دعاوی اعتراضی"), KeyboardButton(text="🏦 ثبت دادخواست چک")],
+        [KeyboardButton(text="💰 محاسبه تمبر"), KeyboardButton(text="🔧 ابزار فایل")],
+    ]
+    if user_id == TEST_VISIBLE_USER_ID:
+        rows.append([KeyboardButton(text="🧪 تست")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+# کیبورد بدون تست (fallback)
 flow_type_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔍 استعلام"), KeyboardButton(text="📦 استعلام (چند مورد همزمان)")],
         [KeyboardButton(text="✍️ ثبت لایحه"), KeyboardButton(text="📄 ثبت اظهارنامه")],
         [KeyboardButton(text="⚖️ دعاوی اعتراضی"), KeyboardButton(text="🏦 ثبت دادخواست چک")],
         [KeyboardButton(text="💰 محاسبه تمبر"), KeyboardButton(text="🔧 ابزار فایل")],
-        [KeyboardButton(text="🧪 تست")],
     ], resize_keyboard=True)
 
 # =========================================================
@@ -463,9 +478,20 @@ ezhhar_declarant_add_more_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# کیبورد «افزودن شخص دیگر» — نسخه اختصاصی بخش چک (خوانده به جای مخاطب)
+check_addressee_add_more_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="➕ افزودن خوانده دیگر")],
+        [KeyboardButton(text="✅ اتمام و ادامه")],
+        [KeyboardButton(text="📞 استعلام شماره تماس")],
+        [KeyboardButton(text="🔙 بازگشت")]
+    ],
+    resize_keyboard=True
+)
+
 ezhhar_addressee_add_more_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ افزودن مخاطب دیگر")],
+        [KeyboardButton(text="➕ افزودن خوانده دیگر")],
         [KeyboardButton(text="✅ اتمام و ادامه")],
         [KeyboardButton(text="📞 استعلام شماره تماس")],
         [KeyboardButton(text="🔙 بازگشت")]
@@ -900,6 +926,16 @@ check_more_images_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+def get_check_more_images_kb(image_count: int, max_images: int = 3) -> ReplyKeyboardMarkup:
+    """کیبورد داینامیک — دکمه «تصویر چک بعدی» همیشه نمایش داده شود.
+    تصاویر اضافی به عنوان مدارک (attachment) ذخیره می‌شوند، نه check_images."""
+    rows = []
+    # همیشه دکمه تصویر چک بعدی نمایش داده شود — تصاویر اضافی به attachment می‌روند
+    rows.append([KeyboardButton(text="➕ تصویر چک بعدی")])
+    rows.append([KeyboardButton(text="📎 تصویر یا مدرک دیگر دارم")])
+    rows.append([KeyboardButton(text="✅ خیر، ادامه به انتخاب دادگاه")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
 check_attachment_title_kb_first = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🔹 عنوان مهم نیست (سایر مستندات)"), KeyboardButton(text="⏭ رد کردن (بدون مدرک)")],
@@ -918,6 +954,14 @@ check_attachment_more_kb = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➕ بله، عنوان و مدرک دیگر دارم")],
         [KeyboardButton(text="✅ خیر، ادامه به انتخاب دادگاه")],
+        [KeyboardButton(text="🔙 بازگشت")],
+    ], resize_keyboard=True
+)
+
+# کیبورد انتخاب روش ورود متن — عمومی (بازگشت دارد)
+text_input_method_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⌨️ تایپ مستقیم متن"), KeyboardButton(text="📎 ارسال فایل ورد (.docx)")],
         [KeyboardButton(text="🔙 بازگشت")],
     ], resize_keyboard=True
 )

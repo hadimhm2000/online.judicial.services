@@ -40,6 +40,7 @@ from keyboards import (
     ezhhar_attachment_title_kb_first,
     ezhhar_attachment_title_kb,
     ezhhar_attachment_more_kb,
+    text_input_method_kb,
     tn_case_type_kb, tn_doc_type_kb, tn_amount_type_kb,
     tn_insolvency_kb, tn_extra_text_kb,
     tn_more_witnesses_kb, tn_confirm_kb, tn_edit_kb,
@@ -68,13 +69,38 @@ def _to_en(text: str) -> str:
 
 
 def _validate_judge_no(code: str):
-    """اعتبارسنجی شماره دادنامه — همیشه ۱۸ رقمی."""
+    """اعتبارسنجی شماره دادنامه — ۱۴۰۰ به بعد ۱۸ رقمی، ۹۹ و قبل‌تر ۱۶ رقمی."""
     if not code.isdigit():
         return False, "⚠️ شماره دادنامه باید فقط شامل اعداد باشد."
-    if len(code) != 18:
+    # تعیین سال از ۴ رقم ابتدایی
+    prefix = int(code[:4]) if len(code) >= 4 else 0
+    if prefix >= 1400:
+        expected = 18
+    else:
+        expected = 16
+    if len(code) != expected:
         return False, (
-            f"⚠️ شماره دادنامه باید **۱۸ رقمی** باشد.\n"
+            f"⚠️ شماره دادنامه باید **{expected} رقمی** باشد.\n"
+            f"_(۱۴۰۰ به بعد: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_\n\n"
             f"کد شما **{len(code)} رقمی** است. مجدداً وارد فرمایید:"
+        )
+    return True, code
+
+
+def _validate_file_no(code: str):
+    """اعتبارسنجی شماره پرونده — ۱۴۰۰ به بعد ۱۸ رقمی، ۹۹ و قبل‌تر ۱۶ رقمی."""
+    if not code.isdigit():
+        return False, "⚠️ شماره پرونده باید فقط شامل اعداد باشد."
+    prefix = int(code[:4]) if len(code) >= 4 else 0
+    if prefix >= 1400:
+        expected = 18
+    else:
+        expected = 16
+    if len(code) != expected:
+        return False, (
+            f"⚠️ شماره پرونده باید **{expected} رقمی** باشد.\n"
+            f"_(۱۴۰۰ به بعد: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_\n\n"
+            f"کد شما **{len(code)} رقمی** است. لطفاً شماره صحیح را وارد فرمایید:"
         )
     return True, code
 
@@ -174,9 +200,9 @@ async def tn_case_type_handler(message: Message, state: FSMContext):
         return
     if text == "🔙 بازگشت به منوی اصلی":
         await state.clear()
-        from handlers import flow_type_kb
+        from handlers import get_flow_type_kb
         await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**",
-                             reply_markup=flow_type_kb, parse_mode="Markdown")
+                             reply_markup=get_flow_type_kb(message.from_user.id), parse_mode="Markdown")
         await state.set_state(Form.waiting_for_flow_type)
         return
 
@@ -234,7 +260,7 @@ async def tn_judge_no_handler(message: Message, state: FSMContext):
     await message.answer(
         f"✅ شماره دادنامه `{judge_no}` ثبت شد.\n\n"
         f"**مرحله ۲:** لطفاً **شماره پرونده** را ارسال کنید.\n\n"
-        f"نکته: شماره پرونده به همراه ردیف فرعی ارسال شود.",
+        f"_(۱۴۰۰ به بعد: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_",
         reply_markup=back_only_kb,
         parse_mode="Markdown"
     )
@@ -250,7 +276,8 @@ async def tn_file_no_handler(message: Message, state: FSMContext):
         return
     if message.text == "🔙 بازگشت":
         await message.answer(
-            "لطفاً **شماره دادنامه** را ارسال کنید (۱۸ رقمی):",
+            "لطفاً **شماره دادنامه** را ارسال کنید:\n\n"
+            "_(۱۴۰۰ به بعد: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_",
             reply_markup=back_only_kb, parse_mode="Markdown"
         )
         await state.set_state(Form.tn_judge_no)
@@ -261,10 +288,12 @@ async def tn_file_no_handler(message: Message, state: FSMContext):
         await message.answer("⚠️ شماره پرونده باید فقط شامل اعداد باشد:\n\nلطفاً مجدداً وارد فرمایید:",
                              reply_markup=back_only_kb, parse_mode="Markdown")
         return
-    if len(file_no) < 10:
-        await message.answer("⚠️ شماره پرونده نامعتبر است. لطفاً شماره صحیح را وارد فرمایید:",
-                             reply_markup=back_only_kb, parse_mode="Markdown")
+    # اعتبارسنجی ۱۶/۱۸ رقمی بر اساس سال
+    valid, result = _validate_file_no(file_no)
+    if not valid:
+        await message.answer(result, reply_markup=back_only_kb, parse_mode="Markdown")
         return
+    file_no = result
 
     await state.update_data(tn_file_no=file_no)
     await message.answer(
@@ -345,8 +374,7 @@ async def tn_province_handler(message: Message, state: FSMContext):
     if _is_prosecutor_objection(case_type):
         await message.answer(
             f"✅ استان **{matched_province}** ثبت شد.\n\n"
-            f"**مرحله ۵:** لطفاً **شماره قرار** را ارسال کنید.\n\n"
-            f"نکته: شماره‌های **۱۴۰۰ تا ۱۴۰۷** باید **۱۸ رقمی** و شماره‌های **۹۹ و قبل‌تر** باید **۱۶ رقمی** باشند.",
+            f"**مرحله ۵:** لطفاً **شماره قرار** را ارسال کنید.",
             reply_markup=back_only_kb,
             parse_mode="Markdown"
         )
@@ -1037,14 +1065,14 @@ async def tn_more_witnesses_handler(message: Message, state: FSMContext):
     witness_label = labels.get("witness_step", "مطلع/گواه")
 
     if text.startswith("✅ خیر") or text == "خیر" or "ادامه مراحل" in text:
-        # رفتن به مرحله شرح متن
+        # رفتن به مرحله شرح متن — ابتدا انتخاب روش ورود
         await message.answer(
-            "**مرحله ۱۱:** لطفاً **شرح متن** را به صورت کامل و تایپ‌شده ارسال فرمایید:\n\n"
+            "**مرحله ۱۱:** لطفاً روش ورود **شرح متن** را انتخاب فرمایید:\n\n"
             "⚠️ **توجه:** متن پس از ارسال قابل ویرایش نمی‌باشد.",
-            reply_markup=ReplyKeyboardRemove(),
+            reply_markup=text_input_method_kb,
             parse_mode="Markdown",
         )
-        await state.set_state(Form.tn_text)
+        await state.set_state(Form.tn_text_choice)
         return
 
     if text == "🔙 بازگشت":
@@ -1132,6 +1160,55 @@ async def tn_witness_national_id_handler(message: Message, state: FSMContext):
         parse_mode="Markdown",
     )
     await state.set_state(Form.tn_more_witnesses)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# مرحله ۱۱ — انتخاب روش ورود متن (تایپ مستقیم / فایل ورد)
+# ══════════════════════════════════════════════════════════════════════════════
+@tajdid_nazar_router.message(Form.tn_text_choice)
+async def tn_text_choice_handler(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+    if text == "⌨️ تایپ مستقیم متن":
+        await message.answer(
+            "📝 لطفاً **شرح متن** دادخواست را ارسال فرمایید:",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.tn_text)
+    elif text == "📎 ارسال فایل ورد (.docx)":
+        await message.answer(
+            "📎 لطفاً **فایل ورد (.docx)** را ارسال فرمایید:",
+            reply_markup=back_only_kb,
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.tn_text)
+    elif text == "🔙 بازگشت":
+        data = await state.get_data()
+        labels = data.get("tn_labels", {})
+        prosecutor = data.get("case_type", "") == "اعتراض به قرار دادسرا"
+        if prosecutor:
+            await message.answer(
+                "🔍 آیا **مطلع یا گواه** دیگری دارید؟",
+                reply_markup=tn_more_witnesses_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.tn_more_witnesses)
+        else:
+            appellees = data.get("tn_appellees", [])
+            used_types = [p.get("person_type") for p in appellees]
+            appellee_label = labels.get("appellee", "تجدیدنظرخوانده")
+            await message.answer(
+                f"👥 لطفاً **نوع شخصیت {appellee_label}** را انتخاب فرمایید:",
+                reply_markup=create_tn_appellee_person_type_kb(exclude=used_types),
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.tn_appellee_person_type)
+    else:
+        await message.answer(
+            "⚠️ لطفاً یکی از گزینه‌های موجود را انتخاب فرمایید:",
+            reply_markup=text_input_method_kb,
+            parse_mode="Markdown"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1270,11 +1347,12 @@ async def tn_attachment_title_handler(message: Message, state: FSMContext):
 
     if text == "🔙 بازگشت":
         await message.answer(
-            "**مرحله ۱۱:** لطفاً **شرح متن** را ارسال فرمایید:",
-            reply_markup=ReplyKeyboardRemove(),
+            "**مرحله ۱۱:** لطفاً روش ورود **شرح متن** را انتخاب فرمایید:\n\n"
+            "⚠️ **توجه:** متن پس از ارسال قابل ویرایش نمی‌باشد.",
+            reply_markup=text_input_method_kb,
             parse_mode="Markdown",
         )
-        await state.set_state(Form.tn_text)
+        await state.set_state(Form.tn_text_choice)
         return
 
     if text == "🔹 عنوان مهم نیست (صرفا درج شود مستندات)":
@@ -1456,10 +1534,10 @@ async def tn_images_text_fallback(message: Message, state: FSMContext):
 @tajdid_nazar_router.message(Form.tn_attachment_more)
 async def tn_attachment_more_handler(message: Message, state: FSMContext):
     text = (message.text or "").strip()
-    if text == "✅ اتمام ارسال مدارک":
+    if text == "✅ خیر، ادامه بده":
         await _ask_tn_extra_text(message, state)
         return
-    if text == "➕ افزودن مدرک جدید":
+    if text == "➕ بله، عنوان و مدرک دیگر دارم":
         await _ask_tn_attachment(message, state, is_first=False)
         return
     await message.answer(

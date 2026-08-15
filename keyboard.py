@@ -473,7 +473,7 @@ ezhhar_declarant_add_more_kb = ReplyKeyboardMarkup(
 
 ezhhar_addressee_add_more_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ افزودن مخاطب دیگر")],
+        [KeyboardButton(text="➕ افزودن خوانده دیگر")],
         [KeyboardButton(text="✅ اتمام و ادامه")],
         [KeyboardButton(text="📞 استعلام شماره تماس")],
         [KeyboardButton(text="🔙 بازگشت")]

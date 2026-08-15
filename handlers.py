@@ -27,7 +27,7 @@ from api_direct import (
     InvalidTrackingCodeError as FastInvalidTrackingCodeError,
 )
 from keyboards import (
-    restart_kb, accept_rules_kb, flow_type_kb, main_menu_kb, doc_category_kb,
+    restart_kb, accept_rules_kb, flow_type_kb, get_flow_type_kb, main_menu_kb, doc_category_kb,
     attachments_kb, cart_kb, pay_kb, confirm_single_kb, confirm_cart_kb,
     admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb,
     payment_cancel_kb, disrupted_retry_kb, test_mode_doc_type_kb, test_mode_section_kb,
@@ -59,11 +59,20 @@ SAMANEH_WRONG_TYPE_ERROR = "کد دفتر، مبلغ پرونده یا دستر�
 
 
 def _is_valid_tracking_code(code: str) -> bool:
-    """کد رهگیری باید ۱۶ رقمی باشد و ۷ رقم ابتدایی آن در بازه‌ی معتبر باشد."""
-    if len(code) != TRACKING_CODE_LENGTH or not code.isdigit():
+    """کد رهگیری: ۱۴۰۰ به بعد ۱۸ رقمی، ۹۹ و قبل‌تر ۱۶ رقمی.
+    ۷ رقم ابتدایی آن باید در بازه‌ی معتبر باشد."""
+    if not code.isdigit():
         return False
     prefix = int(code[:7])
-    return TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX
+    if not (TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX):
+        return False
+    # تعیین طول بر اساس سال: ۱۴۰۰ به بعد ۱۸ رقمی
+    year_prefix = int(code[:4])
+    if year_prefix >= 1400:
+        expected_len = 18
+    else:
+        expected_len = 16
+    return len(code) == expected_len
 
 
 def _record_failed_inquiry(user_id: int) -> int:
@@ -635,7 +644,7 @@ async def process_disrupted_retry(message: types.Message, state: FSMContext, bot
 
 @router.message(Form.waiting_for_rule_acceptance, F.text == "✅ قوانین و مقررات را تایید می‌نمایم")
 async def rules_accepted(message: types.Message, state: FSMContext):
-    await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=flow_type_kb)
+    await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=get_flow_type_kb(message.from_user.id))
     await state.set_state(Form.waiting_for_flow_type)
 
 @router.message(Form.waiting_for_flow_type)
@@ -710,7 +719,7 @@ async def process_main_menu(message: types.Message, state: FSMContext):
     if not message.text: return
     
     if "🔙 بازگشت به منوی اصلی" in message.text:
-        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=flow_type_kb, parse_mode="Markdown")
+        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=get_flow_type_kb(message.from_user.id), parse_mode="Markdown")
         await state.set_state(Form.waiting_for_flow_type)
         return
 
@@ -807,10 +816,13 @@ async def process_tracking_code(message: types.Message, state: FSMContext):
         await message.answer("⚠️ فرمت نامعتبر است. فقط عدد ارسال کنید:")
         return
     if not _is_valid_tracking_code(clean_code):
+        year_prefix = int(clean_code[:4]) if len(clean_code) >= 4 else 0
+        expected = 18 if year_prefix >= 1400 else 16
         await message.answer(
-            "⚠️ کد رهگیری نامعتبر است.\n"
-            "کد رهگیری باید ۱۶ رقم باشد و با یکی از سال‌های ۱۳۹۴ تا ۱۴۰۶ (یعنی اعداد ۱۳۹۴۲۲۰ الی ۱۴۰۶۲۲۰) شروع شود.\n"
-            "لطفاً کد را دوباره بررسی و ارسال فرمایید:"
+            f"⚠️ کد رهگیری نامعتبر است.\n"
+            f"کد رهگیری باید **{expected} رقمی** باشد _(۱۴۰۰ به بعد: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_\n"
+            f"و با یکی از سال‌های ۱۳۹۴ تا ۱۴۰۶ شروع شود.\n"
+            f"لطفاً کد را دوباره بررسی و ارسال فرمایید:"
         )
         return
     # ── بررسی محدودیت تلاش قبل از ادامه ──
@@ -1165,14 +1177,16 @@ async def test_mode_receive_tracking_code(message: types.Message, state: FSMCont
         return
 
     if message.text == "🔙 بازگشت":
-        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=flow_type_kb, parse_mode="Markdown")
+        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=get_flow_type_kb(message.from_user.id), parse_mode="Markdown")
         await state.set_state(Form.waiting_for_flow_type)
         return
 
     clean_code = message.text.translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')).replace(" ", "").strip()
 
     if not re.match(r'^[0-9]+$', clean_code) or not _is_valid_tracking_code(clean_code):
-        await message.answer("⚠️ کدرهگیری نامعتبر است. لطفاً یک کدرهگیری ۱۶ رقمی معتبر ارسال فرمایید:")
+        year_prefix = int(clean_code[:4]) if len(clean_code) >= 4 else 0
+        expected = 18 if year_prefix >= 1400 else 16
+        await message.answer(f"⚠️ کدرهگیری نامعتبر است. لطفاً یک کدرهگیری **{expected} رقمی** معتبر ارسال فرمایید:")
         return
 
     await state.update_data(
@@ -1196,7 +1210,7 @@ async def test_mode_doc_type(message: types.Message, state: FSMContext):
         return
 
     if "انصراف" in message.text:
-        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=flow_type_kb, parse_mode="Markdown")
+        await message.answer("❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**", reply_markup=get_flow_type_kb(message.from_user.id), parse_mode="Markdown")
         await state.set_state(Form.waiting_for_flow_type)
         return
 

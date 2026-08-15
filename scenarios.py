@@ -18,8 +18,10 @@ from browser_helpers import (
     human_delay, force_click_by_text, soft_click_if_exists, human_type,
     handle_session_expired, wait_for_angular_idle, check_and_handle_expiry,
     check_and_handle_load_error, resilient_sleep, goto_url_with_retry,
-    safe_click_by_text, safe_type, NavigationResetError,
+    safe_click_by_text, safe_type, NavigationResetError, NationalIdError,
     wait_for_horizontal_loading_bar, is_login_redirect_url,
+    detect_national_id_error, check_national_id_error_or_continue,
+    NATIONAL_ID_ERROR_MSG,
 )
 from sana_profile_report import extract_sana_profile, build_sana_profile_pdf
 
@@ -606,26 +608,50 @@ async def process_task(data, bot: Bot):
 
     # ── سناریوی لایحه ثبت ─────────────────────────────────────────────────
     if task_type == "LAVAYEH_SUBMIT":
-        from lavayeh_scenario import process_lavayeh_task
-        await process_lavayeh_task(data, bot)
+        try:
+            from lavayeh_scenario import process_lavayeh_task
+            await process_lavayeh_task(data, bot)
+        except NationalIdError:
+            await bot.send_message(user_id, NATIONAL_ID_ERROR_MSG, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"[LAVAYEH_SUBMIT] خطا: {e}", exc_info=True)
+            await bot.send_message(user_id, f"❌ خطایی در فرآیند ثبت لایحه رخ داد. فرآیند متوقف شد.\nلطفاً مجدداً از ابتدا اقدام فرمایید.")
         return
 
     # ── سناریوی اعلام وکالت ────────────────────────────────────────────────
     if task_type == "EALAM_VAKALAHT_SUBMIT":
-        from ealam_vakalaht_scenario import process_ealam_vakalaht_task
-        await process_ealam_vakalaht_task(data, bot)
+        try:
+            from ealam_vakalaht_scenario import process_ealam_vakalaht_task
+            await process_ealam_vakalaht_task(data, bot)
+        except NationalIdError:
+            await bot.send_message(user_id, NATIONAL_ID_ERROR_MSG, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"[EALAM_VAKALAHT_SUBMIT] خطا: {e}", exc_info=True)
+            await bot.send_message(user_id, f"❌ خطایی در فرآیند اعلام وکالت رخ داد. فرآیند متوقف شد.\nلطفاً مجدداً از ابتدا اقدام فرمایید.")
         return
 
     # ── سناریوی ثبت اظهارنامه ─────────────────────────────────────────────
     if task_type == "EZHHARNAMEH_SUBMIT":
-        from ezhharnameh_scenario import process_ezhharnameh_task
-        await process_ezhharnameh_task(data, bot)
+        try:
+            from ezhharnameh_scenario import process_ezhharnameh_task
+            await process_ezhharnameh_task(data, bot)
+        except NationalIdError:
+            await bot.send_message(user_id, NATIONAL_ID_ERROR_MSG, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"[EZHHARNAMEH_SUBMIT] خطا: {e}", exc_info=True)
+            await bot.send_message(user_id, f"❌ خطایی در فرآیند ثبت اظهارنامه رخ داد. فرآیند متوقف شد.\nلطفاً مجدداً از ابتدا اقدام فرمایید.")
         return
 
     # ── سناریوی ثبت دعاوی چک ──────────────────────────────────────────────
     if task_type == "CHECK_SUBMIT":
-        from check_scenario import process_check_task
-        await process_check_task(data, bot)
+        try:
+            from check_scenario import process_check_task
+            await process_check_task(data, bot)
+        except NationalIdError:
+            await bot.send_message(user_id, NATIONAL_ID_ERROR_MSG, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"[CHECK_SUBMIT] خطا: {e}", exc_info=True)
+            await bot.send_message(user_id, f"❌ خطایی در فرآیند ثبت دادخواست چک رخ داد. فرآیند متوقف شد.\nلطفاً مجدداً از ابتدا اقدام فرمایید.")
         return
 
     # ── سناریوهای دعاوی اعتراضی ────────────────────────────────────────
@@ -635,8 +661,14 @@ async def process_task(data, bot: Bot):
         "TN_THIRD_PARTY", "TN_PROSECUTOR_OBJECTION",
     ]
     if task_type in TN_TASK_TYPES:
-        from tajdid_nazar_scenario import process_tajdid_nazar_task
-        await process_tajdid_nazar_task(data, bot)
+        try:
+            from tajdid_nazar_scenario import process_tajdid_nazar_task
+            await process_tajdid_nazar_task(data, bot)
+        except NationalIdError:
+            await bot.send_message(user_id, NATIONAL_ID_ERROR_MSG, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"[{task_type}] خطا: {e}", exc_info=True)
+            await bot.send_message(user_id, f"❌ خطایی در فرآیند ثبت دعوی اعتراضی رخ داد. فرآیند متوقف شد.\nلطفاً مجدداً از ابتدا اقدام فرمایید.")
         return
 
     # ── سناریوی ارسال کد امضا ─────────────────────────────────────────────

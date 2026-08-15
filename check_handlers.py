@@ -38,12 +38,14 @@ from keyboards import (
     create_check_person_type_kb,
     ezhhar_declarant_add_more_kb,
     ezhhar_addressee_add_more_kb,
+    check_addressee_add_more_kb,
+    get_check_more_images_kb,
     check_choice_kb,
     check_request_title_kb,
     check_confirm_kb,
     check_edit_kb,
     check_extra_text_kb,
-    check_more_images_kb,
+    check_more_images_kb,  # fallback ثابت
     check_attachment_title_kb_first,
     check_attachment_title_kb,
     check_attachment_more_kb,
@@ -116,10 +118,10 @@ async def check_entry(message: Message, state: FSMContext):
 @check_router.message(Form.check_request_type, F.text == "🔙 بازگشت")
 async def check_back_to_main(message: Message, state: FSMContext):
     await state.clear()
-    from keyboards import flow_type_kb
+    from keyboards import get_flow_type_kb
     await message.answer(
         "❓ **لطفاً نحوه ثبت درخواست خود را انتخاب فرمایید:**",
-        reply_markup=flow_type_kb,
+        reply_markup=get_flow_type_kb(message.from_user.id),
         parse_mode="Markdown"
     )
 
@@ -771,7 +773,7 @@ async def check_defendant_person_type_handler(message: Message, state: FSMContex
             "🔍 **مرحله ۷:** آیا **مطلع یا گواه** دارید؟\n\n"
             "در صورت وجود، **کدملی** مطلع/گواه را ارسال فرمایید.\n"
             "_(در غیر این صورت گزینه «اتمام» را انتخاب کنید)_",
-            reply_markup=ezhhar_addressee_add_more_kb,
+            reply_markup=check_addressee_add_more_kb,
             parse_mode="Markdown"
         )
         await state.set_state(Form.check_witness_national_id)
@@ -900,7 +902,7 @@ async def check_defendant_national_id_handler(message: Message, state: FSMContex
 @check_router.message(Form.check_defendant_more)
 async def check_defendant_more_handler(message: Message, state: FSMContext):
     text = message.text or ""
-    if text == "➕ افزودن مخاطب دیگر":
+    if text == "➕ افزودن خوانده دیگر":
         data = await state.get_data()
         defendants = data.get("check_defendants", [])
         used_types = [p.get("person_type") for p in defendants]
@@ -913,7 +915,7 @@ async def check_defendant_more_handler(message: Message, state: FSMContext):
         await message.answer(
             "🔍 **مرحله ۷:** آیا **مطلع یا گواه** دارید؟\n\n"
             "در صورت وجود، **کدملی** مطلع/گواه را ارسال فرمایید.",
-            reply_markup=ezhhar_addressee_add_more_kb,
+            reply_markup=check_addressee_add_more_kb,
             parse_mode="Markdown"
         )
         await state.set_state(Form.check_witness_national_id)
@@ -957,7 +959,7 @@ async def check_witness_national_id_handler(message: Message, state: FSMContext)
         await message.answer(
             "⚠️ کد ملی باید **۱۰ رقمی** باشد. لطفاً مجدداً وارد کنید:\n"
             "_(یا گزینه «اتمام و ادامه» را بزنید)_",
-            reply_markup=ezhhar_addressee_add_more_kb,
+            reply_markup=check_addressee_add_more_kb,
             parse_mode="Markdown"
         )
         return
@@ -979,7 +981,7 @@ async def check_witness_national_id_handler(message: Message, state: FSMContext)
 @check_router.message(Form.check_more_witnesses)
 async def check_more_witnesses_handler(message: Message, state: FSMContext):
     text = message.text or ""
-    if text == "➕ افزودن مخاطب دیگر":
+    if text == "➕ افزودن خوانده دیگر":
         await message.answer(
             "🔍 لطفاً **کدملی مطلع/گواه** بعدی را ارسال فرمایید:\n_(۱۰ رقمی)_",
             reply_markup=back_only_kb,
@@ -997,7 +999,7 @@ async def check_more_witnesses_handler(message: Message, state: FSMContext):
         await message.answer(
             "🔍 لطفاً **کدملی مطلع/گواه** را ارسال فرمایید:\n_(۱۰ رقمی)_\n"
             "_(یا گزینه «اتمام و ادامه» را بزنید)_",
-            reply_markup=ezhhar_addressee_add_more_kb,
+            reply_markup=check_addressee_add_more_kb,
             parse_mode="Markdown"
         )
         await state.set_state(Form.check_witness_national_id)
@@ -1085,7 +1087,7 @@ async def check_text_handler(message: Message, state: FSMContext):
         await message.answer(
             "🔍 لطفاً **کدملی مطلع/گواه** را ارسال فرمایید:\n"
             "_(یا گزینه «اتمام و ادامه» را بزنید)_",
-            reply_markup=ezhhar_addressee_add_more_kb,
+            reply_markup=check_addressee_add_more_kb,
             parse_mode="Markdown"
         )
         await state.set_state(Form.check_witness_national_id)
@@ -1167,10 +1169,10 @@ async def check_receive_photo(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     images = data.get("check_images", [])
 
-    if len(images) >= 3:
+    if len(images) >= MAX_CHECK_IMAGES:
         await message.answer(
-            "⚠️ حداکثر ۳ تصویر مجاز است. لطفاً گزینه ادامه را انتخاب کنید:",
-            reply_markup=check_more_images_kb
+            f"⚠️ حداکثر {MAX_CHECK_IMAGES} تصویر چک مجاز است. لطفاً گزینه ادامه را انتخاب کنید:",
+            reply_markup=get_check_more_images_kb(len(images), MAX_CHECK_IMAGES)
         )
         return
 
@@ -1180,20 +1182,21 @@ async def check_receive_photo(message: Message, state: FSMContext, bot: Bot):
         images.append({"file_id": largest.file_id})
         await state.update_data(check_images=images)
 
-    remaining = 3 - len(images)
+    count = len(images)
+    remaining = MAX_CHECK_IMAGES - count
     if remaining > 0:
         await message.answer(
-            f"✅ تصویر دریافت شد. ({len(images)}/۳)\n\n"
+            f"✅ تصویر دریافت شد. ({count}/{MAX_CHECK_IMAGES})\n\n"
             f"می‌توانید تصویر دیگری ارسال کنید ({remaining} تصویر باقیمانده)\n"
             "یا گزینه ادامه را بزنید:",
-            reply_markup=check_more_images_kb,
+            reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
             parse_mode="Markdown"
         )
     else:
         await message.answer(
-            "✅ ۳ تصویر دریافت شد.\n\n"
+            f"✅ {MAX_CHECK_IMAGES} تصویر دریافت شد.\n\n"
             "آیا تصویر یا مدرک دیگری نیز دارید؟",
-            reply_markup=check_more_images_kb,
+            reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
             parse_mode="Markdown"
         )
 
@@ -1227,12 +1230,31 @@ async def check_more_images_handler(message: Message, state: FSMContext):
     check_images = data.get("check_images", [])
 
     if text == "➕ تصویر چک بعدی":
-        if len(check_images) >= MAX_CHECK_IMAGES:
+        # اگر قبلاً ۳ تصویر اولیه پر شده، تصاویر اضافی به عنوان مدارک ذخیره می‌شوند
+        count = len(check_images)
+        if count >= MAX_CHECK_IMAGES:
+            # تصاویر اضافی چک → به عنوان مدارک با عنوان "تصاویر چک اضافی"
+            await state.update_data(
+                _current_attachment_title="تصاویر چک اضافی",
+                _current_attachment_images=[],
+                _mandatory_proxy_sent=True,
+            )
+            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+            manage_kb = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+                    [KeyboardButton(text="🔙 بازگشت")],
+                ], resize_keyboard=True
+            )
             await message.answer(
-                f"⚠️ حداکثر {MAX_CHECK_IMAGES} تصویر چک مجاز است.",
-                reply_markup=check_more_images_kb,
+                f"🖼 تصاویر اولیه چک ({MAX_CHECK_IMAGES} عدد) تکمیل شده است.\n"
+                f"تصاویر اضافی به عنوان **مدارک** ثبت خواهند شد.\n\n"
+                f"لطفاً تصویر چک بعدی را ارسال فرمایید:\n"
+                f"_(حداکثر {MAX_ATTACHMENT_IMAGES} تصویر)_",
+                reply_markup=manage_kb,
                 parse_mode="Markdown"
             )
+            await state.set_state(Form.check_attachment_images)
             return
         await message.answer(
             "🖼 لطفاً **تصویر چک بعدی** را ارسال فرمایید:",
@@ -1256,11 +1278,19 @@ async def check_more_images_handler(message: Message, state: FSMContext):
             )
             await state.update_data(
                 _mandatory_proxy_sent=False,
-                _current_attachment_title="مدرک نمایندگی"
+                _current_attachment_title="مدرک نمایندی",
+                _current_attachment_images=[],
+            )
+            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+            manage_kb = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+                    [KeyboardButton(text="🔙 بازگشت")],
+                ], resize_keyboard=True
             )
             await message.answer(
                 "🖼 لطفاً تصویر **مدرک نمایندگی** را ارسال فرمایید:",
-                reply_markup=back_only_kb,
+                reply_markup=manage_kb,
                 parse_mode="Markdown"
             )
             await state.set_state(Form.check_attachment_images)
@@ -1305,9 +1335,11 @@ async def check_attachment_title_handler(message: Message, state: FSMContext):
         return
 
     if text == "🔙 بازگشت":
+        data2 = await state.get_data()
+        count = len(data2.get("check_images", []))
         await message.answer(
             "آیا تصویر یا مدرک دیگری دارید؟",
-            reply_markup=check_more_images_kb,
+            reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
             parse_mode="Markdown",
         )
         await state.set_state(Form.check_more_images)
@@ -1318,12 +1350,21 @@ async def check_attachment_title_handler(message: Message, state: FSMContext):
     else:
         title = text
 
-    await state.update_data(_current_attachment_title=title)
+    await state.update_data(_current_attachment_title=title, _current_attachment_images=[])
+    from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+    manage_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
+            [KeyboardButton(text="🔙 بازگشت")],
+        ], resize_keyboard=True
+    )
     await message.answer(
         f"✅ عنوان «**{title}**» ثبت شد.\n\n"
-        "🖼 لطفاً تصاویر مربوط به این مدرک را ارسال فرمایید.\n\n"
-        f"⚠️ حداکثر **{MAX_ATTACHMENT_IMAGES} تصویر** مجاز است.",
-        reply_markup=back_only_kb,
+        "🖼 لطفاً تصاویر مربوط به این مدرک را به صورت **عکس (Photo)** ارسال فرمایید.\n"
+        "⚠️ فقط فرمت **JPG / JPEG** قابل قبول است.\n\n"
+        f"پس از ارسال همه تصاویر، دکمه **«اتمام ارسال تصاویر»** را بفشارید.\n"
+        f"(حداکثر {MAX_ATTACHMENT_IMAGES} تصویر)",
+        reply_markup=manage_kb,
         parse_mode="Markdown",
     )
     await state.set_state(Form.check_attachment_images)
@@ -1336,9 +1377,10 @@ async def check_receive_attachment_photo(message: Message, state: FSMContext, bo
 
     if len(att_images) >= MAX_ATTACHMENT_IMAGES:
         await message.answer(
-            f"⚠️ حداکثر {MAX_ATTACHMENT_IMAGES} تصویر برای هر پیوست مجاز است.",
-            reply_markup=check_attachment_more_kb,
-            parse_mode="Markdown"
+            f"⛔ حداکثر **{MAX_ATTACHMENT_IMAGES} تصویر** در هر عنوان مجاز است.\n\n"
+            f"اگر مدرک بیشتری دارید، ابتدا دکمه «اتمام ارسال تصاویر» را بزنید\n"
+            f"و سپس عنوان جدیدی انتخاب کنید.",
+            parse_mode="Markdown",
         )
         return
 
@@ -1347,17 +1389,18 @@ async def check_receive_attachment_photo(message: Message, state: FSMContext, bo
     await state.update_data(_current_attachment_images=att_images)
 
     from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-    finish_kb = ReplyKeyboardMarkup(
+    manage_kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
             [KeyboardButton(text="🔙 بازگشت")],
-        ],
-        resize_keyboard=True,
+        ], resize_keyboard=True,
     )
+    remaining = MAX_ATTACHMENT_IMAGES - len(att_images)
     await message.answer(
-        f"✅ تصویر شماره **{len(att_images)}** دریافت شد.\n\n"
-        "می‌توانید تصویر بیشتری ارسال کنید یا «اتمام ارسال تصاویر» را بزنید:",
-        reply_markup=finish_kb,
+        f"✅ تصویر شماره **{len(att_images)}** دریافت شد.\n"
+        f"مجموع تصاویر این مدرک: **{len(att_images)}** از {MAX_ATTACHMENT_IMAGES}\n\n"
+        f"({remaining} جای باقیمانده)",
+        reply_markup=manage_kb,
         parse_mode="Markdown",
     )
 
@@ -1407,12 +1450,15 @@ async def check_attachment_more_handler(message: Message, state: FSMContext):
     elif text == "✅ خیر، ادامه به انتخاب دادگاه":
         await _ask_check_branch(message, state)
     elif "بازگشت" in text:
+        # بازگشت به صفحه انتخاب ادامه — نمایش check_more_images
+        data2 = await state.get_data()
+        count = len(data2.get("check_images", []))
         await message.answer(
-            "آیا مدرک دیگری دارید؟",
-            reply_markup=check_attachment_more_kb,
+            "آیا تصویر یا مدرک دیگری دارید؟",
+            reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
             parse_mode="Markdown",
         )
-        await state.set_state(Form.check_attachment_more)
+        await state.set_state(Form.check_more_images)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1639,7 +1685,7 @@ async def check_edit_choice_handler(message: Message, state: FSMContext):
             "🔍 لیست مطلع/گواه پاک شد.\n"
             "لطفاً **کدملی مطلع/گواه** را ارسال فرمایید:\n"
             "_(یا گزینه «اتمام و ادامه» را بزنید)_",
-            reply_markup=ezhhar_addressee_add_more_kb,
+            reply_markup=check_addressee_add_more_kb,
             parse_mode="Markdown"
         )
         await state.set_state(Form.check_witness_national_id)

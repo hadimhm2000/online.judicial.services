@@ -39,6 +39,9 @@ UPLOAD_DUPLICATE = "upload_duplicate"
 UPLOAD_REGISTERED = "upload_registered"   # «پیوست مورد نظر با موفقیت ثبت گردید»
 UPLOAD_CONFIRMED = "upload_confirmed"     # «پیوست مورد نظر با موفقیت تایید شد»
 
+# خطای کدملی اشتباه یا عدم ثبت‌نام ثنا
+NATIONAL_ID_INVALID_OR_NOT_REGISTERED = "national_id_invalid_or_not_registered"
+
 GENERAL_ERROR = "general_error"
 SUCCESS = "success"
 UNKNOWN = "unknown"
@@ -110,6 +113,11 @@ CATALOG = [
         "لطفا اطلاعات خواسته شده را به درستی وارد نمایید",
         "معتبر نیست", "کد رهگیری معتبر نیست",
         "تاریخ تولد ارسالی مربوط به شماره ملی",
+    ]),
+    # ── کدملی اشتباه یا عدم ثبت‌نام ثنا (باعث خطای «تاریخچه اولویت بندی شده ... در سیستم موجود نمی باشد») ──
+    (NATIONAL_ID_INVALID_OR_NOT_REGISTERED, [
+        "تاریخچه اولویت بندی شده", "تاريخچه اولويت بندي شده",
+        "در سیستم موجود نمی باشد", "در سيستم موجود نيست",
     ]),
     (NOT_FOUND, [
         "یافت نشد", "اطلاعاتی یافت نشد",
@@ -242,6 +250,7 @@ def describe(text) -> str:
         UPLOAD_DUPLICATE: "پیوست تکراری",
         UPLOAD_REGISTERED: "پیوست ثبت شد",
         UPLOAD_CONFIRMED: "پیوست تایید شد",
+        NATIONAL_ID_INVALID_OR_NOT_REGISTERED: "کدملی اشتباه یا عدم ثبت‌نام ثنا",
         GENERAL_ERROR: "خطای عمومی",
         SUCCESS: "عملیات موفق",
         UNKNOWN: "خطای ناشناخته",

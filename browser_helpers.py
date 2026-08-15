@@ -18,6 +18,21 @@ from keyboards import admin_login_kb
 SESSION_LOGIN_REDIRECT_PREFIX = "https://iehraz2.adliran.ir/Login/Authenticate"
 
 
+# پیام خطای کدملی اشتباه / عدم ثبت‌نام ثنا
+NATIONAL_ID_ERROR_MSG = (
+    "❌ **خطا در پردازش کدملی**\n\n"
+    "کدملی وارد شده اشتباه است یا فرد در سامانه ثنا ثبت‌نام ندارد.\n\n"
+    "لطفاً کدملی را بررسی کرده و در صورت اطمینان از صحت آن،\n"
+    "اطمینان حاصل فرمایید که فرد در سامانه ثنا ثبت‌نام انجام داده است.\n\n"
+    "فرآیند متوقف شد. لطفاً از ابتدا اقدام فرمایید."
+)
+
+
+class NationalIdError(Exception):
+    """خطای کدملی اشتباه یا عدم ثبت‌نام ثنا — فرآیند باید متوقف شود."""
+    pass
+
+
 def is_login_redirect_url(url: str) -> bool:
     """آیا URL فعلی صفحه، ریدایرکت انقضای نشست به آدرس لاگین ثناست؟"""
     return bool(url) and url.startswith(SESSION_LOGIN_REDIRECT_PREFIX)
@@ -401,6 +416,60 @@ async def check_and_handle_load_error(page):
         await asyncio.sleep(5)
         return True
     return False
+
+
+async def detect_national_id_error(page) -> bool:
+    """تشخیص خطای «تاریخچه اولویت بندی شده ... در سیستم موجود نمی باشد».
+
+    این خطا وقتی رخ می‌دهد که کدملی وارد شده اشتباه است یا فرد در ثنا ثبت‌نام ندارد.
+    باید باعث توقف فوری فرآیند و اطلاع‌رسانی به کاربر شود.
+    """
+    try:
+        error_text = await page.evaluate('''() => {
+            // ۱. بررسی sweet-alert popup
+            const sweet = document.querySelector('.sweet-alert.showSweetAlert');
+            if (sweet) {
+                const t = sweet.innerText || "";
+                if (t.includes("تاریخچه اولویت") || t.includes("تاريخچه اولويت")) return t;
+            }
+            // ۲. بررسی مدال
+            const modal = document.querySelector('.modal-dialog, .modal-content');
+            if (modal) {
+                const t = modal.innerText || "";
+                if (t.includes("تاریخچه اولویت") || t.includes("تاريخچه اولويت")) return t;
+            }
+            // ۳. بررسی متن کلی صفحه
+            const body = document.body ? document.body.innerText : "";
+            if (body.includes("تاریخچه اولویت") || body.includes("تاريخچه اولويت")) return body;
+            return null;
+        }''')
+        if error_text:
+            logging.error(f"[NATIONAL_ID_ERROR] خطای کدملی/ثنا شناسایی شد: {error_text[:200]}")
+            return True
+        return False
+    except Exception as e:
+        logging.warning(f"detect_national_id_error: error: {e}")
+        return False
+
+
+async def check_national_id_error_or_continue(page, bot: Bot, user_id: int):
+    """بررسی خطای کدملی/ثنا + انقضای نشست.
+
+    اگر خطای کدملی تشخیص داده شود → NationalIdError raise می‌کند (فرآیند متوقف).
+    اگر نشست منقضی شده → handle می‌شود.
+    """
+    # ابتدا چک خطای کدملی
+    if await detect_national_id_error(page):
+        try:
+            await bot.send_message(user_id, NATIONAL_ID_ERROR_MSG, parse_mode="Markdown")
+        except Exception:
+            pass
+        raise NationalIdError("خطای کدملی یا عدم ثبت‌نام ثنا")
+
+    # سپس چک انقضای نشست
+    had_expiry = await check_and_handle_expiry(page, bot, user_id)
+    return had_expiry
+
 
 async def resilient_sleep(page, seconds, bot: Bot, user_id: int):
     """خواب هوشمند با چک انقضا"""
