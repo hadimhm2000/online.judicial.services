@@ -224,7 +224,7 @@ async def main():
     sys.excepthook = _global_exception_handler
 
     # ── اتصال به تلگرام ──
-    logging.info(f"🔌 اتصال از طریق Cloudflare Worker: {TELEGRAM_API_BASE}")
+    logging.info(f"🔌 اتصال از طریق پروکسی Vercel: {TELEGRAM_API_BASE}")
     custom_api_server = TelegramAPIServer.from_base(TELEGRAM_API_BASE)
     session = AiohttpSession(api=custom_api_server)
 
@@ -264,9 +264,9 @@ async def main():
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(shutdown_handler(bot, sig.name)))
 
-    # ── شروع polling ──
+    # ── شروع polling (با Timeout 8 ثانیه برای جلوگیری از ارور Vercel) ──
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, timeout=8)
     except Exception as e:
         logging.critical(f"[MAIN] خطای بحرانی در start_polling: {e}", exc_info=True)
         # اطلاع به مدیر و کاربران

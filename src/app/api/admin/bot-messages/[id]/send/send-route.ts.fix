@@ -1,0 +1,87 @@
+// ===== فایل جایگزین: src/app/api/admin/bot-messages/[id]/send/route.ts =====
+// تغییرات:
+// ۱. حذف import path — دیگه نیاز به مسیر فایل روی دیسک نیست
+// ۲. ساخت URL عمومی فایل بجای مسیر محلی
+// ۳. پاس دادن URL به sendTelegramDocument
+
+import { db } from '@/lib/db';
+import { sendTelegramMessage, sendTelegramDocument } from '@/lib/telegram';
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function POST(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+
+    const message = await db.botMessage.findUnique({ where: { id } });
+    if (!message) {
+      return NextResponse.json({ error: 'پیام یافت نشد' }, { status: 404 });
+    }
+
+    if (!message.telegramId) {
+      return NextResponse.json(
+        { error: 'شناسه تلگرام برای این پیام ثبت نشده است' },
+        { status: 400 }
+      );
+    }
+
+    // ارسال پیام متنی
+    await sendTelegramMessage(message.telegramId, message.messageText);
+
+    // ارسال فایل پیوست اگر وجود داشته باشد
+    // روی Vercel فایل‌سیستم در دسترس نیست، پس URL عمومی فایل رو می‌سازیم
+    if (message.fileUrl && message.fileName) {
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : '';
+      const fullUrl = `${baseUrl}${message.fileUrl}`;
+
+      await sendTelegramDocument(
+        message.telegramId,
+        fullUrl,
+        message.fileName
+      );
+    }
+
+    const updated = await db.botMessage.update({
+      where: { id },
+      data: {
+        status: 'SENT',
+        sentAt: new Date(),
+      },
+    });
+
+    await db.activityLog.create({
+      data: {
+        action: 'BOT_MESSAGE_SENT',
+        details: message.fileUrl
+          ? `پیام و فایل «${message.fileName}» ارسال شد برای ${message.fullName || message.telegramId}`
+          : `پیام ارسال شد برای ${message.fullName || message.telegramId}`,
+      },
+    });
+
+    return NextResponse.json(updated);
+  } catch (error: unknown) {
+    console.error('Bot message send error:', error);
+
+    const errorMessage =
+      error instanceof Error ? error.message : 'خطا در ارسال پیام';
+
+    try {
+      const { id } = await params;
+      await db.botMessage.update({
+        where: { id },
+        data: {
+          status: 'FAILED',
+          errorDetails: errorMessage,
+        },
+      });
+    } catch {
+      // نادیده بگیر
+    }
+
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
+  }
+}

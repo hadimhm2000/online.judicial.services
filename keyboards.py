@@ -927,11 +927,10 @@ check_more_images_kb = ReplyKeyboardMarkup(
 )
 
 def get_check_more_images_kb(image_count: int, max_images: int = 3) -> ReplyKeyboardMarkup:
-    """کیبورد داینامیک — دکمه «تصویر چک بعدی» همیشه نمایش داده شود.
-    تصاویر اضافی به عنوان مدارک (attachment) ذخیره می‌شوند، نه check_images."""
+    """کیبورد داینامیک — دکمه «تصویر چک بعدی» فقط وقتی هنوز جای هست نمایش داده شود."""
     rows = []
-    # همیشه دکمه تصویر چک بعدی نمایش داده شود — تصاویر اضافی به attachment می‌روند
-    rows.append([KeyboardButton(text="➕ تصویر چک بعدی")])
+    if image_count < max_images:
+        rows.append([KeyboardButton(text="➕ تصویر چک بعدی")])
     rows.append([KeyboardButton(text="📎 تصویر یا مدرک دیگر دارم")])
     rows.append([KeyboardButton(text="✅ خیر، ادامه به انتخاب دادگاه")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

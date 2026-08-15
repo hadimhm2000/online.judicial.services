@@ -30,16 +30,14 @@ if not _admin_id_raw:
 ADMIN_ID = int(_admin_id_raw)
 
 # سرور ایرانی مستقیم به api.telegram.org دسترسی ندارد، برای همین از یک
-# Cloudflare Worker به‌عنوان واسطه (reverse-proxy) استفاده می‌کنیم.
-# اگر لازم شد آدرس عوض شود، کافیست متغیر محیطی TELEGRAM_API_BASE ست شود
-# (نیازی به تغییر کد نیست).
+# پروکسی (Vercel) به‌عنوان واسطه (reverse-proxy) استفاده می‌کنیم.
 TELEGRAM_API_BASE = os.environ.get(
     "TELEGRAM_API_BASE",
-    "https://judicial-proxy.hadimhm79.workers.dev"
+    "https://judicial-proxy.vercel.app"
 )
 
 # اگر روزی به یک پروکسی واقعی (HTTP/SOCKS) نیاز شد، می‌توانی این متغیر را
-# در .env ست کنی. در حالت فعلی (استفاده از Cloudflare Worker) خالی می‌ماند.
+# در .env ست کنی. در حالت فعلی خالی می‌ماند.
 PROXY_URL = os.environ.get("PROXY_URL", "")
 
 # آدرس پنل ادمین (Next.js) — exempt_users و working_hours از این آدرس

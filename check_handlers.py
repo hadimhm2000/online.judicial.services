@@ -1192,6 +1192,8 @@ async def check_receive_photo(message: Message, state: FSMContext, bot: Bot):
             reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
             parse_mode="Markdown"
         )
+        # Fix: تغییر state به check_more_images تا دکمه‌ها کار کنند
+        await state.set_state(Form.check_more_images)
     else:
         await message.answer(
             f"✅ {MAX_CHECK_IMAGES} تصویر دریافت شد.\n\n"
@@ -1199,6 +1201,8 @@ async def check_receive_photo(message: Message, state: FSMContext, bot: Bot):
             reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
             parse_mode="Markdown"
         )
+        # Fix: تغییر state به check_more_images تا دکمه‌ها کار کنند
+        await state.set_state(Form.check_more_images)
 
 
 @check_router.message(Form.check_images)
@@ -1230,31 +1234,13 @@ async def check_more_images_handler(message: Message, state: FSMContext):
     check_images = data.get("check_images", [])
 
     if text == "➕ تصویر چک بعدی":
-        # اگر قبلاً ۳ تصویر اولیه پر شده، تصاویر اضافی به عنوان مدارک ذخیره می‌شوند
         count = len(check_images)
         if count >= MAX_CHECK_IMAGES:
-            # تصاویر اضافی چک → به عنوان مدارک با عنوان "تصاویر چک اضافی"
-            await state.update_data(
-                _current_attachment_title="تصاویر چک اضافی",
-                _current_attachment_images=[],
-                _mandatory_proxy_sent=True,
-            )
-            from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-            manage_kb = ReplyKeyboardMarkup(
-                keyboard=[
-                    [KeyboardButton(text="✅ اتمام ارسال تصاویر")],
-                    [KeyboardButton(text="🔙 بازگشت")],
-                ], resize_keyboard=True
-            )
             await message.answer(
-                f"🖼 تصاویر اولیه چک ({MAX_CHECK_IMAGES} عدد) تکمیل شده است.\n"
-                f"تصاویر اضافی به عنوان **مدارک** ثبت خواهند شد.\n\n"
-                f"لطفاً تصویر چک بعدی را ارسال فرمایید:\n"
-                f"_(حداکثر {MAX_ATTACHMENT_IMAGES} تصویر)_",
-                reply_markup=manage_kb,
+                f"⚠️ حداکثر {MAX_CHECK_IMAGES} تصویر چک مجاز است.",
+                reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
                 parse_mode="Markdown"
             )
-            await state.set_state(Form.check_attachment_images)
             return
         await message.answer(
             "🖼 لطفاً **تصویر چک بعدی** را ارسال فرمایید:",
@@ -1405,6 +1391,34 @@ async def check_receive_attachment_photo(message: Message, state: FSMContext, bo
     )
 
 
+@check_router.message(Form.check_attachment_images)
+async def check_attachment_images_text_fallback(message: Message, state: FSMContext):
+    """هدلر متنی fallback برای مرحله ارسال تصاویر پیوست."""
+    if message.text and "بازگشت" in message.text:
+        data = await state.get_data()
+        mandatory_sent = data.get("_mandatory_proxy_sent", True)
+        if mandatory_sent:
+            await message.answer(
+                "📎 لطفاً **عنوان مدرک** را وارد فرمایید:\n\n"
+                "_(مثلاً: گواهی عدم پرداخت، قرارداد و ...)_",
+                reply_markup=check_attachment_title_kb,
+                parse_mode="Markdown"
+            )
+            await state.set_state(Form.check_attachment_title)
+        else:
+            check_images = data.get("check_images", [])
+            await message.answer(
+                "آیا تصویر یا مدرک دیگری دارید؟",
+                reply_markup=get_check_more_images_kb(len(check_images), MAX_CHECK_IMAGES),
+                parse_mode="Markdown",
+            )
+            await state.set_state(Form.check_more_images)
+        return
+    await message.answer(
+        "⚠️ لطفاً **تصویر** ارسال فرمایید یا دکمه **«اتمام ارسال تصاویر»** را بزنید."
+    )
+
+
 @check_router.message(Form.check_attachment_images, F.text == "✅ اتمام ارسال تصاویر")
 async def check_finish_attachment_images(message: Message, state: FSMContext):
     data = await state.get_data()
@@ -1450,15 +1464,12 @@ async def check_attachment_more_handler(message: Message, state: FSMContext):
     elif text == "✅ خیر، ادامه به انتخاب دادگاه":
         await _ask_check_branch(message, state)
     elif "بازگشت" in text:
-        # بازگشت به صفحه انتخاب ادامه — نمایش check_more_images
-        data2 = await state.get_data()
-        count = len(data2.get("check_images", []))
         await message.answer(
-            "آیا تصویر یا مدرک دیگری دارید؟",
-            reply_markup=get_check_more_images_kb(count, MAX_CHECK_IMAGES),
+            "آیا مدرک دیگری دارید؟",
+            reply_markup=check_attachment_more_kb,
             parse_mode="Markdown",
         )
-        await state.set_state(Form.check_more_images)
+        await state.set_state(Form.check_attachment_more)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

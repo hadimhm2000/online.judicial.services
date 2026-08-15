@@ -32,6 +32,7 @@ from keyboards import (
     admin_login_kb, SUB_MENUS, create_submenu_kb, back_only_kb, new_lavayeh_request_kb,
     payment_cancel_kb, disrupted_retry_kb, test_mode_doc_type_kb, test_mode_section_kb,
     test_mode_att_title_kb_first, test_mode_att_title_kb, test_mode_att_more_kb,
+    TEST_VISIBLE_USER_ID,
 )
 from lavayeh_handlers import lavayeh_router
 from stamp_calc_handlers import stamp_calc_router
@@ -59,20 +60,11 @@ SAMANEH_WRONG_TYPE_ERROR = "کد دفتر، مبلغ پرونده یا دستر�
 
 
 def _is_valid_tracking_code(code: str) -> bool:
-    """کد رهگیری: ۱۴۰۰ به بعد ۱۸ رقمی، ۹۹ و قبل‌تر ۱۶ رقمی.
-    ۷ رقم ابتدایی آن باید در بازه‌ی معتبر باشد."""
-    if not code.isdigit():
+    """کد رهگیری باید ۱۶ رقمی باشد و ۷ رقم ابتدایی آن در بازه‌ی معتبر باشد."""
+    if len(code) != TRACKING_CODE_LENGTH or not code.isdigit():
         return False
     prefix = int(code[:7])
-    if not (TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX):
-        return False
-    # تعیین طول بر اساس سال: ۱۴۰۰ به بعد ۱۸ رقمی
-    year_prefix = int(code[:4])
-    if year_prefix >= 1400:
-        expected_len = 18
-    else:
-        expected_len = 16
-    return len(code) == expected_len
+    return TRACKING_CODE_PREFIX_MIN <= prefix <= TRACKING_CODE_PREFIX_MAX
 
 
 def _record_failed_inquiry(user_id: int) -> int:
@@ -675,7 +667,7 @@ async def process_flow_type(message: types.Message, state: FSMContext):
         await check_entry(message, state)
     elif "ابزار فایل" in message.text:
         await file_tools_entry(message, state)
-    elif "تست" in message.text and message.from_user.id == ADMIN_ID:
+    elif "تست" in message.text and message.from_user.id == TEST_VISIBLE_USER_ID:
         await message.answer(
             "🧪 **حالت تست مدیر**\n\n"
             "برای جلوگیری از ایجاد کدرهگیری اضافی در سامانه، مستقیماً به بخش مورد نظر می‌روید.\n\n"
@@ -816,13 +808,10 @@ async def process_tracking_code(message: types.Message, state: FSMContext):
         await message.answer("⚠️ فرمت نامعتبر است. فقط عدد ارسال کنید:")
         return
     if not _is_valid_tracking_code(clean_code):
-        year_prefix = int(clean_code[:4]) if len(clean_code) >= 4 else 0
-        expected = 18 if year_prefix >= 1400 else 16
         await message.answer(
-            f"⚠️ کد رهگیری نامعتبر است.\n"
-            f"کد رهگیری باید **{expected} رقمی** باشد _(۱۴۰۰ به بعد: ۱۸ رقمی | ۹۹ و قبل‌تر: ۱۶ رقمی)_\n"
-            f"و با یکی از سال‌های ۱۳۹۴ تا ۱۴۰۶ شروع شود.\n"
-            f"لطفاً کد را دوباره بررسی و ارسال فرمایید:"
+            "⚠️ کد رهگیری نامعتبر است.\n"
+            "کد رهگیری باید ۱۶ رقم باشد و با یکی از سال‌های ۱۳۹۴ تا ۱۴۰۶ (یعنی اعداد ۱۳۹۴۲۲۰ الی ۱۴۰۶۲۲۰) شروع شود.\n"
+            "لطفاً کد را دوباره بررسی و ارسال فرمایید:"
         )
         return
     # ── بررسی محدودیت تلاش قبل از ادامه ──
@@ -1184,9 +1173,7 @@ async def test_mode_receive_tracking_code(message: types.Message, state: FSMCont
     clean_code = message.text.translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')).replace(" ", "").strip()
 
     if not re.match(r'^[0-9]+$', clean_code) or not _is_valid_tracking_code(clean_code):
-        year_prefix = int(clean_code[:4]) if len(clean_code) >= 4 else 0
-        expected = 18 if year_prefix >= 1400 else 16
-        await message.answer(f"⚠️ کدرهگیری نامعتبر است. لطفاً یک کدرهگیری **{expected} رقمی** معتبر ارسال فرمایید:")
+        await message.answer("⚠️ کدرهگیری نامعتبر است. لطفاً یک کدرهگیری ۱۶ رقمی معتبر ارسال فرمایید:")
         return
 
     await state.update_data(

@@ -1,0 +1,103 @@
+// ===== فایل جایگزین: src/lib/telegram.ts =====
+// تغییرات:
+// ۱. حذف import fs — فایل‌سیستم تو Vercel Serverless در دسترس نیست
+// ۲. TELEGRAM_API_BASE روی Vercel نیازی به پروکسی نداره (سرورهای Vercel خارج ایران هستن)
+// ۳. sendTelegramDocument به‌جای خواندن از دیسک، فایل رو از URL می‌خونه
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+// روی Vercel نیازی به پروکسی نیست — سرورها خارج ایران هستن.
+// فقط اگر TELEGRAM_API_BASE صریحاً تنظیم شده باشه (مثلاً برای محیط‌های خاص)، ازش استفاده می‌کنیم.
+const TELEGRAM_API_BASE = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org';
+
+function apiUrl(method: string) {
+  if (!BOT_TOKEN) {
+    throw new Error('BOT_TOKEN در فایل .env تنظیم نشده است');
+  }
+  return `${TELEGRAM_API_BASE}/bot${BOT_TOKEN}/${method}`;
+}
+
+/**
+ * ارسال پیام متنی به کاربر از طریق ربات تلگرام.
+ */
+export async function sendTelegramMessage(chatId: string, text: string) {
+  const res = await fetch(apiUrl('sendMessage'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text }),
+  });
+
+  const data = await res.json();
+  if (!data.ok) {
+    throw new Error(data.description || 'ارسال پیام تلگرام ناموفق بود');
+  }
+  return data;
+}
+
+/**
+ * ارسال یک فایل (سند/تصویر) به کاربر از طریق ربات تلگرام.
+ * روی Vercel فایل‌سیستم در دسترس نیست، پس فایل رو از URL می‌خونیم.
+ *
+ * @param chatId  شناسه چت تلگرام
+ * @param fileUrl  URL عمومی فایل (مثلاً https://domain.com/uploads/file.pdf)
+ * @param fileName  نام فایل برای نمایش
+ * @param caption  کپشن اختیاری
+ */
+export async function sendTelegramDocument(
+  chatId: string,
+  fileUrl: string,
+  fileName: string,
+  caption?: string
+) {
+  // روش ۱: پاس دادن URL به تلگرام — تلگرام خودش فایل رو دانلود می‌کنه
+  // این ساده‌ترین و کارآمدترین روش روی Vercel هست
+  const res = await fetch(apiUrl('sendDocument'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      document: fileUrl,
+      caption: caption || fileName,
+    }),
+  });
+
+  const data = await res.json();
+  if (!data.ok) {
+    // اگر روش URL کار نکرد، روش آپلود مستقیم رو امتحان می‌کنیم
+    return sendTelegramDocumentViaUpload(chatId, fileUrl, fileName, caption);
+  }
+  return data;
+}
+
+/**
+ * ارسال فایل با دانلود و آپلود مستقیم (fallback)
+ */
+async function sendTelegramDocumentViaUpload(
+  chatId: string,
+  fileUrl: string,
+  fileName: string,
+  caption?: string
+) {
+  // دانلود فایل از URL
+  const fileRes = await fetch(fileUrl);
+  if (!fileRes.ok) {
+    throw new Error(`دانلود فایل ناموفق بود: ${fileRes.status} ${fileRes.statusText}`);
+  }
+
+  const buffer = await fileRes.arrayBuffer();
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  if (caption) form.append('caption', caption);
+  form.append('document', new Blob([buffer]), fileName);
+
+  const res = await fetch(apiUrl('sendDocument'), {
+    method: 'POST',
+    body: form,
+  });
+
+  const data = await res.json();
+  if (!data.ok) {
+    throw new Error(data.description || `ارسال فایل «${fileName}» ناموفق بود`);
+  }
+  return data;
+}

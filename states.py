@@ -182,6 +182,7 @@ class Form(StatesGroup):
     tn_appellee_more = State()
     tn_witness_national_id = State()
     tn_more_witnesses = State()
+    tn_text_choice = State()
     tn_text = State()
     tn_extra_text = State()
     tn_attachment_title = State()

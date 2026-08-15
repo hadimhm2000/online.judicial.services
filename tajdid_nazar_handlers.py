@@ -226,8 +226,7 @@ async def tn_case_type_handler(message: Message, state: FSMContext):
     await state.update_data(case_type=matched, tn_labels=labels)
     await message.answer(
         f"✅ **{matched}** انتخاب شد.\n\n"
-        f"**مرحله ۱:** لطفاً **شماره دادنامه** را ارسال کنید.\n"
-        f"_(شماره دادنامه باید ۱۸ رقمی باشد)_",
+        f"**مرحله ۱:** لطفاً **شماره دادنامه** را ارسال فرمایید:",
         reply_markup=back_only_kb,
         parse_mode="Markdown"
     )
@@ -374,7 +373,8 @@ async def tn_province_handler(message: Message, state: FSMContext):
     if _is_prosecutor_objection(case_type):
         await message.answer(
             f"✅ استان **{matched_province}** ثبت شد.\n\n"
-            f"**مرحله ۵:** لطفاً **شماره قرار** را ارسال کنید.",
+            f"**مرحله ۵:** لطفاً **شماره قرار** را ارسال کنید.\n\n"
+            f"نکته: شماره‌های **۱۴۰۰ تا ۱۴۰۷** باید **۱۸ رقمی** و شماره‌های **۹۹ و قبل‌تر** باید **۱۶ رقمی** باشند.",
             reply_markup=back_only_kb,
             parse_mode="Markdown"
         )
